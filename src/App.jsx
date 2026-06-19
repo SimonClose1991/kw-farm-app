@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
 import { Home, MapPin, Tag, Menu, ChevronRight, X, HelpCircle, Search, ArrowLeftRight, RefreshCw, Droplet, Settings, LifeBuoy, Sparkles, Check } from "lucide-react";
+import { api, setAuthToken, getStoredToken } from "./api.js";
 
 const LOGO_DATA_URI = "data:image/jpeg;base64,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";
 
@@ -51,6 +52,8 @@ const ROLE_OPTIONS = ["Admin", "Manager", "Worker"];
 const BREEDS_DEFAULT = { Cattle: ["Angus", "Hereford", "Charolais", "Simmental", "Murray Grey", "Mixed"], Sheep: ["Merino", "Dorper", "Suffolk", "Poll Dorset", "Border Leicester", "Mixed"], Rams: ["Merino", "Dorper", "Suffolk", "Poll Dorset", "Mixed"], Other: [] };
 const AGE_CLASSES = { Cattle: ["Calves", "Weaners", "Yearlings", "Adult"], Sheep: ["Lambs", "Hoggets", "Adult"] };
 const TAG_COLOURS = ["Red", "Blue", "Green", "Yellow", "Orange", "Pink", "White", "Black"];
+const TAG_COLOUR_HEX = { Red: "#ef4444", Blue: "#3b82f6", Green: "#22c55e", Yellow: "#eab308", Orange: "#f97316", Pink: "#ec4899", White: "#f8fafc", Black: "#1e293b" };
+const SPECIES_ICON = { Cattle: "🐄", Sheep: "🐑" };
 const PADDOCKS = ["North", "South", "East", "West", "River", "Yards"];
 const PADDOCK_COLOURS = ["Sky Blue", "Forest Green", "Sunset Orange", "Ruby Red", "Lavender", "Mustard"];
 const COLOUR_HEX = { "Sky Blue": "#38bdf8", "Forest Green": "#22c55e", "Sunset Orange": "#f97316", "Ruby Red": "#ef4444", "Lavender": "#a78bfa", "Mustard": "#eab308" };
@@ -138,6 +141,11 @@ const DEFAULT_PADDOCKS_DATA = {
 };
 
 // Approximate polygon area in hectares from a GeoJSON-style ring of [lng, lat] points
+// Returns today's date as YYYY-MM-DD, used to auto-default date fields throughout the app
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function ringAreaHa(ring) {
   const R = 6378137;
   let area = 0;
@@ -188,7 +196,7 @@ function fallbackPolygon(center, index, ha) {
 }
 
 // Interactive map of paddocks, drawn as an SVG so it always renders offline / without external map tiles
-function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandmark, insightMode = "usage", paddockStats = {}, drawMode = false, drawPoints = [], onDrawPoint, projectRef }) {
+function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandmark, insightMode = "usage", paddockStats = {}, drawMode = false, drawPoints = [], onDrawPoint, projectRef, userLocation = null }) {
   // Gather all points (real geometry or generated fallback shapes) so we can fit a viewBox
   const shapes = paddocks.map((p, i) => {
     const latlngs = geometryToLatLngs(p.geojson) || fallbackPolygon(center, i, p.ha || 10);
@@ -319,6 +327,15 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
             </g>
           );
         })}
+        {userLocation && userLocation.lat != null && (() => {
+          const [x, y] = project([userLocation.lat, userLocation.lng]);
+          return (
+            <g>
+              <circle cx={x} cy={y} r="22" fill="#4285F4" fillOpacity="0.15" />
+              <circle cx={x} cy={y} r="7" fill="#4285F4" stroke="#fff" strokeWidth="2" />
+            </g>
+          );
+        })()}
         {drawMode && drawPoints.length > 0 && (
           <>
             <polyline
@@ -339,7 +356,7 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
 }
 
 // Real Google Maps satellite view with paddock polygon overlays (requires user-supplied API key)
-function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = "paddocks", mobs = [], onSelectPin, landmarks = [], onSelectLandmark, insightMode = "usage", paddockStats = {}, drawMode = false, drawPoints = [], onDrawPoint }) {
+function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = "paddocks", mobs = [], onSelectPin, landmarks = [], onSelectLandmark, insightMode = "usage", paddockStats = {}, drawMode = false, drawPoints = [], onDrawPoint, userLocation = null }) {
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
 
@@ -439,10 +456,11 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
             pos = { lat: pos.lat + (i % 3) * 0.0015, lng: pos.lng + Math.floor(i / 3) * 0.0015 };
           }
           bounds.extend(pos);
+          const ringColour = TAG_COLOUR_HEX[m.tag] || "#cbd5e1";
           const marker = new g.Marker({
             position: pos, map,
             label: { text: String(m.count), color: "#1e293b", fontWeight: "bold", fontSize: "12px" },
-            icon: { path: g.SymbolPath.CIRCLE, scale: 16, fillColor: "#ffffff", fillOpacity: 1, strokeColor: "#cbd5e1", strokeWeight: 1 },
+            icon: { path: g.SymbolPath.CIRCLE, scale: 16, fillColor: "#ffffff", fillOpacity: 1, strokeColor: ringColour, strokeWeight: 3 },
           });
           marker.addListener("click", () => onSelectPin?.({ l: m.count, mob: m }));
           overlays.push(marker);
@@ -480,6 +498,24 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
         }
       }
 
+      if (userLocation) {
+        const dot = new g.Marker({
+          position: { lat: userLocation.lat, lng: userLocation.lng },
+          map,
+          icon: { path: g.SymbolPath.CIRCLE, scale: 8, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 },
+          zIndex: 999,
+        });
+        new g.Circle({
+          center: { lat: userLocation.lat, lng: userLocation.lng },
+          radius: 20,
+          map,
+          fillColor: "#4285F4",
+          fillOpacity: 0.15,
+          strokeOpacity: 0,
+        });
+        overlays.push(dot);
+      }
+
       if (paddocks.length || landmarks.length) map.fitBounds(bounds, 40);
       mapInstanceRef.current = { map, overlays };
     };
@@ -510,7 +546,7 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
         mapInstanceRef.current = null;
       }
     };
-  }, [paddocks, center, apiKey, mode, mobs, landmarks, insightMode, drawMode, drawPoints]);
+  }, [paddocks, center, apiKey, mode, mobs, landmarks, insightMode, drawMode, drawPoints, userLocation]);
 
   return <div ref={mapDivRef} className="w-full h-full" />;
 }
@@ -661,12 +697,31 @@ export default function App() {
   }, []);
 
   // --- Auth ---
-  const [loggedInEmail, setLoggedInEmail] = useState("simon@kurrawirra.com.au");
+  const [loggedInEmail, setLoggedInEmail] = useState(null);
+  const [currentAccount, setCurrentAccount] = useState(null); // full account object from the API
+  const [authLoading, setAuthLoading] = useState(true); // true while we check for a stored session
   const [stayLoggedIn, setStayLoggedIn] = useState(true);
   const [locked, setLocked] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+
+  // On first load, try to restore a session from a stored token (so people stay logged in
+  // across visits without re-entering credentials every time).
+  React.useEffect(() => {
+    const token = getStoredToken();
+    if (!token) { setAuthLoading(false); return; }
+    setAuthToken(token);
+    api.me()
+      .then(({ account }) => {
+        setCurrentAccount(account);
+        setLoggedInEmail(account.email);
+      })
+      .catch(() => {
+        setAuthToken(null); // stored token was invalid/expired
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
 
   // --- Offline / sync ---
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
@@ -734,17 +789,14 @@ export default function App() {
   const [showAllFarms, setShowAllFarms] = useState(false);
   const [showAddFarm, setShowAddFarm] = useState(false);
   const [newFarmName, setNewFarmName] = useState("");
-  const [accounts, setAccounts] = useState([
-    { id: 1, name: "Simon", email: "simon@kurrawirra.com.au", role: "Admin", password: "Sc731991" },
-    { id: 2, name: "Jenny Smith", email: "jenny.manager@arundale.com", role: "Manager", password: "password" },
-    { id: 3, name: "Tom Wilson", email: "tom.worker@arundale.com", role: "Worker", password: "password" },
-  ]);
-  const [currentUserId, setCurrentUserId] = useState(1);
+  const [accounts, setAccounts] = useState([]);
+  const currentUserId = currentAccount?.id ?? null;
   const [showAccounts, setShowAccounts] = useState(false);
+  const [changePasswordValue, setChangePasswordValue] = useState("");
   const [newAccountName, setNewAccountName] = useState("");
   const [newAccountEmail, setNewAccountEmail] = useState("");
   const [newAccountRole, setNewAccountRole] = useState("Worker");
-  const currentUser = accounts.find((a) => a.id === currentUserId) || accounts[0];
+  const currentUser = currentAccount || accounts.find((a) => a.id === currentUserId) || { name: "", email: "", role: "Worker" };
   const userRole = currentUser.role;
   const isAdmin = userRole === "Admin";
   const canEdit = userRole === "Admin" || userRole === "Manager";
@@ -757,7 +809,7 @@ export default function App() {
   const [formValues, setFormValues] = useState({});
   const [toast, setToast] = useState(null);
   const [syncing, setSyncing] = useState(false);
-  const [syncCount, setSyncCount] = useState(14);
+  const [syncCount, setSyncCount] = useState(0);
   const [filterText, setFilterText] = useState("");
   const [showFilter, setShowFilter] = useState("All mobs");
   const [groupBy, setGroupBy] = useState("By Paddock");
@@ -766,24 +818,98 @@ export default function App() {
   const [newMobForm, setNewMobForm] = useState({});
   const [history, setHistory] = useState({});
   const [notes, setNotes] = useState({});
+
+  // Lazily load history + notes for a mob the first time it's opened
+  React.useEffect(() => {
+    if (!selectedMobId || !loggedInEmail) return;
+    if (history[selectedMobId] && notes[selectedMobId]) return; // already loaded
+    Promise.all([api.listMobHistory(selectedMobId), api.listMobNotes(selectedMobId)])
+      .then(([h, n]) => {
+        setHistory((prev) => ({ ...prev, [selectedMobId]: h.map((row) => ({ action: row.action, detail: row.detail, date: row.date })).reverse() }));
+        setNotes((prev) => ({ ...prev, [selectedMobId]: n.map((row) => ({ id: row.id, text: row.text, author: row.authorName, date: row.createdAt })) }));
+      })
+      .catch(() => {});
+  }, [selectedMobId, loggedInEmail]);
   const [noteDraft, setNoteDraft] = useState("");
   const [showFarmSubmenu, setShowFarmSubmenu] = useState(false);
   const [showInventory, setShowInventory] = useState(false);
-  const [inventory, setInventory] = useState([
-    { id: 1, title: "Drench - Cydectin", withholdingMeat: "21 days", withholdingESI: "7 days", dosage: "1mL per 10kg", containerUnit: "L", numContainers: "12", batchNumber: "B5521", manufactureDate: "2025-08-01", expiryDate: "2027-08-01", notes: "Stored in shed 2" },
-    { id: 2, title: "Vaccine - 5-in-1", withholdingMeat: "0 days", withholdingESI: "0 days", dosage: "2mL per head", containerUnit: "Doses", numContainers: "8", batchNumber: "V9981", manufactureDate: "2025-11-12", expiryDate: "2026-11-12", notes: "Keep refrigerated" },
-  ]);
-  const [sprayInventory, setSprayInventory] = useState([
-    { id: 101, title: "RoundUp", treatmentDate: "2026-05-10", location: "North", areaTreated: "45", quantity: "10L in 200L", applicationRate: "2L/ha", applicationMethod: "Boom spray", whp: "7 days", esi: "7 days", batchNumber: "RU2026", containerUnit: "L", numContainers: "2", expiryDate: "2028-01-01", notes: "" },
-  ]);
+  const [inventory, setInventory] = useState([]);
+  const [sprayInventory, setSprayInventory] = useState([]);
   const [inventoryType, setInventoryType] = useState("treatment"); // "treatment" | "spray"
   const [inventoryView, setInventoryView] = useState(null); // 'add' | item id
   const [inventoryForm, setInventoryForm] = useState({});
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showRainfall, setShowRainfall] = useState(false);
+  const [rainfall, setRainfall] = useState([]);
+  const [rainfallForm, setRainfallForm] = useState({});
+  React.useEffect(() => {
+    if (!loggedInEmail) return;
+    api.listRainfall(farmName).then(setRainfall).catch(() => {});
+  }, [farmName, loggedInEmail]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [dataError, setDataError] = useState("");
+
+  // Load all farm-scoped data from the API whenever we're logged in and/or the
+  // selected farm changes, so every device sees the same live data.
+  React.useEffect(() => {
+    if (!loggedInEmail) return;
+    let cancelled = false;
+    setDataLoading(true);
+    setDataError("");
+    Promise.all([
+      api.listMobs(farmName),
+      api.listPaddocks(farmName),
+      api.listLandmarks(farmName),
+      api.listTreatments(farmName),
+      api.listSprayInventory(farmName),
+      api.listFoo(farmName),
+    ])
+      .then(([mobsRes, paddocksRes, landmarksRes, treatmentsRes, sprayRes, fooRes]) => {
+        if (cancelled) return;
+        setFarmsMobs((prev) => ({ ...prev, [farmName]: mobsRes }));
+        setFarmsPaddocks((prev) => ({ ...prev, [farmName]: paddocksRes }));
+        setFarmsLandmarks((prev) => ({ ...prev, [farmName]: landmarksRes }));
+        setInventory(treatmentsRes);
+        setSprayInventory(sprayRes);
+        setFooHistory((prev) => [...prev.filter((r) => r._farm !== farmName), ...fooRes.map((r) => ({ ...r, _farm: farmName }))]);
+      })
+      .catch((err) => {
+        if (!cancelled) setDataError(err.message || "Couldn't load farm data");
+      })
+      .finally(() => {
+        if (!cancelled) setDataLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [loggedInEmail, farmName]);
+
+  // Load accounts and remembered custom breeds once logged in (not farm-specific)
+  React.useEffect(() => {
+    if (!loggedInEmail) return;
+    api.listAccounts().then(setAccounts).catch(() => {});
+    api.listBreeds().then((grouped) => {
+      setCustomBreeds({ Cattle: [], Sheep: [], Rams: [], Other: [], ...grouped });
+    }).catch(() => {});
+  }, [loggedInEmail]);
   const [showMobSummaryDetail, setShowMobSummaryDetail] = useState(false);
   const [pinSelected, setPinSelected] = useState(null);
+  const [userLocation, setUserLocation] = useState(null); // { lat, lng } once located
+  const [locating, setLocating] = useState(false);
+  const locateMe = () => {
+    if (!navigator.geolocation) { showToast("Location isn't available on this device"); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocating(false);
+      },
+      () => {
+        setLocating(false);
+        showToast("Couldn't get your location — check location permission for this app");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   const selectedMob = mobs.find((m) => m.id === selectedMobId);
 
@@ -828,6 +954,9 @@ export default function App() {
     }
     const m = selectedMob;
     const prefill = {};
+    (ACTION_FIELDS[name] || []).forEach((f) => {
+      if (f.type === "date") prefill[f.label] = todayStr();
+    });
     if (name === "Ent/mgmt group" && m.mgmtGroup && m.mgmtGroup !== "Unassigned") prefill["Management group"] = m.mgmtGroup;
     if (name === "Recount") prefill["New head count"] = m.count;
     if (name === "DSE") prefill["DSE rating per head"] = m.dse;
@@ -836,107 +965,107 @@ export default function App() {
     setActionForm(name);
   };
 
-  const submitAction = () => {
+  const submitAction = async () => {
     const name = actionForm;
     const mobId = selectedMobId;
-    setMobs((prev) =>
-      prev.map((m) => {
-        if (m.id !== mobId) return m;
-        let updated = { ...m };
-        if (name === "Recount" && formValues["New head count"]) {
-          updated.count = Number(formValues["New head count"]);
-        }
-        if (name === "Move" && formValues["Move to paddock"]) {
-          updated.paddock = formValues["Move to paddock"];
-        }
-        if (name === "Death" && formValues["Number of deaths"]) {
-          updated.count = Math.max(0, updated.count - Number(formValues["Number of deaths"]));
-        }
-        if (name === "Sale" && formValues["Number sold"]) {
-          updated.count = Math.max(0, updated.count - Number(formValues["Number sold"]));
-        }
-        if (name === "Transfer" && formValues["Number transferred"]) {
-          updated.count = Math.max(0, updated.count - Number(formValues["Number transferred"]));
-        }
-        if (name === "DSE" && formValues["DSE rating per head"]) {
-          updated.dse = Number(formValues["DSE rating per head"]);
-        }
-        if (name === "Weigh" && formValues["Average weight (kg)"]) {
-          updated.lastWeight = Number(formValues["Average weight (kg)"]);
-          updated.lastWeightDate = formValues["Date"] || new Date().toISOString().slice(0, 10);
-        }
-        if (name === "ADG" && formValues["Assumed ADG (kg/day)"]) {
-          updated.assumedADG = Number(formValues["Assumed ADG (kg/day)"]);
-        }
-        if (name === "Ent/mgmt group" && formValues["Management group"]) {
-          updated.mgmtGroup = formValues["Management group"];
-        }
-        if (name === "Move") {
-          updated.daysInPaddock = 0;
-        }
-        return updated;
-      })
-    );
+    const mob = mobs.find((m) => m.id === mobId);
+    if (!mob) return;
 
-    if (name === "Copy" && formValues["New mob name"]) {
-      const orig = mobs.find((m) => m.id === mobId);
-      const newMob = { ...orig, id: Date.now(), name: formValues["New mob name"] };
-      setMobs((prev) => [...prev, newMob]);
+    let patch = {};
+    if (name === "Recount" && formValues["New head count"]) patch.count = Number(formValues["New head count"]);
+    if (name === "Move" && formValues["Move to paddock"]) { patch.paddock = formValues["Move to paddock"]; patch.daysInPaddock = 0; }
+    if (name === "Death" && formValues["Number of deaths"]) patch.count = Math.max(0, mob.count - Number(formValues["Number of deaths"]));
+    if (name === "Sale" && formValues["Number sold"]) patch.count = Math.max(0, mob.count - Number(formValues["Number sold"]));
+    if (name === "DSE" && formValues["DSE rating per head"]) patch.dse = Number(formValues["DSE rating per head"]);
+    if (name === "Weigh" && formValues["Average weight (kg)"]) {
+      patch.lastWeight = Number(formValues["Average weight (kg)"]);
+      patch.lastWeightDate = formValues["Date"] || todayStr();
+    }
+    if (name === "ADG" && formValues["Assumed ADG (kg/day)"]) patch.assumedADG = Number(formValues["Assumed ADG (kg/day)"]);
+    if (name === "Ent/mgmt group" && formValues["Management group"]) patch.mgmtGroup = formValues["Management group"];
+    if (name === "WEC" && formValues["WEC count (epg)"]) {
+      patch.wec = { count: formValues["WEC count (epg)"], date: formValues["Date"] || todayStr(), notes: formValues["Notes"] || "" };
     }
 
-    if (name === "Transfer" && formValues["Transfer to property"] && formValues["Number transferred"]) {
-      const orig = mobs.find((m) => m.id === mobId);
-      const destFarm = formValues["Transfer to property"];
-      const dateStr = formValues["Date moved"] || new Date().toISOString().split("T")[0];
-      const transferEntry = {
-        date: dateStr,
-        action: "Transfer",
-        detail: `Transferred ${formValues["Number transferred"]} head from ${farmName} to ${destFarm}`,
-        mob: orig.name,
-      };
-      const transferredMob = {
-        ...orig,
-        id: Date.now(),
-        count: Number(formValues["Number transferred"]),
-        paddock: "Yards",
-        daysInPaddock: 0,
-        history: [...(orig.history || []), transferEntry],
-      };
-      setFarmsMobs((prev) => ({
-        ...prev,
-        [destFarm]: [...(prev[destFarm] || []), transferredMob],
-      }));
-      // Reduce source mob count
-      setMobs((prev) => prev.map((m) => m.id === mobId ? {
-        ...m,
-        count: Math.max(0, m.count - Number(formValues["Number transferred"])),
-        history: [...(m.history || []), transferEntry],
-      } : m));
-    }
-
+    // --- Delete ---
     if (name === "Delete") {
       setMobs((prev) => prev.filter((m) => m.id !== mobId));
       setSelectedMobId(null);
       setActionForm(null);
       markChanged();
-      showToast("Mob deleted");
+      try {
+        await api.deleteMob(mobId);
+        showToast("Mob deleted");
+      } catch (err) {
+        showToast(err.message || "Couldn't delete mob on the server");
+      }
       return;
     }
 
+    // --- Copy ---
+    if (name === "Copy" && formValues["New mob name"]) {
+      const { id, ...rest } = mob;
+      try {
+        const created = await api.createMob(farmName, { ...rest, name: formValues["New mob name"] });
+        setMobs((prev) => [...prev, created]);
+        showToast("Mob copied");
+      } catch (err) {
+        showToast(err.message || "Couldn't copy mob");
+      }
+      setActionForm(null);
+      setShowMore(false);
+      markChanged();
+      return;
+    }
+
+    // --- Transfer (to another farm) ---
+    if (name === "Transfer" && formValues["Transfer to property"] && formValues["Number transferred"]) {
+      const destFarm = formValues["Transfer to property"];
+      const transferCount = Number(formValues["Number transferred"]);
+      const dateStr = formValues["Date moved"] || todayStr();
+      try {
+        const { source: updatedSource } = await api.transferMob(mobId, destFarm, transferCount, dateStr);
+        setMobs((prev) => prev.map((m) => m.id === mobId ? updatedSource : m));
+        showToast(`Transferred ${transferCount} head to ${destFarm}`);
+      } catch (err) {
+        showToast(err.message || "Couldn't complete transfer");
+      }
+      setActionForm(null);
+      setShowMore(false);
+      markChanged();
+      return;
+    }
+
+    // --- Standard field update ---
+    if (Object.keys(patch).length > 0) {
+      setMobs((prev) => prev.map((m) => (m.id === mobId ? { ...m, ...patch } : m)));
+      try {
+        const updated = await api.updateMob(mobId, patch);
+        setMobs((prev) => prev.map((m) => (m.id === mobId ? updated : m)));
+      } catch (err) {
+        showToast(err.message || "Couldn't save changes to the server");
+      }
+    }
+
+    // --- History record ---
+    const summary = Object.entries(formValues)
+      .filter(([, v]) => v)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(", ");
+    const historyDate = formValues["Date"] || formValues["Date scanned"] || todayStr();
     setHistory((prev) => {
       const list = prev[mobId] || [];
-      const summary = Object.entries(formValues)
-        .filter(([, v]) => v)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(", ");
       return {
         ...prev,
-        [mobId]: [
-          { action: name, detail: summary || "Recorded", date: new Date().toLocaleDateString() },
-          ...list,
-        ],
+        [mobId]: [{ action: name, detail: summary || "Recorded", date: historyDate }, ...list],
       };
     });
+    try {
+      await api.addMobHistory(mobId, { action: name, detail: summary || "Recorded", date: historyDate });
+    } catch (err) {
+      // history is supplementary — don't block the main action on this failing
+      console.error("Couldn't save history entry:", err);
+    }
 
     setActionForm(null);
     setShowMore(false);
@@ -1058,26 +1187,36 @@ export default function App() {
         <div className="flex gap-3">
           <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
             <div className="text-xs text-slate-400 font-semibold tracking-wide">YTD</div>
-            <div className="text-2xl font-extrabold text-slate-800 mt-1">312mm</div>
+            <div className="text-2xl font-extrabold text-slate-800 mt-1">
+              {Math.round(rainfall.filter((r) => r.date?.slice(0, 4) === String(new Date().getFullYear())).reduce((s, r) => s + Number(r.mm || 0), 0))}mm
+            </div>
           </div>
           <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
             <div className="text-xs text-slate-400 font-semibold tracking-wide">365 DAYS</div>
-            <div className="text-2xl font-extrabold text-slate-800 mt-1">548mm</div>
+            <div className="text-2xl font-extrabold text-slate-800 mt-1">
+              {(() => {
+                const cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - 365);
+                const cutoffStr = cutoff.toISOString().slice(0, 10);
+                return Math.round(rainfall.filter((r) => r.date >= cutoffStr).reduce((s, r) => s + Number(r.mm || 0), 0));
+              })()}mm
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
 
-  const PIN_DATA = [
-    { l: "1829", t: "20%", left: "55%", mob: mobs.find(m=>m.name==="Merino ewes") }, { l: "295", t: "25%", left: "65%", mob: mobs.find(m=>m.name==="Coleraine cows") },
-    { l: "1123", t: "27%", left: "85%" }, { l: "619", t: "32%", left: "70%" },
-    { l: "164", t: "36%", left: "20%" }, { l: "64", t: "40%", left: "45%" },
-    { l: "288", t: "42%", left: "85%" }, { l: "382", t: "44%", left: "22%" },
-    { l: "449", t: "48%", left: "75%" }, { l: "621", t: "50%", left: "55%" },
-    { l: "75", t: "53%", left: "82%" }, { l: "960", t: "55%", left: "40%" },
-    { l: "644", t: "58%", left: "20%" }, { l: "406", t: "62%", left: "38%" },
-  ];
+  // Drive map pins from the real mobs list (deterministic scatter so positions don't jump on re-render)
+  const PIN_DATA = mobs.map((m, i) => {
+    const seed = (m.id * 37) % 100;
+    const row = Math.floor(i / 4);
+    const col = i % 4;
+    const t = `${18 + row * 16 + (seed % 7)}%`;
+    const left = `${15 + col * 22 + ((seed * 3) % 9)}%`;
+    return { l: String(m.count), t, left, mob: m };
+  });
+
 
   const MapScreen = () => (
     <div className="pb-24 relative">
@@ -1109,6 +1248,7 @@ export default function App() {
               onSelectPin={setPinSelected}
               apiKey={googleMapsKey}
               onError={() => setMapLoadError(true)}
+              userLocation={userLocation}
             />
           ) : (
             <div
@@ -1116,11 +1256,36 @@ export default function App() {
               style={{ backgroundImage: "url('https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=900&q=60')" }}
             >
               {PIN_DATA.map((p, i) => (
-                <button key={i} onClick={() => setPinSelected(p)} className="absolute bg-white rounded-2xl w-12 h-12 flex items-center justify-center text-xs font-bold shadow-lg border border-slate-100"
-                  style={{ top: p.t, left: p.left, transform: "translate(-50%,-50%)" }}>
-                  {p.l}
+                <button
+                  key={i}
+                  onClick={() => setPinSelected(p)}
+                  className="absolute bg-white rounded-2xl w-14 h-14 flex flex-col items-center justify-center shadow-lg"
+                  style={{
+                    top: p.t,
+                    left: p.left,
+                    transform: "translate(-50%,-50%)",
+                    border: `3px solid ${TAG_COLOUR_HEX[p.mob?.tag] || "#e2e8f0"}`,
+                  }}
+                >
+                  <span className="text-sm leading-none">{SPECIES_ICON[p.mob?.species] || "📍"}</span>
+                  <span className="text-[11px] font-bold leading-tight">{p.l}</span>
                 </button>
               ))}
+              {userLocation && (() => {
+                const center = FARM_CENTERS[farmName] || FARM_CENTERS.Arundale;
+                // Rough projection: same ~0.04deg span heuristic used elsewhere on this fallback map
+                const spanDeg = 0.06;
+                const leftPct = 50 + ((userLocation.lng - center[1]) / spanDeg) * 50;
+                const topPct = 50 - ((userLocation.lat - center[0]) / spanDeg) * 50;
+                const clampedLeft = Math.min(96, Math.max(4, leftPct));
+                const clampedTop = Math.min(96, Math.max(4, topPct));
+                return (
+                  <div className="absolute" style={{ top: `${clampedTop}%`, left: `${clampedLeft}%`, transform: "translate(-50%,-50%)" }}>
+                    <div className="w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow-lg" />
+                    <div className="absolute inset-0 w-4 h-4 rounded-full bg-blue-400 animate-ping opacity-75" />
+                  </div>
+                );
+              })()}
             </div>
           )}
           {!googleMapsKey && isAdmin && (
@@ -1136,7 +1301,9 @@ export default function App() {
           <div className="absolute right-4 bottom-6 flex flex-col gap-3 z-10">
             <button onClick={() => showToast("Recentering map...")} className="bg-white rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg">⌖</button>
             <button onClick={() => showToast("Add new mob/pin")} className="bg-red-900 text-white rounded-2xl w-12 h-12 flex items-center justify-center text-2xl shadow-lg">+</button>
-            <button onClick={() => showToast("Locating you...")} className="bg-white rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg">◎</button>
+            <button onClick={locateMe} disabled={locating} className="bg-white rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg disabled:opacity-50">
+              {locating ? "…" : "◎"}
+            </button>
           </div>
         </div>
       )}
@@ -1191,6 +1358,7 @@ export default function App() {
                   drawMode={mapDrawMode}
                   drawPoints={drawPoints}
                   onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
+                  userLocation={userLocation}
                 />
               ) : (
                 <PaddockMap
@@ -1204,7 +1372,13 @@ export default function App() {
                   drawMode={mapDrawMode}
                   drawPoints={drawPoints}
                   onDrawPoint={(lat, lng, x, y) => setDrawPoints((prev) => [...prev, { lat, lng, x, y }])}
+                  userLocation={userLocation}
                 />
+              )}
+              {!mapDrawMode && (
+                <button onClick={locateMe} disabled={locating} className="absolute bottom-2 right-2 bg-white w-10 h-10 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50">
+                  {locating ? "…" : "◎"}
+                </button>
               )}
               {!googleMapsKey && isAdmin && !mapDrawMode && (
                 <button onClick={() => setShowSettings(true)} className="absolute top-2 right-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full">
@@ -1342,10 +1516,27 @@ export default function App() {
       {pinSelected && (
         <Modal title={pinSelected.mob ? pinSelected.mob.name : `Group of ${pinSelected.l}`} onClose={() => setPinSelected(null)}>
           <p className="text-sm text-slate-500 mb-3">{pinSelected.mob ? pinSelected.mob.desc : "Unidentified group on map"}</p>
-          <div className="bg-slate-50 rounded-2xl p-4 mb-3">
-            <div className="text-xs text-slate-400 font-semibold">HEAD COUNT</div>
-            <div className="text-2xl font-extrabold text-slate-800">{pinSelected.l}</div>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div className="bg-slate-50 rounded-2xl p-4">
+              <div className="text-xs text-slate-400 font-semibold">HEAD COUNT</div>
+              <div className="text-2xl font-extrabold text-slate-800">{pinSelected.l}</div>
+            </div>
+            {pinSelected.mob && (
+              <div className="bg-slate-50 rounded-2xl p-4">
+                <div className="text-xs text-slate-400 font-semibold">TYPE</div>
+                <div className="text-base font-bold text-slate-800 mt-1">{SPECIES_ICON[pinSelected.mob.species] || ""} {pinSelected.mob.type || pinSelected.mob.species}</div>
+              </div>
+            )}
           </div>
+          {pinSelected.mob?.tag && (
+            <div className="flex items-center gap-2 bg-slate-50 rounded-2xl p-4 mb-3">
+              <span className="w-5 h-5 rounded-full border border-slate-300" style={{ backgroundColor: TAG_COLOUR_HEX[pinSelected.mob.tag] || "#e2e8f0" }} />
+              <div>
+                <div className="text-xs text-slate-400 font-semibold">TAG COLOUR</div>
+                <div className="text-sm font-bold text-slate-800">{pinSelected.mob.tag}</div>
+              </div>
+            </div>
+          )}
           {pinSelected.mob && (
             <button
               onClick={() => { setSelectedMobId(pinSelected.mob.id); setMobTab("Summary"); setPinSelected(null); }}
@@ -1388,13 +1579,26 @@ export default function App() {
             </div>
           </div>
           <button
-            onClick={() => {
+            onClick={async () => {
               if (!newPaddockForm.name || !newPaddockForm.ha) { showToast("Please enter a name and area"); return; }
-              setPaddocks((prev) => [...prev, { id: Date.now(), name: newPaddockForm.name, ha: Number(newPaddockForm.ha), landUse: newPaddockForm.landUse || "Grazing", pasture: newPaddockForm.pasture || "Native grass", colour: newPaddockForm.colour || "Sky Blue", geojson: newPaddockForm.geojson || null }]);
-              setShowAddPaddock(false);
-              setNewPaddockForm({});
-              markChanged();
-              showToast("Paddock added");
+              const fields = {
+                name: newPaddockForm.name,
+                ha: Number(newPaddockForm.ha),
+                landUse: newPaddockForm.landUse || "Grazing",
+                pasture: newPaddockForm.pasture || "Native grass",
+                colour: newPaddockForm.colour || "Sky Blue",
+                geojson: newPaddockForm.geojson || null,
+              };
+              try {
+                const created = await api.createPaddock(farmName, fields);
+                setPaddocks((prev) => [...prev, created]);
+                setShowAddPaddock(false);
+                setNewPaddockForm({});
+                markChanged();
+                showToast("Paddock added");
+              } catch (err) {
+                showToast(err.message || "Couldn't save paddock to the server");
+              }
             }}
             className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold"
           >
@@ -1457,7 +1661,7 @@ export default function App() {
                 </div>
               </div>
               <button
-                onClick={() => {
+                onClick={async () => {
                   const center = FARM_CENTERS[farmName] || FARM_CENTERS.Arundale;
                   let lat = center[0], lng = center[1];
                   const targetPaddock = paddocks.find((p) => p.name === newLandmarkForm.paddock);
@@ -1470,12 +1674,17 @@ export default function App() {
                     lat += (Math.random() - 0.5) * 0.01;
                     lng += (Math.random() - 0.5) * 0.01;
                   }
-                  setLandmarks((prev) => [...prev, { id: Date.now(), ...newLandmarkForm, lat, lng }]);
-                  setShowAddLandmark(false);
-                  setLandmarkCategoryPick(null);
-                  setNewLandmarkForm({});
-                  markChanged();
-                  showToast("Landmark added");
+                  try {
+                    const created = await api.createLandmark(farmName, { ...newLandmarkForm, lat, lng });
+                    setLandmarks((prev) => [...prev, created]);
+                    setShowAddLandmark(false);
+                    setLandmarkCategoryPick(null);
+                    setNewLandmarkForm({});
+                    markChanged();
+                    showToast("Landmark added");
+                  } catch (err) {
+                    showToast(err.message || "Couldn't save landmark to the server");
+                  }
                 }}
                 className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold"
               >
@@ -1507,11 +1716,20 @@ export default function App() {
                 </div>
               </div>
               <button
-                onClick={() => {
-                  setLandmarks((prev) => prev.map((l) => l.id === landmarkDetail.id ? landmarkDetail : l));
-                  setLandmarkEditMode(false);
-                  markChanged();
-                  showToast("Landmark updated");
+                onClick={async () => {
+                  try {
+                    const updated = await api.updateLandmark(landmarkDetail.id, {
+                      name: landmarkDetail.name,
+                      colour: landmarkDetail.colour,
+                      notes: landmarkDetail.notes,
+                    });
+                    setLandmarks((prev) => prev.map((l) => l.id === landmarkDetail.id ? updated : l));
+                    setLandmarkEditMode(false);
+                    markChanged();
+                    showToast("Landmark updated");
+                  } catch (err) {
+                    showToast(err.message || "Couldn't save changes to the server");
+                  }
                 }}
                 className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold"
               >
@@ -1534,7 +1752,18 @@ export default function App() {
                 <div className="space-y-2">
                   <button onClick={() => setLandmarkEditMode(true)} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">Edit Details</button>
                   <button
-                    onClick={() => { setLandmarks((prev) => prev.filter((l) => l.id !== landmarkDetail.id)); setLandmarkDetail(null); markChanged(); showToast("Landmark removed"); }}
+                    onClick={async () => {
+                      const id = landmarkDetail.id;
+                      setLandmarks((prev) => prev.filter((l) => l.id !== id));
+                      setLandmarkDetail(null);
+                      markChanged();
+                      try {
+                        await api.deleteLandmark(id);
+                        showToast("Landmark removed");
+                      } catch (err) {
+                        showToast(err.message || "Couldn't remove landmark on the server");
+                      }
+                    }}
                     className="w-full bg-rose-50 text-rose-500 rounded-2xl py-3 font-bold text-sm"
                   >
                     Remove Landmark
@@ -1584,21 +1813,25 @@ export default function App() {
                 <div className="flex gap-2">
                   <button onClick={() => setPaddockEditMode(false)} className="flex-1 border border-slate-200 rounded-2xl py-3 font-bold text-slate-500">Cancel</button>
                   <button
-                    onClick={() => {
-                      const updated = {
-                        ...paddockDetail,
+                    onClick={async () => {
+                      const fields = {
                         name: paddockEditForm.name ?? paddockDetail.name,
                         landUse: paddockEditForm.landUse ?? paddockDetail.landUse,
                         pasture: paddockEditForm.pasture ?? paddockDetail.pasture,
                         ha: paddockEditForm.ha !== undefined ? Number(paddockEditForm.ha) : paddockDetail.ha,
                         colour: paddockEditForm.colour ?? paddockDetail.colour,
                       };
-                      setPaddocks((prev) => prev.map((p) => p.id === paddockDetail.id ? updated : p));
-                      setPaddockDetail(updated);
-                      setPaddockEditMode(false);
-                      setPaddockEditForm({});
-                      markChanged();
-                      showToast("Paddock updated");
+                      try {
+                        const updated = await api.updatePaddock(paddockDetail.id, fields);
+                        setPaddocks((prev) => prev.map((p) => p.id === paddockDetail.id ? updated : p));
+                        setPaddockDetail(updated);
+                        setPaddockEditMode(false);
+                        setPaddockEditForm({});
+                        markChanged();
+                        showToast("Paddock updated");
+                      } catch (err) {
+                        showToast(err.message || "Couldn't save changes to the server");
+                      }
                     }}
                     className="flex-1 bg-red-900 text-white rounded-2xl py-3 font-bold"
                   >
@@ -1682,7 +1915,18 @@ export default function App() {
                 </button>
                 {canEdit && (
                   <button
-                    onClick={() => { setPaddocks((prev) => prev.filter((p) => p.id !== paddockDetail.id)); setPaddockDetail(null); markChanged(); showToast("Paddock removed"); }}
+                    onClick={async () => {
+                      const id = paddockDetail.id;
+                      setPaddocks((prev) => prev.filter((p) => p.id !== id));
+                      setPaddockDetail(null);
+                      markChanged();
+                      try {
+                        await api.deletePaddock(id);
+                        showToast("Paddock removed");
+                      } catch (err) {
+                        showToast(err.message || "Couldn't remove paddock on the server");
+                      }
+                    }}
                     className="w-full bg-rose-50 text-rose-500 rounded-2xl py-3 font-bold text-sm"
                   >
                     Remove Paddock
@@ -1761,20 +2005,26 @@ export default function App() {
           )}
 
           <button
-            onClick={() => {
+            onClick={async () => {
               if (!fooForm.kgDm) { showToast("Please enter a feed on offer figure"); return; }
-              setFooHistory((prev) => [...prev, {
+              const fields = {
                 paddock: fooTargetPaddock?.name || "All",
-                date: fooForm.date || new Date().toISOString().split("T")[0],
+                date: fooForm.date || todayStr(),
                 kgDm: fooForm.kgDm,
                 height: fooForm.height,
                 cover: fooForm.cover,
                 notes: fooForm.notes,
-              }]);
-              setShowFoo(false);
-              setFooForm({});
-              markChanged();
-              showToast("Feed on offer saved");
+              };
+              try {
+                const created = await api.addFoo(farmName, fields);
+                setFooHistory((prev) => [...prev, { ...created, _farm: farmName }]);
+                setShowFoo(false);
+                setFooForm({});
+                markChanged();
+                showToast("Feed on offer saved");
+              } catch (err) {
+                showToast(err.message || "Couldn't save to the server");
+              }
             }}
             className="w-full bg-green-600 text-white rounded-2xl py-3.5 font-bold"
           >
@@ -1840,17 +2090,19 @@ export default function App() {
             </div>
           </div>
           <button
-            onClick={() => {
+            onClick={async () => {
               if (!sprayForm.title || !sprayForm.treatmentDate) { showToast("Please enter a chemical name and date"); return; }
-              setSprayInventory((prev) => [...prev, {
-                id: Date.now(),
-                ...sprayForm,
-                location: sprayFormPaddock?.name || sprayForm.location || "",
-              }]);
-              setShowSprayForm(false);
-              setSprayForm({});
-              markChanged();
-              showToast("Spray treatment saved");
+              const fields = { ...sprayForm, location: sprayFormPaddock?.name || sprayForm.location || "" };
+              try {
+                const created = await api.addSprayInventory(farmName, fields);
+                setSprayInventory((prev) => [...prev, created]);
+                setShowSprayForm(false);
+                setSprayForm({});
+                markChanged();
+                showToast("Spray treatment saved");
+              } catch (err) {
+                showToast(err.message || "Couldn't save to the server");
+              }
             }}
             className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold"
           >
@@ -2042,7 +2294,8 @@ export default function App() {
   );
 
   const renderField = (field) => {
-    const value = formValues[field.label] || "";
+    const isDateField = field.type === "date";
+    const value = formValues[field.label] ?? (isDateField ? todayStr() : "");
     const onChange = (v) => setFormValues((prev) => ({ ...prev, [field.label]: v }));
     if (field.type === "select") {
       let options = field.options;
@@ -2191,15 +2444,29 @@ export default function App() {
             <>
               {mobNotes.length === 0 && <p className="text-slate-400 text-sm mb-3">No notes yet.</p>}
               {mobNotes.map((n, i) => (
-                <div key={i} className="bg-white rounded-2xl p-3 shadow-sm border border-slate-100 mb-2 text-sm">{n}</div>
+                <div key={n.id ?? i} className="bg-white rounded-2xl p-3 shadow-sm border border-slate-100 mb-2 text-sm">
+                  <div>{n.text ?? n}</div>
+                  {n.author && <div className="text-xs text-slate-400 mt-1">{n.author}</div>}
+                </div>
               ))}
               <div className="flex gap-2 mt-3">
                 <input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Add a note..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white" />
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!noteDraft.trim()) return;
-                    setNotes((prev) => ({ ...prev, [selectedMob.id]: [noteDraft, ...(prev[selectedMob.id] || [])] }));
+                    const text = noteDraft.trim();
                     setNoteDraft("");
+                    setNotes((prev) => ({ ...prev, [selectedMob.id]: [{ text, author: currentUser.name }, ...(prev[selectedMob.id] || [])] }));
+                    try {
+                      const created = await api.addMobNote(selectedMob.id, text, currentUser.name);
+                      setNotes((prev) => ({
+                        ...prev,
+                        [selectedMob.id]: [{ id: created.id, text: created.text, author: created.authorName }, ...(prev[selectedMob.id] || []).filter((n) => n.text !== text)],
+                      }));
+                      markChanged();
+                    } catch (err) {
+                      showToast(err.message || "Couldn't save note to the server");
+                    }
                   }}
                   className="bg-red-900 text-white rounded-xl px-4 font-semibold"
                 >Add</button>
@@ -2339,6 +2606,8 @@ export default function App() {
               if (stayLoggedIn) {
                 setLocked(true);
               } else {
+                setAuthToken(null);
+                setCurrentAccount(null);
                 setLoggedInEmail(null);
                 setLoginEmail("");
               }
@@ -2418,16 +2687,22 @@ export default function App() {
           <Modal title={`Add ${isTreatment ? "Animal Treatment" : "Spray Chemical"}`} onClose={() => setInventoryView(null)}>
             <InventoryForm fields={fields} values={inventoryForm} onChange={(k, v) => setInventoryForm((prev) => ({ ...prev, [k]: v }))} />
             <button
-              onClick={() => {
+              onClick={async () => {
                 if (!inventoryForm.title) { showToast("Please enter a name"); return; }
-                if (isTreatment) {
-                  setInventory((prev) => [...prev, { id: Date.now(), ...inventoryForm }]);
-                } else {
-                  setSprayInventory((prev) => [...prev, { id: Date.now(), ...inventoryForm }]);
+                try {
+                  if (isTreatment) {
+                    const created = await api.addTreatment(farmName, inventoryForm);
+                    setInventory((prev) => [...prev, created]);
+                  } else {
+                    const created = await api.addSprayInventory(farmName, inventoryForm);
+                    setSprayInventory((prev) => [...prev, created]);
+                  }
+                  setInventoryView(null);
+                  markChanged();
+                  showToast(`${isTreatment ? "Treatment" : "Spray chemical"} added`);
+                } catch (err) {
+                  showToast(err.message || "Couldn't save to the server");
                 }
-                setInventoryView(null);
-                markChanged();
-                showToast(`${isTreatment ? "Treatment" : "Spray chemical"} added`);
               }}
               className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold"
             >
@@ -2454,12 +2729,19 @@ export default function App() {
             </div>
             {canEdit && (
               <button
-                onClick={() => {
-                  if (isTreatment) setInventory((prev) => prev.filter((i) => i.id !== item.id));
-                  else setSprayInventory((prev) => prev.filter((i) => i.id !== item.id));
+                onClick={async () => {
+                  const id = item.id;
+                  if (isTreatment) setInventory((prev) => prev.filter((i) => i.id !== id));
+                  else setSprayInventory((prev) => prev.filter((i) => i.id !== id));
                   setInventoryView(null);
                   markChanged();
-                  showToast("Record removed");
+                  try {
+                    if (isTreatment) await api.deleteTreatment(id);
+                    else await api.deleteSprayInventory(id);
+                    showToast("Record removed");
+                  } catch (err) {
+                    showToast(err.message || "Couldn't remove record on the server");
+                  }
                 }}
                 className="w-full bg-rose-500 text-white rounded-2xl py-3 font-bold"
               >
@@ -2470,21 +2752,54 @@ export default function App() {
         );
       })()}
 
-      {showRainfall && (
-        <Modal title="Rainfall Records" onClose={() => setShowRainfall(false)}>
-          <div className="space-y-2">
-            {[
-              ["June 2026", "42mm"], ["May 2026", "58mm"], ["April 2026", "31mm"],
-              ["March 2026", "12mm"], ["February 2026", "5mm"],
-            ].map(([m, v]) => (
-              <div key={m} className="flex justify-between border-b border-slate-100 py-2">
-                <span className="text-slate-600">{m}</span><span className="font-bold text-slate-800">{v}</span>
-              </div>
-            ))}
-          </div>
-          <button onClick={() => showToast("Rainfall entry added")} className="mt-4 w-full bg-red-900 text-white rounded-2xl py-3 font-bold">+ Add Reading</button>
-        </Modal>
-      )}
+      {showRainfall && (() => {
+        const sortedRainfall = [...rainfall].sort((a, b) => (a.date < b.date ? 1 : -1));
+        return (
+          <Modal title="Rainfall Records" onClose={() => { setShowRainfall(false); setRainfallForm({}); }}>
+            <div className="space-y-2 mb-4">
+              {sortedRainfall.length === 0 && <p className="text-slate-400 text-sm py-2">No rainfall recorded yet.</p>}
+              {sortedRainfall.map((r) => (
+                <div key={r.id} className="flex justify-between border-b border-slate-100 py-2">
+                  <span className="text-slate-600">{r.date}</span><span className="font-bold text-slate-800">{r.mm}mm</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mb-2">
+              <input
+                type="date"
+                value={rainfallForm.date || todayStr()}
+                onChange={(e) => setRainfallForm((p) => ({ ...p, date: e.target.value }))}
+                className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
+              />
+              <input
+                type="number"
+                value={rainfallForm.mm || ""}
+                onChange={(e) => setRainfallForm((p) => ({ ...p, mm: e.target.value }))}
+                placeholder="mm"
+                className="w-24 border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
+              />
+            </div>
+            <button
+              onClick={async () => {
+                if (!rainfallForm.mm) { showToast("Please enter a rainfall amount"); return; }
+                const date = rainfallForm.date || todayStr();
+                try {
+                  const created = await api.addRainfall(farmName, date, rainfallForm.mm);
+                  setRainfall((prev) => [...prev, created]);
+                  setRainfallForm({});
+                  markChanged();
+                  showToast("Rainfall entry added");
+                } catch (err) {
+                  showToast(err.message || "Couldn't save to the server");
+                }
+              }}
+              className="mt-2 w-full bg-red-900 text-white rounded-2xl py-3 font-bold"
+            >
+              + Add Reading
+            </button>
+          </Modal>
+        );
+      })()}
 
       {showSettings && (
         <Modal title="Settings" onClose={() => setShowSettings(false)}>
@@ -2533,12 +2848,11 @@ export default function App() {
     const breedOptions = [...(BREEDS_DEFAULT[species] || []), ...(customBreeds[species] || []).filter((b) => !(BREEDS_DEFAULT[species] || []).includes(b))];
     const ageOptions = AGE_CLASSES[species];
 
-    const saveMob = () => {
+    const saveMob = async () => {
       if (!newMobForm.name) { showToast("Mob name is required"); return; }
       if (!newMobForm.paddock) { showToast("Please select a paddock"); return; }
       if (!newMobForm.size) { showToast("Please enter a mob size"); return; }
-      const mob = {
-        id: editingMobId || Date.now(),
+      const fields = {
         name: newMobForm.name,
         desc: `${newMobForm.breed || species} ${(newMobForm.ageClass || "").toLowerCase()}${newMobForm.dob ? " · " + newMobForm.dob : ""}`.trim(),
         count: Number(newMobForm.size),
@@ -2551,24 +2865,30 @@ export default function App() {
         mgmtGroup: newMobForm.mgmtGroup || "Unassigned",
         tag: newMobForm.tagColour || "Unassigned",
         whp: editingMobId ? (mobs.find((m) => m.id === editingMobId)?.whp || 0) : 0,
-        avgWeight: newMobForm.avgWeight || "",
-        notes: newMobForm.description || "",
       };
-      if (editingMobId) {
-        setMobs((prev) => prev.map((m) => (m.id === editingMobId ? mob : m)));
-        markChanged();
-        showToast("Mob updated");
-      } else {
-        setMobs((prev) => [...prev, mob]);
-        markChanged();
-        showToast("Mob created");
+      try {
+        if (editingMobId) {
+          const updated = await api.updateMob(editingMobId, fields);
+          setMobs((prev) => prev.map((m) => (m.id === editingMobId ? updated : m)));
+          markChanged();
+          showToast("Mob updated");
+        } else {
+          const created = await api.createMob(farmName, fields);
+          setMobs((prev) => [...prev, created]);
+          markChanged();
+          showToast("Mob created");
+        }
+      } catch (err) {
+        showToast(err.message || "Couldn't save mob to the server");
+        return;
       }
-      // Remember custom breeds for future use
+      // Remember custom breeds for future use, both locally and on the server
       if (newMobForm.breed && !(BREEDS_DEFAULT[species] || []).includes(newMobForm.breed)) {
         setCustomBreeds((prev) => ({
           ...prev,
           [species]: [...new Set([...(prev[species] || []), newMobForm.breed])],
         }));
+        api.addBreed(species, newMobForm.breed).catch(() => {});
       }
       setEditingMobId(null);
       setShowAddMob(false);
@@ -2715,7 +3035,7 @@ export default function App() {
     );
   };
 
-  if (showSplash) {
+  if (showSplash || authLoading) {
     return (
       <div className="max-w-md mx-auto min-h-screen font-sans bg-red-950 flex flex-col items-center justify-center">
         <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-48 rounded-xl shadow-2xl" />
@@ -2734,7 +3054,7 @@ export default function App() {
           <div className="text-sm text-slate-400 mb-6">{currentUser.name} · {currentUser.email}</div>
           <button onClick={() => setLocked(false)} className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold">Continue</button>
           <button
-            onClick={() => { setLoggedInEmail(null); setLocked(false); setLoginEmail(""); setStayLoggedIn(true); }}
+            onClick={() => { setAuthToken(null); setCurrentAccount(null); setLoggedInEmail(null); setLocked(false); setLoginEmail(""); setStayLoggedIn(true); }}
             className="w-full text-slate-400 text-sm font-semibold mt-3"
           >
             Use a different account
@@ -2785,15 +3105,19 @@ export default function App() {
           </button>
           {loginError && <p className="text-sm text-rose-500 font-medium mb-2">{loginError}</p>}
           <button
-            onClick={() => {
+            onClick={async () => {
               const email = loginEmail.trim().toLowerCase();
               if (!email || !loginPassword) { setLoginError("Please enter your email and password."); return; }
-              const account = accounts.find((a) => a.email.toLowerCase() === email);
-              if (!account) { setLoginError("This email hasn't been invited to Kurra-Wirra. Ask an Admin to invite you."); return; }
-              if (account.password && account.password !== loginPassword) { setLoginError("Incorrect password."); return; }
-              setCurrentUserId(account.id);
-              setLoggedInEmail(account.email);
-              setLoginPassword("");
+              setLoginError("");
+              try {
+                const { token, account } = await api.login(email, loginPassword);
+                setAuthToken(token);
+                setCurrentAccount(account);
+                setLoggedInEmail(account.email);
+                setLoginPassword("");
+              } catch (err) {
+                setLoginError(err.message || "Couldn't sign in. Please try again.");
+              }
             }}
             className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold mt-2"
           >
@@ -2896,10 +3220,35 @@ export default function App() {
           <div className="flex-1 overflow-y-auto p-4">
           <div className="bg-orange-50 rounded-2xl p-4 mb-4">
             <div className="text-xs font-semibold text-red-950 uppercase tracking-wide mb-2">Signed in as</div>
-            <select value={currentUserId} onChange={(e) => setCurrentUserId(Number(e.target.value))} className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white font-semibold text-slate-700">
-              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.email}) · {a.role}</option>)}
-            </select>
-            <p className="text-xs text-slate-400 mt-2">Switch accounts here to preview what each role can see and do.</p>
+            <div className="font-semibold text-slate-700">{currentUser.name} ({currentUser.email}) · {currentUser.role}</div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-100 p-4 mb-4">
+            <div className="text-sm font-bold text-slate-700 mb-2">Change my password</div>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={changePasswordValue}
+                onChange={(e) => setChangePasswordValue(e.target.value)}
+                placeholder="New password"
+                className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm"
+              />
+              <button
+                onClick={async () => {
+                  if (!changePasswordValue || changePasswordValue.length < 4) { showToast("Password must be at least 4 characters"); return; }
+                  try {
+                    await api.changePassword(currentUserId, changePasswordValue);
+                    setChangePasswordValue("");
+                    showToast("Password updated");
+                  } catch (err) {
+                    showToast(err.message || "Couldn't update password");
+                  }
+                }}
+                className="bg-red-900 text-white rounded-xl px-4 font-bold text-sm"
+              >
+                Update
+              </button>
+            </div>
           </div>
 
           <div className="text-sm font-bold text-slate-700 mb-2">Team members</div>
@@ -2914,14 +3263,29 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <select
                       value={a.role}
-                      onChange={(e) => setAccounts((prev) => prev.map((acc) => acc.id === a.id ? { ...acc, role: e.target.value } : acc))}
+                      onChange={async (e) => {
+                        const newRole = e.target.value;
+                        setAccounts((prev) => prev.map((acc) => acc.id === a.id ? { ...acc, role: newRole } : acc));
+                        try {
+                          await api.updateAccount(a.id, { role: newRole });
+                        } catch (err) {
+                          showToast(err.message || "Couldn't update role");
+                        }
+                      }}
                       className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
                     >
                       {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>
                     {a.id !== currentUserId && (
                       <button
-                        onClick={() => setAccounts((prev) => prev.filter((acc) => acc.id !== a.id))}
+                        onClick={async () => {
+                          setAccounts((prev) => prev.filter((acc) => acc.id !== a.id));
+                          try {
+                            await api.deleteAccount(a.id);
+                          } catch (err) {
+                            showToast(err.message || "Couldn't remove account");
+                          }
+                        }}
                         className="w-8 h-8 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center"
                       >
                         <X size={14} />
@@ -2954,15 +3318,20 @@ export default function App() {
                   </select>
                 </div>
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!newAccountName.trim()) { showToast("Please enter a name"); return; }
                     if (!newAccountEmail.trim()) { showToast("Please enter an email"); return; }
                     if (accounts.some((a) => a.email.toLowerCase() === newAccountEmail.trim().toLowerCase())) { showToast("That email is already added"); return; }
-                    setAccounts((prev) => [...prev, { id: Date.now(), name: newAccountName.trim(), email: newAccountEmail.trim(), role: newAccountRole, password: "password" }]);
-                    setNewAccountName("");
-                    setNewAccountEmail("");
-                    setNewAccountRole("Worker");
-                    showToast("Invite sent");
+                    try {
+                      const created = await api.inviteAccount({ name: newAccountName.trim(), email: newAccountEmail.trim(), role: newAccountRole });
+                      setAccounts((prev) => [...prev, created]);
+                      setNewAccountName("");
+                      setNewAccountEmail("");
+                      setNewAccountRole("Worker");
+                      showToast("Invite sent — default password is \"password\"");
+                    } catch (err) {
+                      showToast(err.message || "Couldn't send invite");
+                    }
                   }}
                   className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold"
                 >
