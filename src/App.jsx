@@ -1442,14 +1442,29 @@ export default function App() {
                     const file = e.target.files?.[0];
                     if (!file) return;
                     const reader = new FileReader();
-                    reader.onload = (ev) => {
+                    reader.onload = async (ev) => {
                       try {
                         const data = JSON.parse(ev.target.result);
                         const imported = geojsonToPaddocks(data);
                         if (imported.length === 0) { showToast("No paddock features found"); return; }
-                        setPaddocks((prev) => [...prev, ...imported]);
+                        showToast(`Saving ${imported.length} paddock${imported.length > 1 ? "s" : ""}...`);
+                        const created = [];
+                        for (const p of imported) {
+                          const { id, ...fields } = p;
+                          try {
+                            const saved = await api.createPaddock(farmName, fields);
+                            created.push(saved);
+                          } catch (err) {
+                            console.error("Failed to save imported paddock:", p.name, err);
+                          }
+                        }
+                        if (created.length === 0) {
+                          showToast("Couldn't save imported paddocks to the server");
+                          return;
+                        }
+                        setPaddocks((prev) => [...prev, ...created]);
                         markChanged();
-                        showToast(`Imported & mapped ${imported.length} paddock${imported.length > 1 ? "s" : ""}`);
+                        showToast(`Imported & mapped ${created.length} paddock${created.length > 1 ? "s" : ""}`);
                       } catch (err) {
                         showToast("Couldn't read that file — expected GeoJSON");
                       }
