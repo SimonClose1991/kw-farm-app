@@ -72,7 +72,10 @@ const SPECIES_ICON = { Cattle: "🐄", Sheep: "🐑" };
 const PADDOCKS = ["North", "South", "East", "West", "River", "Yards"];
 const PADDOCK_COLOURS = ["Sky Blue", "Forest Green", "Sunset Orange", "Ruby Red", "Lavender", "Mustard"];
 const COLOUR_HEX = { "Sky Blue": "#38bdf8", "Forest Green": "#22c55e", "Sunset Orange": "#f97316", "Ruby Red": "#ef4444", "Lavender": "#a78bfa", "Mustard": "#eab308" };
-const LAND_USES = ["Grazing", "Cropping", "Fallow", "Yards/Infrastructure"];
+const LAND_USES = ["Grazing", "Cropping", "Fallow", "Yards/Infrastructure", "Vegetation", "Conservation Zone"];
+
+// Land uses excluded from DSE/ha stocking rate calculation
+const NON_GRAZING_LAND_USES = new Set(["Cropping", "Fallow", "Yards/Infrastructure", "Vegetation", "Conservation Zone"]);
 const PASTURE_TYPES = ["Native grass", "Improved pasture", "Lucerne", "Cereal crop", "N/A"];
 
 // Landmark categories/types, modelled on the AgriWebb Farm Map Editor feature set
@@ -130,7 +133,7 @@ const INSIGHT_MODES = [
   { key: "feed", label: "Feed on offer" },
   { key: "grazed", label: "Days since grazed" },
 ];
-const USAGE_COLOURS = { Grazing: "#22c55e", Cropping: "#eab308", Fallow: "#94a3b8", "Yards/Infrastructure": "#64748b" };
+const USAGE_COLOURS = { Grazing: "#22c55e", Cropping: "#eab308", Fallow: "#94a3b8", "Yards/Infrastructure": "#64748b", Vegetation: "#16a34a", "Conservation Zone": "#0369a1" };
 
 const DEFAULT_PADDOCKS_DATA = {
   Arundale: [
@@ -878,9 +881,10 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
     const fSheep = fMobs.filter(m => m.species === "Sheep" || m.species === "Rams").reduce((s, m) => s + m.count, 0);
     const fDSE = fMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
     const totalHa = fPaddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0);
-    const avgDseHa = totalHa > 0 ? (fDSE / totalHa).toFixed(2) : "0.00";
-    const grazedHa = fPaddocks.filter(p => p.landUse === "Grazing" || !p.landUse || p.landUse === "").reduce((s, p) => s + (Number(p.ha) || 0), 0);
-    const arableHa = fPaddocks.filter(p => p.landUse && p.landUse !== "Grazing").reduce((s, p) => s + (Number(p.ha) || 0), 0);
+    const grazedHa = fPaddocks.filter(p => !NON_GRAZING_LAND_USES.has(p.landUse) || !p.landUse || p.landUse === "").reduce((s, p) => s + (Number(p.ha) || 0), 0);
+    const nonGrazingHa = fPaddocks.filter(p => NON_GRAZING_LAND_USES.has(p.landUse)).reduce((s, p) => s + (Number(p.ha) || 0), 0);
+    // AVG DSE/ha only counts grazing land — veg/conservation zones excluded
+    const avgDseHa = grazedHa > 0 ? (fDSE / grazedHa).toFixed(2) : "0.00";
 
     if (dashLoading) return (
       <div className="pb-24 bg-stone-50 min-h-screen">
@@ -928,10 +932,10 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
             </div>
             <div className="grid grid-cols-2 divide-x divide-y divide-stone-100">
               {[
-                { label: "PADDOCKS",  value: fPaddocks.length, accent: "border-l-blue-400" },
-                { label: "TOTAL HA",  value: totalHa.toFixed(0), accent: "border-l-amber-400" },
-                { label: "GRAZED HA", value: grazedHa.toFixed(0), accent: "border-l-green-400" },
-                { label: "OTHER HA",  value: arableHa.toFixed(0), accent: "border-l-stone-300" },
+                { label: "PADDOCKS",    value: fPaddocks.length,          accent: "border-l-blue-400" },
+                { label: "TOTAL HA",    value: totalHa.toFixed(0),        accent: "border-l-amber-400" },
+                { label: "GRAZING HA",  value: grazedHa.toFixed(0),       accent: "border-l-green-400" },
+                { label: "OTHER HA",    value: nonGrazingHa.toFixed(0),   accent: "border-l-stone-300" },
               ].map(({ label, value, accent }) => (
                 <div key={label} className={`p-4 border-l-4 ${accent}`}>
                   <div className="text-2xl font-bold text-stone-800 tracking-tight">{value}</div>
@@ -2387,10 +2391,12 @@ export default function App() {
         paddocks.forEach((p) => {
           const paddockMobs = mobs.filter((m) => m.paddock === p.name);
           const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
-          const dsePerHa = p.ha ? dseTotal / Number(p.ha) : 0;
+          // Only calculate DSE/ha for grazing land — non-grazing shows 0
+          const isGrazing = !NON_GRAZING_LAND_USES.has(p.landUse);
+          const dsePerHa = (isGrazing && p.ha) ? dseTotal / Number(p.ha) : 0;
           const lastFooEntry = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
           const daysSinceGrazed = paddockMobs.length > 0 ? Math.min(...paddockMobs.map((m) => m.daysInPaddock ?? 999)) : null;
-          paddockStats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed };
+          paddockStats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing };
         });
 
         return (
@@ -2880,7 +2886,8 @@ export default function App() {
         const paddockMobs = mobs.filter((m) => m.paddock === paddockDetail.name);
         const headCount = paddockMobs.reduce((s, m) => s + m.count, 0);
         const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
-        const dsePerHa = paddockDetail.ha ? dseTotal / paddockDetail.ha : 0;
+        const isGrazingPaddock = !NON_GRAZING_LAND_USES.has(paddockDetail.landUse);
+        const dsePerHa = (isGrazingPaddock && paddockDetail.ha) ? dseTotal / paddockDetail.ha : 0;
         return (
           <Modal title={paddockEditMode ? "Edit Paddock" : paddockDetail.name} onClose={() => { setPaddockDetail(null); setPaddockEditMode(false); }}>
             {paddockEditMode ? (
@@ -2957,10 +2964,19 @@ export default function App() {
                 <div className="text-xs text-slate-400 font-semibold">HEAD COUNT</div>
                 <div className="text-2xl font-extrabold text-slate-800 mt-1">{headCount.toLocaleString()}</div>
               </div>
-              <div className="bg-gradient-to-br from-red-950 to-red-900 rounded-2xl p-4 text-white col-span-2">
+              <div className={`rounded-2xl p-4 col-span-2 ${isGrazingPaddock ? "bg-gradient-to-br from-red-950 to-red-900 text-white" : "bg-stone-100 text-stone-500 border border-stone-200"}`}>
                 <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Stocking Rate</div>
-                <div className="text-2xl font-extrabold mt-1">{dsePerHa.toFixed(2)} DSE/ha</div>
-                <div className="text-xs opacity-80 mt-1">{dseTotal.toLocaleString(undefined,{maximumFractionDigits:1})} total DSE ÷ {paddockDetail.ha} ha</div>
+                {isGrazingPaddock ? (
+                  <>
+                    <div className="text-2xl font-extrabold mt-1">{dsePerHa.toFixed(2)} DSE/ha</div>
+                    <div className="text-xs opacity-80 mt-1">{dseTotal.toLocaleString(undefined,{maximumFractionDigits:1})} total DSE ÷ {paddockDetail.ha} ha</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-base font-semibold mt-1">Not calculated</div>
+                    <div className="text-xs mt-1 opacity-70">{paddockDetail.landUse} — excluded from stocking rate</div>
+                  </>
+                )}
               </div>
             </div>
             {fooHistory.filter((r) => r.paddock === paddockDetail.name).length > 0 && (
@@ -4347,7 +4363,8 @@ export default function App() {
               {[...paddocks].sort((a,b)=>a.name.localeCompare(b.name)).map((p) => {
                 const paddockMobs = mobs.filter(m => m.paddock === p.name);
                 const dse = paddockMobs.reduce((s,m)=>s+m.count*(Number(m.dse)||0),0);
-                const dsePerHa = Number(p.ha) > 0 ? dse/Number(p.ha) : 0;
+                const isGrazingP = !NON_GRAZING_LAND_USES.has(p.landUse);
+                const dsePerHa = (isGrazingP && Number(p.ha) > 0) ? dse/Number(p.ha) : 0;
                 return (
                   <button key={p.id} onClick={() => { setPaddockDetail(p); setShowPaddockList(false); }}
                     className="w-full flex items-center gap-3 bg-white rounded-2xl px-4 py-3.5 border border-slate-100 shadow-sm text-left hover:bg-slate-50">
