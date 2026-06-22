@@ -504,9 +504,10 @@ function GooglePaddockMap({
         gestureHandling: "greedy",
         zoomControl: true,
       });
-      // Report centre changes so parent can track where user is looking
+      // Report centre changes via ref to avoid triggering re-renders
       if (onMapCentreChange) {
-        map.addListener("center_changed", () => {
+        let centreTimer = null;
+        map.addListener("dragend", () => {
           const c = map.getCenter();
           onMapCentreChange(c.lat(), c.lng());
         });
@@ -604,8 +605,11 @@ function GooglePaddockMap({
 
       // ── Landmarks (paddocks mode) ──
       // Render gates on BOTH modes; other landmarks only in paddocks mode
+      // Use a separate tracked array so cleanup doesn't interfere with other overlays
+      const landmarkMarkers = [];
       const renderAllLandmarks = (zoom) => {
-        overlays.filter(o => o._isLandmark).forEach(o => { o.setMap(null); });
+        landmarkMarkers.forEach(m => { try { m.setMap(null); } catch {} });
+        landmarkMarkers.length = 0;
         landmarks.forEach((l) => {
           if (l.lat == null || l.lng == null) return;
           const pos = { lat: Number(l.lat), lng: Number(l.lng) };
@@ -622,9 +626,8 @@ function GooglePaddockMap({
               icon: { path: g.SymbolPath.CIRCLE, scale: 0, fillOpacity: 0, strokeOpacity: 0 },
               zIndex: 20,
             });
-            m._isLandmark = true;
             m.addListener("click", () => onSelectLandmark?.(l));
-            overlays.push(m);
+            landmarkMarkers.push(m);
           } else if (mode === "paddocks") {
             if (zoom < 12) return;
             const m = new g.Marker({
@@ -633,14 +636,15 @@ function GooglePaddockMap({
               icon: { path: g.SymbolPath.CIRCLE, scale: zoom >= 14 ? 14 : 10, fillColor: LANDMARK_COLOUR_HEX[l.colour] || "#64748b", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
               zIndex: 10,
             });
-            m._isLandmark = true;
             m.addListener("click", () => onSelectLandmark?.(l));
-            overlays.push(m);
+            landmarkMarkers.push(m);
           }
         });
       };
       renderAllLandmarks(map.getZoom());
       map.addListener("zoom_changed", () => renderAllLandmarks(map.getZoom()));
+      // Add to overlays for final cleanup
+      overlays.push({ setMap: (m) => landmarkMarkers.forEach(lm => { try { lm.setMap(m); } catch {} }) });
 
       // ── Draggable landmark placement pin ──
       if (landmarkPinMode) {
