@@ -794,17 +794,26 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
 
+  const [apiWaking, setApiWaking] = useState(false);
+
+  // Ping the server health endpoint immediately on load to wake it up (Render free tier sleeps after 15min)
+  React.useEffect(() => {
+    fetch(`${VITE_API_URL.replace(/\/api$/, "")}/api/health`).catch(() => {});
+  }, []); // true when API is slow to respond
+
   // On first load, try to restore a session from a stored token (so people stay logged in
   // across visits without re-entering credentials every time).
   React.useEffect(() => {
     const token = getStoredToken();
     if (!token) { setAuthLoading(false); return; }
-    // Safety timeout — if the API doesn't respond in 5 seconds, clear loading anyway
-    // so the user sees the login screen rather than a blank page forever.
+    // Show "waking up" message after 2s if API is slow (Render free tier cold start)
+    const wakingTimer = setTimeout(() => setApiWaking(true), 2000);
+    // Hard timeout at 25s — enough for Render cold start, then fall through to login
     const timeout = setTimeout(() => {
       setAuthToken(null);
       setAuthLoading(false);
-    }, 5000);
+      setApiWaking(false);
+    }, 25000);
     setAuthToken(token);
     api.me()
       .then(({ account }) => {
@@ -820,9 +829,11 @@ export default function App() {
       })
       .finally(() => {
         clearTimeout(timeout);
+        clearTimeout(wakingTimer);
         setAuthLoading(false);
+        setApiWaking(false);
       });
-    return () => clearTimeout(timeout);
+    return () => { clearTimeout(timeout); clearTimeout(wakingTimer); };
   }, []);
 
   // --- Offline / sync ---
@@ -4043,8 +4054,18 @@ export default function App() {
 
   if (showSplash || authLoading) {
     return (
-      <div className="max-w-md mx-auto min-h-screen bg-red-950 flex flex-col items-center justify-center">
+      <div className="max-w-md mx-auto min-h-screen bg-red-950 flex flex-col items-center justify-center gap-6 px-8">
         <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-48 rounded-xl shadow-2xl" />
+        {apiWaking && (
+          <div className="text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <p className="text-white/60 text-sm font-medium">Server waking up — this takes about 15 seconds on first load…</p>
+          </div>
+        )}
       </div>
     );
   }
@@ -4111,10 +4132,13 @@ export default function App() {
           </button>
           {loginError && <p className="text-sm text-rose-500 font-medium mb-2">{loginError}</p>}
           <button
-            onClick={async () => {
+            onClick={async (e) => {
+              const btn = e.currentTarget;
               const email = loginEmail.trim().toLowerCase();
               if (!email || !loginPassword) { setLoginError("Please enter your email and password."); return; }
               setLoginError("");
+              btn.disabled = true;
+              btn.textContent = "Signing in…";
               try {
                 const { token, account } = await api.login(email, loginPassword);
                 setAuthToken(token);
@@ -4122,10 +4146,14 @@ export default function App() {
                 setLoggedInEmail(account.email);
                 setLoginPassword("");
               } catch (err) {
-                setLoginError(err.message || "Couldn't sign in. Please try again.");
+                btn.disabled = false;
+                btn.textContent = "Sign in";
+                setLoginError(err.message === "Couldn't reach the server — check your connection."
+                  ? "Server is starting up — wait 15 seconds and try again."
+                  : (err.message || "Couldn't sign in. Please try again."));
               }
             }}
-            className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold mt-2"
+            className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
           >
             Sign in
           </button>

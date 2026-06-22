@@ -25,12 +25,13 @@ app.use(cors({ origin: process.env.FRONTEND_ORIGIN || true }));
 app.use(express.json({ limit: "10mb" }));
 
 // ── Serve the workflow HTML file at /workflow.html ───────────────────────────
-// The workflow planner is a self-contained HTML file served statically.
-// The farm app embeds it in an iframe at /workflow.html.
-const workflowPath = path.resolve(__dirname, "../../workflow/workflow.html");
+const workflowPath = path.resolve(__dirname, "../workflow/workflow.html");
 app.get("/workflow.html", (req, res) => {
   res.sendFile(workflowPath, (err) => {
-    if (err) res.status(404).json({ error: "Workflow HTML not found — check server setup" });
+    if (err) {
+      console.error("workflow.html not found at:", workflowPath, err.message);
+      res.status(404).json({ error: "Workflow HTML not found", path: workflowPath });
+    }
   });
 });
 
