@@ -4186,9 +4186,9 @@ export default function App() {
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
       {tab === "mobactivity" && MobActivityScreen()}
-      {tab === "workflow" && WorkflowScreen()}
-      {tab === "cattle_feeding" && CattleFeedingScreen()}
-      {tab === "sheep_feeding" && SheepFeedingScreen()}
+      {tab === "workflow" && <WorkflowScreen />}
+      {tab === "cattle_feeding" && <CattleFeedingScreen />}
+      {tab === "sheep_feeding" && <SheepFeedingScreen />}
       <div className="md:hidden"><BottomNav /></div>
       {selectedMob && MobDetails()}
       {showMenu && MenuScreen()}
