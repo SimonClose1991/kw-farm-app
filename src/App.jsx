@@ -618,11 +618,12 @@ function GooglePaddockMap({
           if (isGate) {
             if (zoom < 13) return;
             const isOpen = openGateIds.includes(String(l.id));
-            const gateSymbol = isOpen ? "○" : "⊗";
+            const gateSymbol = isOpen ? "◯" : "⊗"; // same visual weight
             const gateColor = isOpen ? "#eab308" : "#dc2626";
+            const fontSize = zoom >= 15 ? "20px" : "14px"; // same size for both
             const m = new g.Marker({
               position: pos, map,
-              label: { text: gateSymbol, fontSize: zoom >= 15 ? "18px" : "13px", color: gateColor, fontWeight: "bold" },
+              label: { text: gateSymbol, fontSize, color: gateColor, fontWeight: "bold" },
               icon: { path: g.SymbolPath.CIRCLE, scale: 0, fillOpacity: 0, strokeOpacity: 0 },
               zIndex: 20,
             });
@@ -703,9 +704,11 @@ function GooglePaddockMap({
         overlays.push(dot);
       }
 
-      // Only fit bounds on initial load, not during draw mode
-      if ((paddocks.length || landmarks.length) && !drawMode) { try { map.fitBounds(bounds, 40); } catch {} }
-      mapInstanceRef.current = { map, overlays, polygons, labelMarkers };
+      const alreadyFitted = mapInstanceRef.current?.fittedBounds;
+      if (!alreadyFitted && (paddocks.length || landmarks.length) && !drawMode && !initialZoom) {
+        try { map.fitBounds(bounds, 40); } catch {}
+      }
+      mapInstanceRef.current = { map, overlays, polygons, labelMarkers, fittedBounds: alreadyFitted || (!drawMode && !initialZoom), landmarks, renderLandmarks: renderAllLandmarks };
     };
 
     if (window.google?.maps) {
@@ -730,7 +733,36 @@ function GooglePaddockMap({
         mapInstanceRef.current = null;
       }
     };
-  }, [paddocks, center, apiKey, mode, mobs, landmarks, drawMode, userLocation, openGateIds, landmarkPinMode]); // drawPoints intentionally omitted — handled by separate effect to prevent map rebuild
+  }, [paddocks, center, apiKey, mode, mobs, drawMode, userLocation, landmarkPinMode]); // landmarks, openGateIds, insightMode, drawPoints handled by separate effects
+
+  // Separate effect: update gate open/close without rebuilding map
+  // Just updates polygon stroke colour and gate marker symbols
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.polygons || !window.google?.maps) return;
+    // Update polygon strokes for open/closed gates
+    paddocks.forEach((p) => {
+      const poly = ref.polygons[p.name];
+      if (!poly) return;
+      const isGateOpen = (ref.landmarks || []).some(l =>
+        l.type === "Gate" && openGateIds.includes(String(l.id)) &&
+        (l.paddockA === p.name || l.paddockB === p.name)
+      );
+      poly.setOptions({
+        strokeColor: isGateOpen ? "#eab308" : "#ffffff",
+        strokeWeight: isGateOpen ? 3 : 2,
+      });
+    });
+  }, [openGateIds, paddocks]);
+
+  // Separate effect: re-render landmarks when they change (without full map rebuild)
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.map || !window.google?.maps) return;
+    ref.landmarks = landmarks; // keep ref updated for gate effect
+    // Re-render landmarks via the stored renderAllLandmarks approach
+    if (ref.renderLandmarks) ref.renderLandmarks(ref.map.getZoom());
+  }, [landmarks, openGateIds]);
 
   // Separate effect: update polygon fill colors when insight mode changes — no map rebuild
   React.useEffect(() => {
