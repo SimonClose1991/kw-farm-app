@@ -922,6 +922,185 @@ function InventoryForm({ values, onChange, fields = TREATMENT_FIELDS }) {
 }
 
 
+// ── Weather Widget ────────────────────────────────────────────────────────────
+// Uses Open-Meteo (free, no API key, BOM-quality data for Australia)
+// Fetches once on mount, caches for 30 min in sessionStorage
+function WeatherWidget({ farmName, farmCenters }) {
+  const [weather, setWeather] = React.useState(null);
+  const [expanded, setExpanded] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    const centre = farmCenters[farmName] || farmCenters["Arundale"];
+    if (!centre) return;
+    const [lat, lng] = centre;
+    const cacheKey = `kw_weather_${farmName}`;
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        const { data, ts } = JSON.parse(cached);
+        if (Date.now() - ts < 30 * 60 * 1000) { setWeather(data); setLoading(false); return; }
+      } catch {}
+    }
+    setLoading(true);
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,windspeed_10m_max,winddirection_10m_dominant,weathercode&hourly=windspeed_10m,windgusts_10m,precipitation_probability,relativehumidity_2m&timezone=Australia%2FSydney&forecast_days=7`)
+      .then(r => r.json())
+      .then(d => {
+        const data = processWeather(d);
+        setWeather(data);
+        setLoading(false);
+        try { sessionStorage.setItem(cacheKey, JSON.stringify({ data, ts: Date.now() })); } catch {}
+      })
+      .catch(() => setLoading(false));
+  }, [farmName]);
+
+  function processWeather(d) {
+    const daily = d.daily;
+    const hourly = d.hourly;
+    const days = daily.time.map((date, i) => {
+      const rain = daily.precipitation_sum[i] || 0;
+      const maxTemp = daily.temperature_2m_max[i];
+      const minTemp = daily.temperature_2m_min[i];
+      const windMax = daily.windspeed_10m_max[i];
+      const windDir = daily.winddirection_10m_dominant[i];
+      const rainProb = daily.precipitation_probability_max[i];
+      const wCode = daily.weathercode[i];
+      const frostRisk = minTemp <= 2 ? "HIGH" : minTemp <= 5 ? "MOD" : null;
+
+      // Spray window: hours today where wind < 15 km/h and no rain
+      const sprayHours = [];
+      if (i === 0 && hourly) {
+        hourly.time.forEach((t, hi) => {
+          if (!t.startsWith(date)) return;
+          const hour = parseInt(t.split("T")[1]);
+          const wind = hourly.windspeed_10m[hi];
+          const precip = hourly.precipitation_probability[hi];
+          const rh = hourly.relativehumidity_2m[hi];
+          if (wind < 15 && precip < 20 && rh < 90 && hour >= 7 && hour <= 18) {
+            sprayHours.push(hour);
+          }
+        });
+      }
+
+      let sprayWindow = null;
+      if (sprayHours.length > 0) {
+        const start = Math.min(...sprayHours);
+        const end = Math.max(...sprayHours) + 1;
+        sprayWindow = `${start}:00–${end}:00`;
+      }
+
+      const dirLabels = ["N","NE","E","SE","S","SW","W","NW"];
+      const windDirLabel = dirLabels[Math.round(windDir / 45) % 8] || "";
+
+      return { date, rain, maxTemp, minTemp, windMax, windDirLabel, rainProb, frostRisk, sprayWindow, wCode };
+    });
+    return days;
+  }
+
+  function weatherIcon(code) {
+    if (code === 0) return "☀️";
+    if (code <= 2) return "⛅";
+    if (code <= 3) return "☁️";
+    if (code <= 49) return "🌫️";
+    if (code <= 67) return "🌧️";
+    if (code <= 77) return "❄️";
+    if (code <= 82) return "🌦️";
+    if (code <= 99) return "⛈️";
+    return "🌤️";
+  }
+
+  function dayLabel(dateStr, i) {
+    if (i === 0) return "Today";
+    if (i === 1) return "Tomorrow";
+    return new Date(dateStr).toLocaleDateString("en-AU", { weekday: "short" });
+  }
+
+  if (loading) return (
+    <div className="bg-white border border-stone-200/80 rounded-2xl px-4 py-3 flex items-center gap-3 text-stone-400 text-sm">
+      <div className="w-4 h-4 border-2 border-stone-200 border-t-stone-400 rounded-full animate-spin flex-shrink-0" />
+      Loading weather for {farmName}…
+    </div>
+  );
+
+  if (!weather || weather.length === 0) return null;
+
+  const today = weather[0];
+
+  return (
+    <div className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden">
+      {/* Today strip — compact, always visible */}
+      <button onClick={() => setExpanded(e => !e)} className="w-full text-left px-4 py-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">{weatherIcon(today.wCode)}</span>
+            <span className="text-xs font-semibold text-stone-500 uppercase tracking-widest">{farmName} Weather</span>
+          </div>
+          <span className="text-xs text-stone-400">{expanded ? "▲ Less" : "7 days ▾"}</span>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-baseline gap-0.5">
+            <span className="text-xl font-bold text-stone-800">{Math.round(today.maxTemp)}°</span>
+            <span className="text-sm text-stone-400">/{Math.round(today.minTemp)}°</span>
+          </div>
+          {today.rain > 0 && (
+            <div className="flex items-center gap-1 text-sm text-blue-600 font-semibold">
+              💧{today.rain.toFixed(1)}mm
+            </div>
+          )}
+          {today.rain === 0 && today.rainProb > 20 && (
+            <div className="text-sm text-blue-400">{today.rainProb}% rain</div>
+          )}
+          <div className="text-sm text-stone-500">{today.windMax}km/h {today.windDirLabel}</div>
+          {today.frostRisk && (
+            <div className={`text-xs font-bold px-2 py-0.5 rounded-full ${today.frostRisk === "HIGH" ? "bg-blue-100 text-blue-700" : "bg-blue-50 text-blue-500"}`}>
+              ❄️ Frost {today.frostRisk}
+            </div>
+          )}
+          {today.sprayWindow && (
+            <div className="text-xs font-semibold bg-green-50 text-green-700 px-2 py-0.5 rounded-full">
+              🌿 Spray {today.sprayWindow}
+            </div>
+          )}
+          {!today.sprayWindow && today.rain === 0 && (
+            <div className="text-xs text-stone-300">No spray window</div>
+          )}
+        </div>
+      </button>
+
+      {/* 7-day forecast — expands on tap */}
+      {expanded && (
+        <div className="border-t border-stone-100">
+          {weather.map((day, i) => (
+            <div key={day.date} className={`flex items-center px-4 py-2.5 gap-3 ${i < weather.length - 1 ? "border-b border-stone-50" : ""} ${i === 0 ? "bg-stone-50/60" : ""}`}>
+              <div className="w-16 text-xs font-semibold text-stone-600 flex-shrink-0">{dayLabel(day.date, i)}</div>
+              <span className="text-base flex-shrink-0">{weatherIcon(day.wCode)}</span>
+              <div className="flex items-baseline gap-0.5 w-14 flex-shrink-0">
+                <span className="text-sm font-bold text-stone-700">{Math.round(day.maxTemp)}°</span>
+                <span className="text-xs text-stone-400">/{Math.round(day.minTemp)}°</span>
+              </div>
+              <div className="flex-1 flex items-center gap-2 flex-wrap">
+                {day.rain > 0 ? (
+                  <span className="text-xs text-blue-600 font-semibold">💧{day.rain.toFixed(1)}mm</span>
+                ) : day.rainProb > 20 ? (
+                  <span className="text-xs text-blue-400">{day.rainProb}%</span>
+                ) : (
+                  <span className="text-xs text-stone-300">No rain</span>
+                )}
+                <span className="text-xs text-stone-400">{day.windMax}km/h {day.windDirLabel}</span>
+                {day.frostRisk && <span className="text-xs text-blue-600 font-semibold">❄️ {day.frostRisk}</span>}
+                {i > 0 && day.sprayWindow && <span className="text-xs text-green-600 font-semibold">🌿 {day.sprayWindow}</span>}
+              </div>
+            </div>
+          ))}
+          <div className="px-4 py-2 text-center">
+            <span className="text-[10px] text-stone-300">Open-Meteo · BOM data · updates every 30 min</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit }) {
   const [step, setStep] = React.useState("paddock"); // "paddock" | "action"
   const [target, setTarget] = React.useState(null);
@@ -1023,7 +1202,7 @@ function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit }) {
   );
 }
 
-function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api }) {
+function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api, farmCenters }) {
   const [homeFarm, setHomeFarm] = React.useState(null);
   const [dashLoading, setDashLoading] = React.useState(false);
 
@@ -1196,6 +1375,9 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
     </div>
 
     <div className="px-4 pt-4 space-y-3">
+
+      {/* ── Weather ── */}
+      <WeatherWidget farmName={farmName} farmCenters={farmCenters} />
 
       {/* ── Workflow — clean card, amber accent ── */}
       <button
@@ -5107,7 +5289,7 @@ export default function App() {
         farmSummaries={farmSummaries} rainfall={rainfall} setShowRainfall={setShowRainfall}
         isOnline={isOnline} pendingChanges={pendingChanges} syncCount={syncCount}
         syncing={syncing} handleSync={handleSync} setShowPaddockList={setShowPaddockList}
-        paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api}
+        paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
       />}
       {tab === "map" && MapScreen()}
       {tab === "livestock" && LivestockScreen()}
