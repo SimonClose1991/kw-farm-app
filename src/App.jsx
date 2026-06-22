@@ -2493,27 +2493,33 @@ export default function App() {
   const WorkflowScreen = () => {
     const iframeRef = React.useRef(null);
 
-    React.useEffect(() => {
+    const sendCreds = React.useCallback(() => {
       const iframe = iframeRef.current;
       if (!iframe) return;
-      const sendCreds = () => {
-        try {
-          iframe.contentWindow?.postMessage({
-            type: "KW_INIT",
-            apiBase: API_BASE_URL,
-            token: getStoredToken() || "",
-            role: currentAccount?.role || "Worker",
-          }, "*");
-        } catch (e) { /* cross-origin guard */ }
-      };
+      try {
+        iframe.contentWindow?.postMessage({
+          type: "KW_INIT",
+          apiBase: API_BASE_URL,
+          token: getStoredToken() || "",
+          role: currentAccount?.role || "Worker",
+        }, "*");
+      } catch (e) { /* cross-origin */ }
+    }, []);
+
+    React.useEffect(() => {
+      // Listen for the iframe signalling it's ready
       const onMsg = (e) => { if (e.data?.type === "KW_WORKFLOW_READY") sendCreds(); };
       window.addEventListener("message", onMsg);
-      iframe.addEventListener("load", sendCreds);
+      // Also try sending after short delays as a fallback in case the ready
+      // event fired before our listener was attached
+      const t1 = setTimeout(sendCreds, 500);
+      const t2 = setTimeout(sendCreds, 1500);
+      const t3 = setTimeout(sendCreds, 3000);
       return () => {
         window.removeEventListener("message", onMsg);
-        iframe.removeEventListener("load", sendCreds);
+        clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
       };
-    }, []);
+    }, [sendCreds]);
 
     return (
       <div className="flex flex-col min-h-screen">
@@ -2527,6 +2533,7 @@ export default function App() {
           src={`${API_BASE_URL}/workflow.html`}
           title="Weekly Workflow Planner"
           className="flex-1 w-full border-0"
+          onLoad={sendCreds}
           style={{ height: "calc(100vh - 52px)", minHeight: 600 }}
         />
       </div>

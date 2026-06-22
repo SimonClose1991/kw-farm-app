@@ -2,9 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
     <title>Kurra-Wirra Farm Management</title>
-    <meta name="theme-color" content="##3b0a0a" />
+    <meta name="theme-color" content="#3b0a0a" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
@@ -14,15 +14,47 @@
       body {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
         overscroll-behavior-y: contain;
         -webkit-tap-highlight-color: transparent;
-        letter-spacing: -0.01em;
       }
+      #startup-error {
+        display: none;
+        position: fixed; inset: 0; background: #450a0a;
+        color: white; padding: 24px; font-family: system-ui, sans-serif;
+        z-index: 9999; overflow-y: auto;
+      }
+      #startup-error h2 { font-size: 18px; margin-bottom: 12px; }
+      #startup-error pre { font-size: 11px; background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-all; }
     </style>
   </head>
   <body>
+    <div id="startup-error">
+      <h2>⚠️ App failed to start</h2>
+      <p id="startup-error-msg" style="margin-bottom:12px; font-size:14px;"></p>
+      <pre id="startup-error-stack"></pre>
+      <button onclick="window.location.reload()" style="margin-top:16px; background:white; color:#450a0a; border:none; padding:12px 24px; border-radius:8px; font-weight:700; font-size:14px;">Reload</button>
+    </div>
     <div id="root"></div>
+    <script>
+      // Catch any uncaught errors before React loads and show them visibly on screen
+      // This is critical for mobile debugging where we can't open DevTools
+      window.addEventListener('error', function(e) {
+        var el = document.getElementById('startup-error');
+        if (el) {
+          el.style.display = 'block';
+          document.getElementById('startup-error-msg').textContent = e.message || 'Unknown error';
+          document.getElementById('startup-error-stack').textContent = (e.error && e.error.stack) || e.filename + ':' + e.lineno;
+        }
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var el = document.getElementById('startup-error');
+        if (el) {
+          el.style.display = 'block';
+          document.getElementById('startup-error-msg').textContent = 'Promise error: ' + (e.reason?.message || e.reason || 'Unknown');
+          document.getElementById('startup-error-stack').textContent = e.reason?.stack || '';
+        }
+      });
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
