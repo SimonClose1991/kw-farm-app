@@ -2,6 +2,10 @@ import React, { useState, useRef } from "react";
 import { Home, MapPin, Tag, Menu, ChevronRight, X, HelpCircle, Search, ArrowLeftRight, RefreshCw, Droplet, Settings, LifeBuoy, Sparkles, Check } from "lucide-react";
 import { api, setAuthToken, getStoredToken } from "./api.js";
 
+// Module-level API URL — available at build time via Vite's env injection
+const VITE_API_URL = (typeof import.meta !== "undefined" ? import.meta.env?.VITE_API_URL : null) || "http://localhost:3001/api";
+const API_BASE_URL = VITE_API_URL.replace(/\/api$/, ""); // e.g. https://kw-farm-api.onrender.com
+
 const LOGO_DATA_URI = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAkGBwgHBgkIBwgKCgkLDRYPDQwMDRsUFRAWIB0iIiAdHx8kKDQsJCYxJx8fLT0tMTU3Ojo6Iys/RD84QzQ5Ojf/2wBDAQoKCg0MDRoPDxo3JR8lNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzf/wAARCADKASwDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3GiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAopMisTV/Fej6ReR2l9eKk787eu0ep9KTaW40m9jcpksqQxtJK6oijLMxwAK848RfFW0s7jyNGgF4B9+ZjtX8PWuT8Z/EKbxDpcVhbwtbIxzcEN9/0H0qHUXQ0VGXU9r0/ULXUrf7RYzLNFuK716Eiqdh4i0+/1O606CRvtNsdrqwxk+1eD6Z411vSdKGnadcJDFnO4JlvzPSsq11rUbO/kv4LpxdSZLSnkknv9aXOyvYrU+nIry3mleKGeN5E++qsCV+tR3GpWdvdRWs9zGk8v3I2bk188eCvEx8P66t9cmSWNifMGSSSep/U10XxU1KObUNJ1iwl2SSwZC7vmTB7/AK0ObEqSv5HuGaMjNfNVr4612GeWWW9lnMibRvc/L7irFt46106taXrXLTvEBGsfZ/qO5p877B7LzPo6iucvPEcmk+Fv7Z1i0aKRVUvAhyRkgD+dZHhb4jWfiXXW021s5Y08suskhGTj2qudGfIzuqKM5oqiQooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACobm5htYXmuZFjiQZZ2OABU1cR8QfDS6xEJDq32Ur0jlkxG34VM20rouEVKVmzmtQ+KM8euStZp5unL8qowA3++eorzzVr6XU9RuL2f8A1kzliM5x6CtDxLp+madPFBpt+bxwv79gPlVvY96xGrC9zvUYpaIaelNNOPSmmmJjKYafTDTM2MNI5J6knjHJqR0IAYcqe9RupU7SOaCWmMKkjIBp8QeJ45Y3KujBl9iKu6dai5uYbeSVYVYgNI3RRXaal4BtJrKCTQ9Q82fkTxychcd8gcVMppbj5DkNX8RatrBxf3juNoXYpIUjOQCO+K7Dwn8NdfkVdQ+3HTHaDfAyctk9A3p60+TxZoul6tZG30u2u0toRHNceUNzkf3c/wA61L/4vOLeNrGyTzWk+ZHPCoB0z6k/yoi00TKMlseoaHbXFnpNpbXkxmuI4gsshOdzdzV+vGPDXjLWfFPj/TwHNvaKCWt0OV2gck+ua9mU5FbxdznlFrcWiiiqJCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACqOt3UtlpVzc26B5Y42ZVPQkCl1XUItMsJbucZSJSxwcV5/4w+IC2ptxp2yeKeFi0TY+U8Y3fjn64qJySVjSnTcmJovxWtfsJOso32jd8ohTt79uPWoPE+reFtV8y6v5JReG2/dozBgmfQDq1eUtyc+p7VG1Yu8t2dShGLujas9L+06NPfhzvV1SGJRkyEnH+P5VRvrO5sZvJvIJIZcBtrjBwe9dd8M77SdMW9vr5Q9zAhkiVm4GOuB0zjoa5fxfrK69rtxqEayJHJgKkhyVAFJFOo+xRNMIJOBSRSAgIQc4qeCCa4mWG3jaSVj8qIMk1Q9GiuyletM2knCgknoBU79wRgjgj0ra8FafPceILCcW8r2y3AVpFXIBx0zRchowI5QAEYDHrV6206e9tJLq3VZFi5ZQfnA9celepaz8LraZtXktEAkmHmWpyQEfuv0P9a517S18EajpLCdHmER/tCDfuIbGeR79KUroITT0OJktZ4ollkglSNx8rshAP4103gTxa3h66SGYRrZuxaZ9hZsYHA/Kr2teJtW8eNBoWkactvblxlV5OB03HsBU3jfwZpPhnT7KUTzSXMg2tHuGHYDk+oGaAvfTucV4ivodT1q8vbaEQQzSlkjA6Csw1alj3H5cCmiMBSDzmqQOLH6Rq17ol8t7p03lTqpUNjPBr1Lwp8SreOy0XSn82a+llEdzK4wq5J6evUV5L5YA55qEM8EqyRkq6MGVh2I6UehlJaan1yKWvL/AAt8U7L+xV/t5il5HkEKpy4GMH8a7Lwr4qsPE9vNNp+8eS211cYIrRTTMHBo3qKKKskKKrfb7T/n5i/77FH2+0/5+Yv++xU88e5XLLsWaKrfbrT/AJ+Yv++xR9vtP+fmL/vsUc8e4csuxZoqt9vtP+fmL/vsUfb7T/n5h/77FHPHuHLLsWaKq/2haf8APzD/AN9ij+0LT/n5h/77FHPHuHLLsWqKq/2haf8APzD/AN9ij+0LT/n5h/77FL2kO6Dll2LVFVf7Rs/+fqH/AL7FH9o2f/P1D/32KPaw7oOSXYtUVV/tGz/5+of++xVHUPEuk6c8a3V5GpkPy4ORR7WHdAoSfQ181RuNZ022n8ie9gSb/nmXGfyrh9V+KFqsF2dOhDvGdsLOSRIc8nHYY5zXk+q6lcanqU1/cECaU5OzgDjHFS6l/hNo0H9o9J+KHi+Ge3Oj6eRIJADNKDwB6D3ryuVggzipo7mFLKWJ7YPcMwKzlzlR3GO9UpGLHJ6VGrd2dCtCNkKZRt6fNUayDGGPNNNMamZuTLdjEl5di3a4jgL8I8mdpPoT2r1Pwz8LkOn/AGvUZ4ppZlV4VUHCDrz6145kqQynBByD6V6x4F+JBtLF49acG2gXZEqLl2Y9Me3X6cUml12J5pNe7uHjDwO9raHVQJHmlucyIuMRxk46Dv0Na3hPwa8OtS6hHAsdqbVfs53ZG8qM+/WuA8SeNta1aa6QXk0VnJLlIwcEL2HFTeFvHWo+H7SSOMtM0rjcZTuAUenvS5dfIpyk426nox+FmlHSTFIXbUNpJuAxGWPt6VV8Havp3hW3bSNZRbe9WXG5U++AOG/+v7+1Zl18XpDbO9raKsoUKiSc5PdiR268e4rltX8Zaj4j1fTpI7aOC4jOwmI4aXJGQT26U33iSk3pM7zVfiXI1tff2ZZurxECF5I2IYd2PoK8q1K9m1G+mvLogzTNucgYGa98srnT9d8PPb3DpC8kfkzqcBlbGD/jXJXfw20GHT53i1OaS4VCUy64zj0qXJbt3LhKK0SscR4Q8WXHhieRoYUlSXG8N2HtVHWdTuNW1Ca6uZ5JQzsYw5zsUnIArKbjrQjHeMtgfWnY0VkyRqYakdWXG5WXIyNwxketRmgciNqZna6vgEqwIBGRV2TTrpdOTUDEfsruUDg9CPUVSZW27tp2k4BxxmmmmZtBdTyXVxJPM2ZJGLMcY5rS8L3+q22rW0GjvKZJZl/cxnHmEdvyzWj8OdLstW8Uww6koa1jRpHVjhTjoD7ZNez2fh3wrZajHqFpBZxXMZyjIwGDRdbXMm2Ytt4p8U2s2ozan4euGtlO6BYyCVwOnHWuy0PUH1PSLW9khaB5owzROMFT6VOl5auwRbiJmY4ADg5qwAMcCtIetzGT8rHn1FFFeIe2FBopKlsYU00ppKykwEpKU0lZNjQhpKUmkNZNjENJRR1rGUgDFI0EcjIZI0cpnaWUHH0p6ipAKcbrVCbIZbWKa3lhZFCyIVbCjuMVzLeBbcQPi8mMuDtO0AZ9xXXhaeFrro1qlPRMzkk9zxBxgkHqKY1d/feB/N1kPbkLYv8AO4Lcqc8ge1X38Dae+pRTIuy1RBuiyTvbPU57V7P1unZHK6cjy5gR1BGeeajau8+IWkzTanZLp9pJI3kEERJngHj+dcIyOXKBTuBwRjkVvTqKcVIxnFp2IWqzbqqKCT8x7V2kGjaPdeGLcXM8Nrek5hkbgscA8+oyaYPBEkmkNLHN/wATBckQ7gVkA5+U1Pt49SlTa1OUCrIyq7BVJGWxnHvTZY0ikdIpfNQH5X2kZ/A11Gm+FoE0KfUdZnktyv3IuARz3zVe/wDDc1xqaR6NbubWSJXWR2yoyOct9aPaxuPkdrnNGlhmktpkmhOHQ5BrT17Qb3Q5UW7CMr52yRtlSR1H1rIbpWiakrozaaOw0fxitpBNcXjyS30smCmPlK8AH2x/nrXoVvcxTWS3JdQmzc7dhxzXhLVuaLe6jewpokDsIZpPmYZPy+h9hzXHiMJGfvLQ1p1mnZm7aaRZa94glfTUkXTI8NKx4y3ov1rYbw5ps/iFgtuEgtYUJiUfK7Enr+AFdJpWmQaTYx2tuPlUZZu7HuTVPRJDefar7yWjSeX92W6sqjAOOw4rknXk7uL0SsdCiupy/i2wvNQ1OD7JYTDEJAOBggH9OvTrWLo/h+81V22jyYlz+9kU4JHYe9eovJGsixtIoduik8n8KaEVQdgAB7DpUrHThT5UvQp003qZWkWBttGgsruNGIQrIn3lOSaU6PYnS203yv8ARjkhc8qSc5B9a0mFMNec69Tmbvu7mqirWM/RNHttGtjDb5dmYlpGA3N6D6CtKmilFN1JTlzSeo0klZFzSv8AkJWv/XVf513o6VwWlH/iZWv/AF1X+dd6Ole5lf8ADl6nmY7416Hn1FFFcp6IGkNFIazkxiGkpaSsWwENJS0hrGTKENJRSVlJgFKozQBUiioSuJsVRxUiikUd6kUVtGJDYAVIFoVakVa2jEhsQLTwKUDNPVa2USGynqN7b6bbG5ujtjBC5A7niuRudf0iw1GVrW0Cgozl/Lx5jEfrz36daXxf4ovLS/axtoEjSPB3ypuL+4z2rh767nvrh7i6laSVurGu+hQ0uwbsP1PUJdRkR5ljQIuxEiXaqj2FR22oXdnJ5lvO6tjaDnOBVdj2pp6V28qtYybCSWR1AeR2HozE1atda1CxtGtrScxRsckqOfz7d/zqk1Manyp7md2joLnXLS68JDTZVka7jkV1du56Hn6fzrnobea6k8q2heWTGdqKScUQy+ROsnlRy7edkgyp+ortvBE0d5rb/ZAtg8sS5WNQRkZyRnpn0qH+7TsgS53qcNPaXMMwhngkikbosilSfzr1TQIbDwlp1rDesq3V2peST6dvoM074gWTRaZaXsmJpLa4UtJsAOz0/Osfxtq9jfafY+XDvmaMFZg3QdCMVzyk6yS6GkIKDbLHifxmojhi0OYF2JMjlPujsOaa3jiCDR41ij3323G3bhE+vrXCqP4j1NNer+q07JWG5vckm1C8kvHvHuJDcNnMgPPNbvh7xlJpsX2e+R5ogeHByw/xrmXqB61nShUjyyWhjzyi7o9Pn8baUpxH5sg2g7lXjPpV5PEGlSTJEt3GZGxgA9z2ryK3J3MO1THqK5JZbRa0uaxxMtz2fcoP3h0z1p1eM/bLoMSLmbJxk7zzjpXbaL41t5PItr9DG+3DTE/KW/pXDWy2dNXg7m8MTGTs9DvNJ/5Cdr/11X+dd8Oled6FcwXGo2pgmSQeavKtmvRB0ruytNU5J9zjxrvNeh59QelB4GTXDeLPEBuZfsmnzsIF4kdDjefTPpWMKbm7I9Bux2dvcwXIY28yShW2sUOcGpDXk1rd3FnIZLWZ4mIwShxmpX1nU9277fcZ/wB81pLBtvRk+00PU6SuL0fxn5cXlasruw+7NGoyR7iujtdc0u7UGG9hyf4WbafyNcVWhUhuiozi+pfNIab5sZ5EiY9dwqGW+tIsmW6gT/ekArlcZPoXdExo71mT+IdHgUmTUbfjsr7j+lZE/jzSomIhiuZvcKFH6miOFrz2iyJVYR3Z1qipVFcOPiJaKw/4l8+PXetdXomq2us2S3dmxKE7WVhgqfQ1pPCVaSvNWREa0Ju0WaKipFFNUVKopRQ2xyingZoAqRRit4ozbBRUgWhRUiitoxM2zmtd8IQa1qC3c1w8eEClFA5wc/1qhc/Du1mvxMlwY7ckFoVXHGOgP1rt1WpAuK6IyktmS5mLP4Z0q4tWgltI2LJsMhA34+teeeMfBs2k+beWSL/Z6KucyZYHv1r18LXPePbe7vNBeysLVria4YLgEDaOuT+VaQcoslSueHclsKCSegHeur17wndRWunyadp0oEyEyncWIbsCO3FReEbFovEq2d9p7yTK4GGJHlkdTx9RXtxWtpzd9BbLU+ariCW3lMU8TxyDqrqQR+FWdBvZLbXrWaMkfvAuB6dv1xXY/EzSbi31b+0biaJ47o7Io1U5QAdz3rz7e9tcB4m2vG2Vb0NaJ80SZLl1PffE1ul34fvkkGAYGbnsQMivGdH02XVtQhsoGCvKfvHoK7aw1XXH8F6jc60nlxGHy7csMM+7AB/WoPhbpbSXc+pOuI418tD6k9f6VzQvTjI1WqRy8uj3ov7qyt4WnktSQ5jHGB3rLevfJvslksk0nkwK3LucLu+p714rrBhk1O7kt9hiaZihUYBGeMVdKq5vVFNXRlhNzZI4oSwuLln+zxPIFGTsUnH1xVuCHz2ZQwUgZGe/IH9a9N0rwpa6cZpYZpt08Pl4zgLkcmqq11TWpKpp6HkEUTI5LfSraxqADjnFW9Q0u4067aKdCUDEJJjiQA4yKrt1rVSuroUYWRXeNfSq7xmrb1C9NGckjc+G6XMnjHT4ba4aAmTc2BkMBzgivpcdK8O+F+spPqNnp86A3Eb/ACS4H3ARxmvb+e1Ki3KUk1YxqpK1meW+I7O6vtLkhspCkmclRxvH93Ned32nXmnsovLd49wyCeQfxr1OK5t5f9VPE/0cU54w64kQMp7MMivNhXdPSx67imeP0167/wAU6DFc2hubOJUuIhkqgxvXv+NcA9dtKqqiujGUWiFutQvUzdahetjnkRMTiq7gelWG6VA9NGMhgp46U0U4dKszYHpXa/Cq8KajeWRb5ZYxIo/2lOD+h/SuKPStrwPM1t4p0+TkI8hiJ7fMp4rLEQ56UkOlLlqJntSipVHFMWpBXz8Uem2PUVKopijipVFbxRk2OUcVIopFFSqK6IozbFAqQLQoqVVraMTNsaFpwWuf1/xTHpF4LWO38+QDL/NgLnoKboHi1NTvRaXFuIHfOxg2QfY1Scb2H7Oduaxux2cEU7zxwqssn3nA5NTFakorXlRlzM4X4n6JNqOlxXVsGZ7QligHVT1rhfDPhiy8UXC7pTbSQ7fNRVyJFHU/U5H5Gvb7lQbeQYz8p4/CvFfA+of2b4n/AHhCRuzCTPAAGc/kM/lS1SN4PmjY2PinfJbwWOi2xAVBvdR2A4UfzrpvA+ny6f4bto549kr5cj615pJKmseMzKX3xzXeVLHqoPH4cV7aUCqFHQDArKorRSG9Dn/FOgxa7ZrG8jRyRZaMr3OOhrx9bS4klkhjiZpYwxZQORt6174wqmbG1V3dYI1d87mCjJyMGs4VXTVi4y0seUeGYIJdI1iaa3V5IIhIjEZK49K7W9n1PUdMMGn2sts8oVBcSkLtU9WAznp0pYo7dLe8sLUxlPtCQDHZeOPfAzW8R2rKtUu72LSPNfEXhe8tTG1nJPeW0aBApO5kIHP4GuZ1KwvbRId8DqZU8xTjOF7k+n413sieIp9TvG0OWCPT5Jflln5+bGGKjuM5rU0rREskme8ma9urgATTSj7w/ugdl9q0+s+yj7zuLl5tEeQBXHLvn2xxTHr1b/hEtGUTAWxzKCMlidn+76VyH/CFah9kuJpWVHjDGOEfM0mOnTpmtoYylLrYzlRktjlYp5baZJreRo5UOVZTyDXs3hHx/q2oaMjNpyytE3lNIufnIA5/WvN7fwXrlysRjtU3SMAI2kAb8q+jNLsILCwht4LaKJVQZWNQBnHNdEHGp8DOap7nxI8PqaK5nh/1U0if7rGoqK4D1TQi1q9j+86yD0dRXH6tCIL2RVGEb50A9Dz/APW/Cugqnqtobq3V4hmaIH5R1ZevHuK0otRkRNXRzbdahep3BBwRgimQwS3MoigQu56AV2HJIrN0qB62G0PUCP8AUr/38X/GqV3pt7bbfOt3G9tq453H0GKFKL6mcoyXQpCnDpXRaP4YEsqNq85t4upjQbnPsfT9a6LWvD+gpoF1Jp8SG4hj3IyyEuceoPX8qzliYRko73BUJuNzzs9K6TSIUg8MRakSA0GrxNn0GAP61zbdKGubgWElort9mLiVkA43AYB/Wt5xclZGEZJO59Drg9OlSrWfohdtIsTLnebePdn12itBetfP2s7Hpt6XJVqVRUa1Kvat4ozkMubqGzhMs7YXoMdSfSseXxVtJ8m0z6F3/wAKm8UIzWMbDosnP4iuUeiU5KVkaU6cZRuzoU8YyKDvslP+6+P6VUvvGN9IALSOO3x1P3yfzrCeoHq4zk+pfsYdhLueW6uHnncvI5yzHvVrQtMk1a/W2ilETBS+8gnGKoP1r0DwBY26aa16nzTysUYn+EA9B/OtYLmdhVZckLo6W0ieC2iiklMrooUyN1Y+tS0UV1rQ84K8S+I+lHSfEkssCeXBdr5iEdMnhh/n1r22uC+MMaHQbSQqN63OFPoCDmjqXTdmeVafOLa+gmY4VHBOPTvXoup/EmJ4mg0ezmmumGEd14z67eprzI1618NdChsdIGpShWubkZDEfcXsBU1Et2as5uzk8easxeN54k/vSKI1/AEZq9LovjfULY293qMMEeOcPy31IFd/cX1rF/rLiMH03c1nza3ZL9xnkP8Asr/jXLKsltYqMW9keUTprngy9ijkKFZGMiAfMsh6fXNdvp/iHUry1tz/AGHdmSXhpDhVHvzVu+v7W8lglksVkeBt8TSH7p9aR9Vun6FU/wB1axqYiElqtTWNKSNSGBYII4YxhUUKAKZIyL951X6msd55pPvyu31NNFcMpXNlA0nnhBxvLf7oqNrhD91CfqaqLTl61hJlcppaTKW1O1AVQPNXoPeu9ya8/wBH/wCQpaf9dV/nXoFe3lGtOXqedjfjXoeDUVm/27p3/Pc/98Gj+3dO/wCe5/74NV7OXY7PaQ7mlRWb/bunf89z/wB8Gj+3NP8A+ex/74NHJLsHtIdynrUDvqu2NSWnClQP4iRj+YNHh2M/bJ3I+5EQfYkj/wCvUj6vZNq9jcCXMUQ+Ztp4OT/iKZpmqWUAu/MkKmSbcvyk5Xn/ABrd83JaxhePPe5u0oYr0OKzf7b0/wD57H/vg0f23p//AD2P/fBrDkl2N/aQ7mjQM5GOvas7+2rD/nsf++DSPrlmkbvFIWkVSUXaeW7Uezl2B1I9ypZ2sd74kvLiVA9vBKSR2Y5wB+hP4Uzw2g07xPdW1xEk8flSKY3HyuvBGfw5qTR9Qs7XT1SaUiZ3Z5flJ5J4/QfrUf261HiM3ok/ctb7C20/e24xj8K6byfMuljj5Y2i+tz0i28TWxwJoJI/dcMK1bXV9PnxsuowfR/lP615l/bNh/z2P/fBo/tix/57H/vk1w/V+yOpuHc9fiZXGUYMPUHNTLXj0WvW0JzDdSRn1XcK0bfxzNBjF8XHpJHn+lNUpLoQ0nsz0rVFVtMuQylhsJwOtcMykgkA4HBPpToPiTEvFxFHIO+0MuabZ+MPDq2dxbzxz/vmzuCZ2+mPpSnRm3ew4SUFZl2Tw9qmcLalh2ZWGDVK70e/tnhSe3KNM2yMEj5jWxafEfQ4LOJJZZ5JVUK22I8471m6p8QNMvLy0uEikzasWRXzgk+vFWqNl1Eq0m9SS28NXB11NPuAGVVV5mjb7qn616JZ2kFjbrBaxCONegH868rl8fBr976J44p3jEZIRj8o+tQT+Npp/wDWanNg9lUj+QrSN49CZxdS12evvLHGMySKo9WOKo3Gu6Xb533kRI7Kdx/SvIZNetJDmW5kc/7QY0i61Yf89W/74NDqVOkRKhDrI9On8Yaen+qjmlPsMD9a4r4h66dX0iJBB5Sxzgj5sk8Gsga5p/8Az2P/AHwapa3qdpd6eIoJCz+aGwVI4wf8aUJVXJX2NPZ04q6OfNdxoN7JcaXCnmNhF27d3Axx0/X8a4itfQNSisPMSfdtY5BAyB6/0rXEQc4aE03aWp2Ap47VkjX9O/57N/3wacPEGm/89m/74NeY6VTsdXNHua4py1kDxBpv/PZv+/Zpw8Q6Z/z3b/v2azdGp/Kw5l3NgU4VkDxFpn/Pdv8Av2acPEWmf892/wC/ZqHQq/ysfMu5sLTl61jjxHpY/wCW7f8Aftv8KcPEml/892/79t/hWbw9X+VhzI6TR/8AkKWn/XVf516Ca8r0DX9NuNasYYpmMkk6qo2EZOa9VxmvZyqEoQlzK2p5uNa516HyC33m+tIKU/eb60gruMBe1KKTtThQMUUtIKWgBaKKKBi0o60lKOtAx1LSUtBSLdlpd9fwXM9nbPNFapvnZeka88n8jUVna3F7cR21nC808hwkca5Jr0L4RWX9o6f4ksQ/l/aLdIt+M7c7hnFVtb1mDwaZtD8NWcttdAbbnUblMTSf7noPf/8AXQTfocZqWnXml3JttQgME4GTGxGR9cdKqit/wRBFqXjHTor9BcxzTHzVl+bf8pPPrS+PrS3sfF+o21nCkMEbqEjQYC/KDxQUt7GAKXtXeeJtKsLb4baDfQWkUd3O6iWZVwz/ACt1P4Cun8TadHpUOnDRPB9lqImjzMfs5bacDHI6ZyaA5jx0daWu/wDiHo2k2Wiadex2UemarOR51jG+QBg547YOPzrXsdNt7b4faZqOn+HbXU9QkwHV4C5IJbJ457ClYObQ8ppRXpmu6PpsvgmfVNV0aHQ9TRiII422mU8Y+X35/LNcR4X0SbxBrVvp8OQrndK/9xB1P+e5oKUrq5l0V6L488PaVPpP9reGUjEVhIbW7SIf3Tjd9Qep7g5rz+2gmup0gt42lmkO1EQZLH0AoGndBBDJcTRwwrukkYKq56k9BV5tE1OPU10ySylW+blYGwGPGeKLzQtXsIDcXmnXdvEpGZJIyoB7c12jzSeMPC0Wp2rEeINEwXK/elQchvrxn6g+tAN2OJi0fUZtTbTIrOZr5SQ0AX5hjrT7XRNTvL2eytbKWW5gz5saYOzBwc/jXq9xfmPwnL4wt9PZNXuLJY3YD7ozjfj07/TFczcyN4O8FCHcRrWtDfKxPzRxn+uD+ZPpRYSm2efspVip6g4NArudQ0uwj+FdjqCWkS3rzANOF+Yjcwxn8BXQ6jp0Wn+HNHuNJ8L2mozzxJ5+YCxHyA549TSsVznk1LXoPjLSNMi8KW2pTadFpOryOB9kjf7wzz8v05q34b062X4erqVvodtqOoiRgFki3lxvx254FFh+0VrnmlKK9MudJsL3wpf32uaFBod1CD9naMlDIcZHy+54xXAaLpk+sanb2FqP3kzYz2UdyfoKCozTTZTFFekeLvDOlS6NLJ4eVTcaO3lXaqOZBgEk+pHXP19K83pWsVCSkjZ8G/8AI2aR/wBfcf8AOvoqvnXwb/yNmkf9fcf86+iq1p7HLifiR8gN95vrSCu0/wCFWeMP+gbH/wCBMf8AjR/wqzxh/wBA2P8A8CU/xpWZldHGdqUV2f8Awq3xf/0DY/8AwJT/ABpR8LfF/wD0DY//AAIT/GizHdHGilrsv+FXeL/+gbH/AOBMf+NJ/wAKv8X/APQNT/wIj/xoswujj6K7H/hV/i7/AKBqf+BEf+NL/wAKv8Xf9A1P/AiP/GizHzI46lHWux/4Vh4u/wCgan/gRH/jR/wrDxd/0DU/8CE/xosx8yOQpa6//hWPi7/oGp/4ER/40v8AwrHxb/0DU/8AAhP8aVmPmXcXwJrdjpOkeIory58me6tdlvgHLNhuhHTkiprDxPp+vWKaX40ViyLi31SNcyxezeo/z71B/wAKx8W/9A5P/AhP8aX/AIVl4t/6Byf+BCf407MV49zL0q8t/Dfiq1vIZ0v7e2l3CSIFd6kYPB6HB6V0viO38LeJNXl1eLxMtmbgKZYJ7ZiykADjH0rO/wCFZeLf+gcn/gQn+NL/AMKy8Wf9A1P/AAIT/GlZjvHuT+NfEWlXOgaZ4f0V5bi3sSC1zIu3cQCOB+JrS8ceNUeXRZvDepyb7ZD5ypuVc/LgMDwRwaxv+FZ+LP8AoHJ/4EJ/jS/8Kz8Wf9A1P/AhP8aLMLx7lnxTqWgeKdMTVfOWw11F2zQMrFZ8ehA/L8jVm98UWsfw403TtO1GSLU4XXesRZWUZbPP4is4fDTxZ/0Dk/8AAhP8aP8AhWniz/oHJ/4EJ/jRZjvHuX59f0nxboAt/EdwLPWLQYt7zYSso9GAH5/mPSpPC2v6N4T8NXE8Esd5rVywDQgMAqZ4G7HTGTx3IrM/4Vp4r/6Byf8AgQn+NL/wrXxX/wBA5P8AwIT/ABoswvHa5reFPG+k2txLY3Oj29jp94CLh45HfJwcZBz16VxupeRYazK2i3rSQRybredMqwHb0OR0rd/4Vr4r/wCgcn/f9P8AGj/hWviv/oHJ/wB/0/xosxpxXUwLrV9TvITDd6hdTREglJJmYHHsTVrwprkvh/WYb6PLR52TR/30PUf1/Ctb/hWviv8A6B6f9/0/xpR8NvFX/QOT/wACE/xpWZXNC25rp8Qh/wAJg07g/wBhsn2byNvAjHR9vrnt6cVyHibWZte1q4v5shXO2JP7iDoK2f8AhW3ir/oHJ/4EJ/jR/wAK38Vf9A9P+/6f407MadNapli+1vTpfhnZ6RHcg38cwZotp4G5j16dxVzxP4thPh/QotD1KRLu1VfOEe5cYQDB7EZFZf8AwrfxV/0Dk/7/AKf40f8ACuPFX/QOX/v+n+NKzC8O5d1vVtF8WaOl3fTLYa9Au0/KxScD6A4/p9KfaeI7O1+Gp0y3vnh1QSllSPcrAeZn7w9veqH/AArjxT/0Dl/7/p/jR/wrnxT/ANA5f+/6f40WfYLwta5ftvEOm+JNBOmeKpzDd24za320sT/vY7+vr9aPCGraP4W0y+vjcR3ervlIYlVsbQeOcd+p9gKo/wDCufFP/QOX/v8Ap/jS/wDCuvFP/QOX/v8Ap/jRZjvTta5peHPG9hZaoxk0eC0gu2xdTJK7k5zyQc55Nct4ji06LV5/7GuBPZOd8ZAI25/h59K1/wDhXXin/oHL/wB/0/xpf+FdeKP+gcv/AH/T/GlZji6ad0zN8G/8jZpH/X3H/OvoqvGfDfgXxFY+INOu7mxVIYbhHkbzkOADzwDXsw5rSCaRz4iSlJWY7FFFFaHOFFFFABRRRQAUUUUAFFFFABRRRQAUmKWigAooooAKKKKACjFFFABRRRQAUUUUAFFFFABRRRQAmKWiigAooooAKKKKACiiigAxRRRQB//Z";
 
 const FARM_DATE = "Thursday 11th June 2026";
@@ -795,16 +799,30 @@ export default function App() {
   React.useEffect(() => {
     const token = getStoredToken();
     if (!token) { setAuthLoading(false); return; }
+    // Safety timeout — if the API doesn't respond in 5 seconds, clear loading anyway
+    // so the user sees the login screen rather than a blank page forever.
+    const timeout = setTimeout(() => {
+      setAuthToken(null);
+      setAuthLoading(false);
+    }, 5000);
     setAuthToken(token);
     api.me()
       .then(({ account }) => {
-        setCurrentAccount(account);
-        setLoggedInEmail(account.email);
+        if (account) {
+          setCurrentAccount(account);
+          setLoggedInEmail(account.email);
+        } else {
+          setAuthToken(null);
+        }
       })
       .catch(() => {
-        setAuthToken(null); // stored token was invalid/expired
+        setAuthToken(null); // stored token was invalid/expired — force re-login
       })
-      .finally(() => setAuthLoading(false));
+      .finally(() => {
+        clearTimeout(timeout);
+        setAuthLoading(false);
+      });
+    return () => clearTimeout(timeout);
   }, []);
 
   // --- Offline / sync ---
@@ -1193,7 +1211,7 @@ export default function App() {
   );
 
   const BottomNav = () => (
-    <div className="bg-white/90 backdrop-blur-md border-t border-slate-100 flex justify-around items-center py-2 fixed bottom-0 left-0 right-0 max-w-md mx-auto">
+    <div className="bg-white/95 backdrop-blur-xl border-t border-slate-100/80 flex justify-around items-center py-2 fixed bottom-0 left-0 right-0 max-w-md mx-auto shadow-[0_-1px_20px_rgba(0,0,0,0.06)]">
       {[
         { id: "home", icon: Home, label: "Home" },
         { id: "map", icon: MapPin, label: "Map" },
@@ -1504,7 +1522,7 @@ export default function App() {
         <div className="bg-slate-50 min-h-[78vh] p-4">
           <div className="bg-gradient-to-br from-red-950 to-red-900 rounded-2xl p-4 mb-3 text-white">
             <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Total Area</div>
-            <div className="text-3xl font-extrabold">{paddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} ha</div>
+            <div className="text-3xl font-bold tracking-tight">{paddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} ha</div>
             <div className="text-xs opacity-80 mt-1">{paddocks.length} paddocks · {totalDSE.toLocaleString(undefined,{maximumFractionDigits:1})} total DSE</div>
           </div>
 
@@ -2551,20 +2569,19 @@ export default function App() {
   // Passes the JWT token to the iframe via postMessage so it can call our API
   const WorkflowScreen = () => {
     const iframeRef = React.useRef(null);
-    const apiUrl = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) || "http://localhost:3001/api";
-    const apiBase = apiUrl.replace(/\/api$/, "");
 
     React.useEffect(() => {
       const iframe = iframeRef.current;
       if (!iframe) return;
       const sendCreds = () => {
-        iframe.contentWindow?.postMessage({
-          type: "KW_INIT",
-          apiBase,
-          token: getStoredToken() || "",
-        }, "*");
+        try {
+          iframe.contentWindow?.postMessage({
+            type: "KW_INIT",
+            apiBase: API_BASE_URL,
+            token: getStoredToken() || "",
+          }, "*");
+        } catch (e) { /* cross-origin guard */ }
       };
-      // Listen for the iframe saying it's ready
       const onMsg = (e) => { if (e.data?.type === "KW_WORKFLOW_READY") sendCreds(); };
       window.addEventListener("message", onMsg);
       iframe.addEventListener("load", sendCreds);
@@ -2572,18 +2589,18 @@ export default function App() {
         window.removeEventListener("message", onMsg);
         iframe.removeEventListener("load", sendCreds);
       };
-    }, [apiBase]);
+    }, []);
 
     return (
       <div className="flex flex-col min-h-screen">
-        <div className="bg-amber-500 text-white px-5 py-3 flex items-center justify-between flex-shrink-0">
-          <button onClick={() => setTab("home")} className="text-white/80 text-sm flex items-center gap-1">← Home</button>
-          <span className="font-bold">📋 Weekly Workflow</span>
+        <div className="bg-amber-600 text-white px-5 py-3 flex items-center justify-between flex-shrink-0">
+          <button onClick={() => setTab("home")} className="text-white/80 text-sm flex items-center gap-1 font-medium">← Home</button>
+          <span className="font-semibold tracking-tight">Weekly Workflow</span>
           <div className="w-16" />
         </div>
         <iframe
           ref={iframeRef}
-          src={`${apiBase}/workflow.html`}
+          src={`${API_BASE_URL}/workflow.html`}
           title="Weekly Workflow Planner"
           className="flex-1 w-full border-0"
           style={{ height: "calc(100vh - 52px)", minHeight: 600 }}
@@ -2846,7 +2863,7 @@ export default function App() {
         <div className="bg-red-950 text-white px-5 pt-6 pb-8">
           <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
           <div className="text-3xl mb-1">🐄</div>
-          <div className="text-2xl font-extrabold">Cattle Feeding System</div>
+          <div className="text-2xl font-bold tracking-tight">Cattle Feeding System</div>
           <div className="text-white/70 text-sm mt-1">Mixer wagon loads & recipes</div>
         </div>
         <div className="px-4 -mt-4 space-y-3">
@@ -2927,7 +2944,7 @@ export default function App() {
         <div className="bg-slate-800 text-white px-5 pt-6 pb-8">
           <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
           <div className="text-3xl mb-1">🐑</div>
-          <div className="text-2xl font-extrabold">Sheep Feeding System</div>
+          <div className="text-2xl font-bold tracking-tight">Sheep Feeding System</div>
           <div className="text-white/70 text-sm mt-1">Pen feed runs & grain rosters</div>
         </div>
         <div className="flex gap-1 px-4 -mt-4 mb-3 overflow-x-auto">
@@ -4003,7 +4020,7 @@ export default function App() {
 
   if (showSplash || authLoading) {
     return (
-      <div className="max-w-md mx-auto min-h-screen font-sans bg-red-950 flex flex-col items-center justify-center">
+      <div className="max-w-md mx-auto min-h-screen bg-red-950 flex flex-col items-center justify-center">
         <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-48 rounded-xl shadow-2xl" />
       </div>
     );
@@ -4158,7 +4175,7 @@ export default function App() {
         <Modal title="Livestock Summary" onClose={() => setShowMobSummaryDetail(false)}>
           <div className="bg-gradient-to-br from-red-950 to-red-900 rounded-2xl p-4 mb-3 text-white">
             <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Total DSE</div>
-            <div className="text-3xl font-extrabold">{totalDSE.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
+            <div className="text-3xl font-bold tracking-tight">{totalDSE.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
           </div>
           {mobs.map((m) => (
             <div key={m.id} className="flex justify-between border-b border-slate-100 py-2 text-sm">
@@ -4186,7 +4203,7 @@ export default function App() {
           <Modal title="All Farms" onClose={() => setShowAllFarms(false)}>
             <div className="bg-gradient-to-br from-red-950 to-red-900 rounded-2xl p-4 mb-3 text-white">
               <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Combined Total DSE</div>
-              <div className="text-3xl font-extrabold">{grand.dse.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
+              <div className="text-3xl font-bold tracking-tight">{grand.dse.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
               <div className="flex gap-4 mt-3 text-sm font-semibold">
                 <span>🐄 {grand.cattle.toLocaleString()} cattle</span>
                 <span>🐑 {grand.sheep.toLocaleString()} sheep</span>

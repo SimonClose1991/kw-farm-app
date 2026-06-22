@@ -9,5 +9,35 @@ html, body, #root {
 }
 
 body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: contain;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11"; /* Inter optical features */
+}
+
+/* Tighter tracking for headings - feels more premium */
+h1, h2, h3, h4 {
+  letter-spacing: -0.025em;
+}
+
+/* Refined number rendering */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Smooth page transitions */
+* {
+  box-sizing: border-box;
+}
+
+/* Better focus rings */
+button:focus-visible {
+  outline: 2px solid #7f1d1d;
+  outline-offset: 2px;
+}
+
+/* Remove iOS input styling */
+input, textarea, select {
+  -webkit-appearance: none;
 }
