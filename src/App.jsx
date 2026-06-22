@@ -842,6 +842,10 @@ export default function App() {
 
   const [tab, setTab] = useState("home");
   const [showMenu, setShowMenu] = useState(false);
+  const [showPaddockList, setShowPaddockList] = useState(false); // paddock list in menu
+  const [dragMobId, setDragMobId] = useState(null); // mob being dragged
+  const [dragOverPaddock, setDragOverPaddock] = useState(null); // paddock being dragged over
+  const [showInsightPicker, setShowInsightPicker] = useState(false); // insight overlay picker on map
   const [farmsMobs, setFarmsMobs] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const [farmName, setFarmName] = useState("Arundale");
   const [farmsPaddocks, setFarmsPaddocks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
@@ -1409,10 +1413,24 @@ export default function App() {
     return { l: String(m.count), t, left, mob: m };
   });
 
+  const INSIGHT_OPTIONS = [
+    { id: "usage",    label: "Paddock Usage",      icon: "🏷️" },
+    { id: "crop",     label: "Crop / Pasture Type", icon: "🌿" },
+    { id: "stocking", label: "Stocking Rate",       icon: "📊" },
+    { id: "feed",     label: "Feed on Offer",       icon: "🌾" },
+    { id: "grazed",   label: "Days Since Grazed",   icon: "📅" },
+    { id: "outline",  label: "Outline Only",        icon: "⬜" },
+  ];
+
   const MapScreen = () => (
     <div className="pb-24 relative">
       <div className="bg-white/90 backdrop-blur-md flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-slate-100">
-        <button onClick={() => setShowSettings(true)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"><Settings size={16} /></button>
+        <button
+          onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowSettings(true)}
+          className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
+        >
+          <Settings size={16} />
+        </button>
         <div className="flex-1 flex bg-slate-100 rounded-full p-1">
           {["Livestock", "Paddocks"].map((m) => (
             <button
@@ -1500,14 +1518,12 @@ export default function App() {
       )}
 
       {mapMode === "Paddocks" && (() => {
-        // Guard: dataLoading means paddocks may not be fetched yet
         if (dataLoading) return (
-          <div className="flex items-center justify-center h-48 text-slate-400 text-sm">Loading paddocks...</div>
+          <div className="h-[78vh] flex items-center justify-center text-slate-400 text-sm">Loading paddocks...</div>
         );
         if (dataError) return (
-          <div className="flex items-center justify-center h-48 text-rose-500 text-sm p-4 text-center">{dataError}</div>
+          <div className="h-[78vh] flex items-center justify-center text-rose-500 text-sm p-4 text-center">{dataError}</div>
         );
-        // Compute per-paddock stats used by insight overlays
         const paddockStats = {};
         paddocks.forEach((p) => {
           const paddockMobs = mobs.filter((m) => m.paddock === p.name);
@@ -1519,238 +1535,134 @@ export default function App() {
         });
 
         return (
-        <div className="bg-slate-50 min-h-[78vh] p-4">
-          <div className="bg-gradient-to-br from-red-950 to-red-900 rounded-2xl p-4 mb-3 text-white">
-            <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Total Area</div>
-            <div className="text-3xl font-bold tracking-tight">{paddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} ha</div>
-            <div className="text-xs opacity-80 mt-1">{paddocks.length} paddocks · {totalDSE.toLocaleString(undefined,{maximumFractionDigits:1})} total DSE</div>
-          </div>
+          <div className="h-[78vh] relative">
+            {googleMapsKey && !mapLoadError ? (
+              <GooglePaddockMap
+                paddocks={paddocks}
+                center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
+                onSelect={setPaddockDetail}
+                apiKey={googleMapsKey}
+                onError={() => setMapLoadError(true)}
+                landmarks={landmarks}
+                onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
+                insightMode={insightMode}
+                paddockStats={paddockStats}
+                drawMode={mapDrawMode}
+                drawPoints={drawPoints}
+                onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
+                userLocation={userLocation}
+                openGateIds={openGates}
+              />
+            ) : (
+              <PaddockMap
+                paddocks={paddocks}
+                center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
+                onSelect={setPaddockDetail}
+                landmarks={landmarks}
+                onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
+                insightMode={insightMode}
+                paddockStats={paddockStats}
+                drawMode={mapDrawMode}
+                drawPoints={drawPoints}
+                onDrawPoint={(lat, lng, x, y) => setDrawPoints((prev) => [...prev, { lat, lng, x, y }])}
+                userLocation={userLocation}
+                openGateIds={openGates}
+              />
+            )}
 
-          <div className="mb-3 -mx-1 overflow-x-auto">
-            <div className="flex gap-1.5 px-1 w-max">
-              {INSIGHT_MODES.map((m) => (
-                <button
-                  key={m.key}
-                  onClick={() => setInsightMode(m.key)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${insightMode === m.key ? "bg-red-900 text-white" : "bg-white text-slate-500 border border-slate-200"}`}
-                >
-                  {m.label}
+            {/* Floating action buttons */}
+            {!mapDrawMode && (
+              <div className="absolute right-3 bottom-3 flex flex-col gap-2 z-10">
+                <button onClick={locateMe} disabled={locating} className="bg-white w-11 h-11 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 text-lg border border-slate-100">
+                  {locating ? "…" : "◎"}
                 </button>
-              ))}
-            </div>
-          </div>
-
-          {paddocks.length > 0 || landmarks.length > 0 ? (
-            <div className="rounded-2xl overflow-hidden shadow-sm border border-slate-200 mb-3 relative" style={{ height: "65vh" }}>
-              {googleMapsKey && !mapLoadError ? (
-                <GooglePaddockMap
-                  paddocks={paddocks}
-                  center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-                  onSelect={setPaddockDetail}
-                  apiKey={googleMapsKey}
-                  onError={() => setMapLoadError(true)}
-                  landmarks={landmarks}
-                  onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
-                  insightMode={insightMode}
-                  paddockStats={paddockStats}
-                  drawMode={mapDrawMode}
-                  drawPoints={drawPoints}
-                  onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
-                  userLocation={userLocation}
-                  openGateIds={openGates}
-                />
-              ) : (
-                <PaddockMap
-                  paddocks={paddocks}
-                  center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-                  onSelect={setPaddockDetail}
-                  landmarks={landmarks}
-                  onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
-                  insightMode={insightMode}
-                  paddockStats={paddockStats}
-                  drawMode={mapDrawMode}
-                  drawPoints={drawPoints}
-                  onDrawPoint={(lat, lng, x, y) => setDrawPoints((prev) => [...prev, { lat, lng, x, y }])}
-                  userLocation={userLocation}
-                  openGateIds={openGates}
-                />
-              )}
-              {/* Floating action buttons over the paddock map */}
-              {!mapDrawMode && (
-                <div className="absolute right-3 bottom-3 flex flex-col gap-2 z-10">
-                  <button onClick={locateMe} disabled={locating} className="bg-white w-11 h-11 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 text-lg">
-                    {locating ? "…" : "◎"}
+                {canEdit && (
+                  <button
+                    onClick={() => setShowPaddockAddMenu((v) => !v)}
+                    className="bg-red-900 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-2xl font-bold"
+                  >
+                    +
                   </button>
-                  {canEdit && (
-                    <button
-                      onClick={() => setShowPaddockAddMenu((v) => !v)}
-                      className="bg-red-900 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-2xl font-bold"
-                    >
-                      +
-                    </button>
-                  )}
-                </div>
-              )}
-              {showPaddockAddMenu && !mapDrawMode && (
-                <div className="absolute right-16 bottom-3 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-20 w-48">
-                  {[
-                    { label: "Add Paddock", action: () => { setNewPaddockForm({ landUse: "Grazing", pasture: "Native grass", colour: "Sky Blue" }); setShowAddPaddock(true); setShowPaddockAddMenu(false); } },
-                    { label: "✏️ Draw Paddock", action: () => { setDrawPoints([]); setMapDrawMode(true); setShowPaddockAddMenu(false); } },
-                    { label: "⬆ Import GeoJSON", action: () => { fileInputRef.current?.click(); setShowPaddockAddMenu(false); } },
-                    { label: "📍 Add Landmark", action: () => { setLandmarkCategoryPick(null); setNewLandmarkForm({}); setLandmarkPinPos(null); setShowAddLandmark(true); setShowPaddockAddMenu(false); } },
-                  ].map(({ label, action }) => (
-                    <button key={label} onClick={action} className="w-full text-left px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50 border-b border-slate-100 last:border-0">
-                      {label}
-                    </button>
-                  ))}
-                  <button onClick={() => setShowPaddockAddMenu(false)} className="w-full text-center px-4 py-2 text-xs text-slate-400">Cancel</button>
-                </div>
-              )}
-              {!googleMapsKey && isAdmin && !mapDrawMode && (
-                <button onClick={() => setShowSettings(true)} className="absolute top-2 left-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full">
-                  Maps key status
-                </button>
-              )}
-              {mapLoadError && (
-                <div className="absolute top-2 left-2 right-2 bg-black/70 text-white text-xs font-medium px-3 py-2 rounded-xl">
-                  Google Maps failed to load — showing offline map. Check your API key in Settings.
-                </div>
-              )}
-              {mapDrawMode && (
-                <div className="absolute top-2 left-2 right-2 bg-green-700/90 text-white text-xs font-medium px-3 py-2 rounded-xl">
-                  ✏️ Drawing mode — tap the map to drop points around the paddock boundary. Add at least 3 points, then tap Save below.
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="rounded-2xl border-2 border-dashed border-slate-300 p-6 text-center text-slate-400 text-sm mb-3">
-              No paddocks mapped yet — import a GeoJSON export from AgriWebb, draw one on the map, or add one manually below.
-            </div>
-          )}
-
-          {mapDrawMode ? (
-            <div className="flex gap-2 mb-3">
-              <button onClick={() => setDrawPoints((prev) => prev.slice(0, -1))} disabled={drawPoints.length === 0} className="flex-1 border border-slate-300 text-slate-500 rounded-2xl py-3 font-bold text-sm disabled:opacity-40">Undo Point</button>
-              <button
-                onClick={() => { setMapDrawMode(false); setDrawPoints([]); }}
-                className="flex-1 border border-rose-300 text-rose-500 rounded-2xl py-3 font-bold text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (drawPoints.length < 3) { showToast("Add at least 3 points to form a paddock"); return; }
-                  const geojson = { type: "Polygon", coordinates: [[...drawPoints.map((p) => [p.lng, p.lat]), [drawPoints[0].lng, drawPoints[0].lat]]] };
-                  const ha = Math.round(ringAreaHa(geojson.coordinates[0]) * 10) / 10;
+                )}
+              </div>
+            )}
+            {showPaddockAddMenu && !mapDrawMode && (
+              <div className="absolute right-16 bottom-3 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-20 w-52">
+                {[
+                  { label: "➕ Add Paddock", action: () => { setNewPaddockForm({ landUse: "Grazing", pasture: "Native grass", colour: "Sky Blue" }); setShowAddPaddock(true); setShowPaddockAddMenu(false); } },
+                  { label: "✏️ Draw Paddock", action: () => { setDrawPoints([]); setMapDrawMode(true); setShowPaddockAddMenu(false); } },
+                  { label: "⬆ Import GeoJSON", action: () => { fileInputRef.current?.click(); setShowPaddockAddMenu(false); } },
+                  { label: "📍 Add Landmark", action: () => { setLandmarkCategoryPick(null); setNewLandmarkForm({}); setLandmarkPinPos(null); setShowAddLandmark(true); setShowPaddockAddMenu(false); } },
+                ].map(({ label, action }) => (
+                  <button key={label} onClick={action} className="w-full text-left px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50 border-b border-slate-100 last:border-0">
+                    {label}
+                  </button>
+                ))}
+                <button onClick={() => setShowPaddockAddMenu(false)} className="w-full text-center px-4 py-2 text-xs text-slate-400">Cancel</button>
+              </div>
+            )}
+            {!googleMapsKey && isAdmin && !mapDrawMode && (
+              <div className="absolute top-2 left-2 bg-black/60 text-white text-xs font-medium px-3 py-1.5 rounded-full">
+                No Maps key — <button onClick={() => setShowSettings(true)} className="underline">Settings</button>
+              </div>
+            )}
+            {mapLoadError && (
+              <div className="absolute top-2 left-2 right-2 bg-black/70 text-white text-xs font-medium px-3 py-2 rounded-xl">
+                Google Maps failed to load — showing offline map.
+              </div>
+            )}
+            {mapDrawMode && (
+              <div className="absolute top-2 left-2 right-2 bg-green-700/90 text-white text-xs font-medium px-3 py-2 rounded-xl">
+                ✏️ Drawing mode — tap to drop boundary points. At least 3 points, then Save below.
+              </div>
+            )}
+            {mapDrawMode && drawPoints.length >= 3 && (
+              <div className="absolute bottom-16 left-4 right-4 flex gap-2 z-10">
+                <button onClick={() => { setDrawPoints([]); setMapDrawMode(false); }} className="flex-1 bg-white text-slate-600 rounded-2xl py-3 font-bold text-sm border border-slate-200">Cancel</button>
+                <button onClick={() => {
+                  const center = FARM_CENTERS[farmName] || FARM_CENTERS.Arundale;
+                  const latlngs = drawPoints.map(p => [p.lat, p.lng]);
+                  const ha = ringAreaHa(latlngs);
+                  const geojson = { type: "Polygon", coordinates: [[...latlngs.map(([lat,lng])=>[lng,lat]), [latlngs[0][1],latlngs[0][0]]]] };
                   setNewPaddockForm({ landUse: "Grazing", pasture: "Native grass", colour: PADDOCK_COLOURS[paddocks.length % PADDOCK_COLOURS.length], ha: String(ha), geojson });
                   setMapDrawMode(false);
                   setDrawPoints([]);
                   setShowAddPaddock(true);
-                }}
-                className="flex-1 bg-green-600 text-white rounded-2xl py-3 font-bold text-sm"
-              >
-                Save Shape
-              </button>
-            </div>
-          ) : (
-            <>
-              {paddocks.length > 0 && (
-                <p className="text-xs text-slate-400 text-center mb-3">Tap a paddock or landmark on the map (or in the list below) for details and editing. Pinch to zoom, drag to pan.</p>
-              )}
-
-              {canEdit && (
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  <button onClick={() => { setNewPaddockForm({ landUse: "Grazing", pasture: "Native grass", colour: "Sky Blue" }); setShowAddPaddock(true); }} className="bg-red-900 text-white rounded-2xl py-3 font-bold text-sm">+ Add Paddock</button>
-                  <button onClick={() => { setDrawPoints([]); setMapDrawMode(true); }} className="bg-green-700 text-white rounded-2xl py-3 font-bold text-sm">✏️ Draw Paddock</button>
-                  <button onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-amber-500 text-red-950 rounded-2xl py-3 font-bold text-sm">⬆ Import GeoJSON</button>
-                  <button onClick={() => { setLandmarkCategoryPick(null); setNewLandmarkForm({}); setShowAddLandmark(true); }} className="bg-amber-500 text-white rounded-2xl py-3 font-bold text-sm">📍 Add Landmark</button>
-                  <input ref={fileInputRef} type="file" accept=".json,.geojson,application/geo+json,application/json" className="hidden" onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    reader.onload = async (ev) => {
-                      try {
-                        const data = JSON.parse(ev.target.result);
-                        const imported = geojsonToPaddocks(data);
-                        if (imported.length === 0) { showToast("No paddock features found"); return; }
-                        showToast(`Saving ${imported.length} paddock${imported.length > 1 ? "s" : ""}...`);
-                        const created = [];
-                        for (const p of imported) {
-                          const { id, ...fields } = p;
-                          try {
-                            const saved = await api.createPaddock(farmName, fields);
-                            created.push(saved);
-                          } catch (err) {
-                            console.error("Failed to save imported paddock:", p.name, err);
-                          }
-                        }
-                        if (created.length === 0) {
-                          showToast("Couldn't save imported paddocks to the server");
-                          return;
-                        }
-                        setPaddocks((prev) => [...prev, ...created]);
-                        markChanged();
-                        showToast(`Imported & mapped ${created.length} paddock${created.length > 1 ? "s" : ""}`);
-                      } catch (err) {
-                        showToast("Couldn't read that file — expected GeoJSON");
-                      }
-                    };
-                    reader.readAsText(file);
-                    e.target.value = "";
-                  }} />
-                </div>
-              )}
-            </>
-          )}
-
-          <div className="space-y-3">
-            {paddocks.length === 0 && landmarks.length === 0 && <p className="text-center text-slate-400 text-sm py-6">No paddocks yet. Add one, draw one on the map, or import a GeoJSON map exported from AgriWebb.</p>}
-            {paddocks.map((p) => {
-              const stats = paddockStats[p.name] || {};
-              const latestFoo = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
-              const headCount = mobs.filter((m) => m.paddock === p.name).reduce((s, m) => s + m.count, 0);
-              return (
-                <div key={p.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                  <button onClick={() => setPaddockDetail(p)} className="w-full text-left p-4">
-                    <div className="flex justify-between items-start mb-1">
-                      <div className="flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#999" }} />
-                        <span className="font-bold text-slate-800">{p.name}</span>
-                      </div>
-                      <span className="text-sm font-bold text-slate-700">{Number(p.ha||0).toFixed(1)} ha</span>
-                    </div>
-                    <div className="text-xs text-slate-400">{p.landUse} · {p.pasture}</div>
-                    <div className="flex gap-4 mt-2 text-xs font-semibold flex-wrap">
-                      <span className="text-slate-600">{headCount.toLocaleString()} hd</span>
-                      <span className="text-red-950">{stats.dsePerHa?.toFixed(1) || "0.0"} DSE/ha</span>
-                      {latestFoo && <span className="text-green-700">🌾 {latestFoo.kgDm} kg DM/ha</span>}
-                    </div>
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          {landmarks.length > 0 && (
-            <div className="mt-4">
-              <div className="text-sm font-bold text-slate-700 mb-2">Landmarks</div>
-              <div className="grid grid-cols-2 gap-2">
-                {landmarks.map((l) => {
-                  const cat = Object.values(LANDMARK_CATEGORIES).flat().find((c) => c.type === l.type);
-                  return (
-                    <button key={l.id} onClick={() => { setLandmarkDetail(l); setLandmarkEditMode(false); }} className="bg-white rounded-2xl p-3 shadow-sm border border-slate-100 text-left flex items-center gap-2">
-                      <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm" style={{ backgroundColor: LANDMARK_COLOUR_HEX[l.colour] || "#64748b" }}>{cat?.icon || "📍"}</span>
-                      <div className="min-w-0">
-                        <div className="font-bold text-slate-800 text-sm truncate">{l.name || l.type}</div>
-                        <div className="text-xs text-slate-400 truncate">{l.type}</div>
-                      </div>
-                    </button>
-                  );
-                })}
+                }} className="flex-1 bg-green-600 text-white rounded-2xl py-3 font-bold text-sm">Save Shape</button>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+            <input ref={fileInputRef} type="file" accept=".json,.geojson,application/geo+json,application/json" className="hidden" onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = async (ev) => {
+                try {
+                  const data = JSON.parse(ev.target.result);
+                  const imported = geojsonToPaddocks(data);
+                  if (imported.length === 0) { showToast("No paddock features found"); return; }
+                  showToast(`Saving ${imported.length} paddock${imported.length > 1 ? "s" : ""}...`);
+                  const created = [];
+                  for (const p of imported) {
+                    const { id, ...fields } = p;
+                    try {
+                      const saved = await api.createPaddock(farmName, fields);
+                      created.push(saved);
+                    } catch (err) {
+                      console.error("Failed to save imported paddock:", p.name, err);
+                    }
+                  }
+                  if (created.length === 0) { showToast("Couldn't save imported paddocks to the server"); return; }
+                  setPaddocks((prev) => [...prev, ...created]);
+                  markChanged();
+                  showToast(`Imported & mapped ${created.length} paddock${created.length > 1 ? "s" : ""}`);
+                } catch (err) {
+                  showToast("Couldn't read that file — expected GeoJSON");
+                }
+              };
+              reader.readAsText(file);
+              e.target.value = "";
+            }} />
+          </div>
         );
       })()}
 
@@ -3178,15 +3090,33 @@ export default function App() {
   })();
 
   const MobCard = (m) => (
-    <button key={m.id} onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); }} className="w-full flex items-center justify-between px-4 py-4 bg-white rounded-2xl shadow-sm border border-slate-100 text-left active:scale-[0.99] transition-transform">
-      <div>
-        <div className="font-bold text-slate-800">{m.name}</div>
-        <div className="text-xs text-slate-400 mt-0.5">{m.desc}</div>
-        <div className="text-xs text-red-950 font-semibold mt-1">{m.paddock} paddock · {m.dse} DSE/hd</div>
-        {m.whp > 0 && <div className="text-xs text-rose-500 font-semibold mt-0.5">WHP {m.whp}d</div>}
+    <div
+      key={m.id}
+      draggable
+      onDragStart={(e) => {
+        setDragMobId(m.id);
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(m.id));
+      }}
+      onDragEnd={() => { setDragMobId(null); setDragOverPaddock(null); }}
+      className={`w-full flex items-center justify-between px-4 py-4 bg-white rounded-2xl shadow-sm border border-slate-100 text-left cursor-grab active:cursor-grabbing transition-all ${dragMobId === m.id ? "opacity-40 scale-95" : ""}`}
+    >
+      <button onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); }} className="flex-1 text-left min-w-0">
+        <div className="flex items-center gap-2">
+          <div className="font-semibold text-slate-800 truncate">{m.name}</div>
+          {m.tag && m.tag !== "Unassigned" && (
+            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: TAG_COLOUR_HEX[m.tag] || "#cbd5e1" }} />
+          )}
+        </div>
+        <div className="text-xs text-slate-400 mt-0.5 truncate">{m.desc}</div>
+        <div className="text-xs text-red-950 font-medium mt-1">{m.paddock} · {m.dse} DSE/hd</div>
+        {m.whp > 0 && <div className="text-xs text-rose-500 font-medium mt-0.5">WHP {m.whp}d</div>}
+      </button>
+      <div className="flex items-center gap-3 ml-2 flex-shrink-0">
+        <div className="text-xl font-bold text-slate-700">{m.count}</div>
+        <div className="text-slate-300 cursor-grab" title="Drag to move paddock">⠿</div>
       </div>
-      <div className="text-xl font-extrabold text-slate-700">{m.count}</div>
-    </button>
+    </div>
   );
 
   const MobListScreen = () => (
@@ -3230,7 +3160,29 @@ export default function App() {
         {groupedMobs.map((g, gi) => (
           <div key={gi}>
             {g.key && (
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 px-1">{g.key} ({g.items.reduce((s, m) => s + m.count, 0)})</div>
+              <div
+                onDragOver={(e) => { if (dragMobId) { e.preventDefault(); setDragOverPaddock(g.key); } }}
+                onDragLeave={() => setDragOverPaddock(null)}
+                onDrop={async (e) => {
+                  e.preventDefault();
+                  const mobId = Number(e.dataTransfer.getData("text/plain"));
+                  const mob = mobs.find(m => m.id === mobId);
+                  const targetPaddock = g.key;
+                  if (!mob || mob.paddock === targetPaddock) { setDragMobId(null); setDragOverPaddock(null); return; }
+                  const dateStr = todayStr();
+                  const detail = `Moved from ${mob.paddock} to ${targetPaddock}`;
+                  setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: targetPaddock, daysInPaddock: 0 } : m));
+                  setDragMobId(null); setDragOverPaddock(null);
+                  showToast(`${mob.name} → ${targetPaddock}`);
+                  try {
+                    await api.updateMob(mobId, { paddock: targetPaddock, daysInPaddock: 0 });
+                    await api.addMobHistory(mobId, { action: "Move", detail, date: dateStr });
+                  } catch (err) { showToast(err.message || "Couldn't save move"); }
+                }}
+                className={`text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 px-1 py-2 rounded-xl transition-colors ${dragOverPaddock === g.key ? "bg-amber-100 text-amber-700 border-2 border-dashed border-amber-400" : ""} ${dragMobId ? "cursor-copy" : ""}`}
+              >
+                {dragMobId ? `📍 Drop here → ${g.key}` : `${g.key} (${g.items.reduce((s, m) => s + m.count, 0)})`}
+              </div>
             )}
             <div className="space-y-3">
               {g.items.map(MobCard)}
@@ -3549,9 +3501,17 @@ export default function App() {
             </span>
             <ChevronRight size={16} className="text-slate-300" />
           </button>
-          <button onClick={() => setShowRainfall(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => { setShowRainfall(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-sky-500"><Droplet size={16} /></div>
             <span className="font-semibold text-slate-700">Rainfall records</span>
+          </button>
+          <button onClick={() => { setShowPaddockList(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+            <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center text-green-600">▦</div>
+            <div className="text-left">
+              <div className="font-semibold text-slate-700">Paddock list</div>
+              <div className="text-xs text-slate-400">{farmName} · {paddocks.length} paddocks</div>
+            </div>
+            <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
           <div className="h-px bg-slate-100 my-2" />
           <button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
@@ -3734,6 +3694,69 @@ export default function App() {
           </Modal>
         );
       })()}
+
+      {/* ── Insight overlay picker (gear icon on Paddocks map) ── */}
+      {showInsightPicker && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-50 max-w-md mx-auto" onClick={() => setShowInsightPicker(false)}>
+          <div className="bg-white rounded-t-3xl w-full shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
+            <div className="text-center font-semibold text-slate-800 py-3 border-b border-slate-100 text-base tracking-tight">Map Overlay</div>
+            <div className="p-3 space-y-1 pb-8">
+              {INSIGHT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => { setInsightMode(opt.id); setShowInsightPicker(false); }}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-left transition-colors ${insightMode === opt.id ? "bg-red-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100"}`}
+                >
+                  <span className="text-lg">{opt.icon}</span>
+                  <span className="font-medium text-sm">{opt.label}</span>
+                  {insightMode === opt.id && <span className="ml-auto text-xs opacity-70">Active</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Paddock List modal (accessible from Menu) ── */}
+      {showPaddockList && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 max-w-md mx-auto flex flex-col">
+          <div className="bg-white flex-1 overflow-y-auto mt-16 rounded-t-3xl">
+            <div className="sticky top-0 bg-white border-b border-slate-100 px-5 py-4 flex items-center gap-3">
+              <button onClick={() => setShowPaddockList(false)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+                <X size={16} />
+              </button>
+              <h2 className="font-semibold text-slate-800 tracking-tight flex-1">{farmName} Paddocks</h2>
+              <div className="text-xs text-slate-400 font-medium">{paddocks.length} total · {paddocks.reduce((s,p)=>s+Number(p.ha||0),0).toFixed(0)} ha</div>
+            </div>
+            <div className="p-4 space-y-2">
+              {paddocks.length === 0 && (
+                <div className="text-center text-slate-400 text-sm py-8">No paddocks yet. Import GeoJSON or draw paddocks on the map.</div>
+              )}
+              {[...paddocks].sort((a,b)=>a.name.localeCompare(b.name)).map((p) => {
+                const paddockMobs = mobs.filter(m => m.paddock === p.name);
+                const dse = paddockMobs.reduce((s,m)=>s+m.count*(Number(m.dse)||0),0);
+                const dsePerHa = Number(p.ha) > 0 ? dse/Number(p.ha) : 0;
+                return (
+                  <button key={p.id} onClick={() => { setPaddockDetail(p); setShowPaddockList(false); }}
+                    className="w-full flex items-center gap-3 bg-white rounded-2xl px-4 py-3.5 border border-slate-100 shadow-sm text-left hover:bg-slate-50">
+                    <div className="w-3 h-10 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-slate-800">{p.name}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{p.landUse || "Grazing"} · {p.pasture || ""}</div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="font-semibold text-slate-700 text-sm">{Number(p.ha||0).toFixed(1)} ha</div>
+                      {dsePerHa > 0 && <div className="text-xs text-slate-400">{dsePerHa.toFixed(1)} DSE/ha</div>}
+                      {paddockMobs.length > 0 && <div className="text-xs text-amber-600 font-medium">{paddockMobs.length} mob{paddockMobs.length!==1?"s":""}</div>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showRainfall && (() => {
         const sortedRainfall = [...rainfall].sort((a, b) => (a.date < b.date ? 1 : -1));
