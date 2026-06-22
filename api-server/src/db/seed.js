@@ -11,6 +11,7 @@ const FARM_CENTERS = {
   Hamilton: [-37.745, 142.02],
   "Kurra-Wirra": [-36.95, 141.85],
   Mooralla: [-37.36, 141.65],
+  Carramar: [-37.10, 141.75],
 };
 
 async function seed() {

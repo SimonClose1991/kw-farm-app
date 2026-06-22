@@ -93,6 +93,8 @@ export const landmarks = pgTable("landmarks", {
   type: text("type").notNull(),
   name: text("name"),
   paddock: text("paddock"),
+  paddockA: text("paddock_a"),  // for Gate: first connected paddock
+  paddockB: text("paddock_b"),  // for Gate: second connected paddock
   colour: text("colour"),
   notes: text("notes"),
   lat: numeric("lat"),
@@ -165,4 +167,104 @@ export const customBreeds = pgTable("custom_breeds", {
   id: serial("id").primaryKey(),
   species: text("species").notNull(),
   breed: text("breed").notNull(),
+});
+
+// ── Workflow planner ─────────────────────────────────────────────────────────
+// Stores the full workflow state as a single JSON blob (tasks + published snapshot + prefs).
+// Simple and matches the existing workflow.html save/load pattern exactly.
+export const workflowState = pgTable("workflow_state", {
+  id: text("id").primaryKey().default("singleton"),
+  tasks: jsonb("tasks").default([]),
+  published: jsonb("published").default([]),
+  staff: jsonb("staff").default([]),
+  prefs: jsonb("prefs").default({}),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── Sheep feeding ────────────────────────────────────────────────────────────
+export const sheepPens = pgTable("sheep_pens", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  ration: text("ration").notNull(),
+  headCount: integer("head_count").notNull().default(0),
+  kgPerHead: numeric("kg_per_head").notNull().default("0"),
+  rationPercent: integer("ration_percent").default(100),
+  active: boolean("active").notNull().default(true),
+  orderIndex: integer("order_index").notNull().default(0),
+  notes: text("notes"),
+});
+
+export const sheepFeedHistory = pgTable("sheep_feed_history", {
+  id: text("id").primaryKey(),
+  startedAt: timestamp("started_at").notNull(),
+  finishedAt: timestamp("finished_at"),
+  feeder: text("feeder"),
+  period: text("period").notNull(),
+  splitFraction: numeric("split_fraction").notNull(),
+  events: jsonb("events").notNull().default([]),
+});
+
+export const sheepSettings = pgTable("sheep_settings", {
+  id: text("id").primaryKey().default("singleton"),
+  adminPin: text("admin_pin"),
+  defaultFeeder: text("default_feeder"),
+  splitAm: numeric("split_am").default("0.6"),
+  splitPm: numeric("split_pm").default("0.4"),
+  ingredients: jsonb("ingredients"),
+  bufferPercent: numeric("buffer_percent").default("0"),
+});
+
+// ── Cattle feedlot ───────────────────────────────────────────────────────────
+export const cattleElements = pgTable("cattle_elements", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  unit: text("unit").notNull().default("kg/head"),
+  defaultRate: numeric("default_rate").notNull().default("0"),
+  isGradual: boolean("is_gradual").notNull().default(false),
+  costPerUnit: numeric("cost_per_unit").notNull().default("0"),
+  costUnit: text("cost_unit").notNull().default("$/tonne"),
+});
+
+export const cattleAnimalClasses = pgTable("cattle_animal_classes", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(),
+});
+
+export const cattleRecipes = pgTable("cattle_recipes", {
+  id: text("id").primaryKey(),
+  className: text("class_name").notNull(),
+  elementName: text("element_name").notNull(),
+  rate: numeric("rate").notNull(),
+});
+
+export const cattleMobs = pgTable("cattle_mobs", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  className: text("class_name").notNull(),
+  paddock: text("paddock").notNull(),
+  headCount: integer("head_count").notNull(),
+  feedMultiplier: numeric("feed_multiplier").notNull().default("1"),
+  gradualPercentages: jsonb("gradual_percentages").default({}),
+});
+
+export const cattleLoads = pgTable("cattle_loads", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(),
+});
+
+export const cattleLoadAssignments = pgTable("cattle_load_assignments", {
+  id: text("id").primaryKey(),
+  loadName: text("load_name").notNull(),
+  mobName: text("mob_name").notNull(),
+  multiplier: numeric("multiplier").notNull().default("1"),
+});
+
+export const cattleFeedHistory = pgTable("cattle_feed_history", {
+  id: text("id").primaryKey(),
+  loadName: text("load_name").notNull(),
+  feeder: text("feeder"),
+  startedAt: timestamp("started_at").notNull(),
+  finishedAt: timestamp("finished_at"),
+  totalKg: numeric("total_kg"),
+  events: jsonb("events").default([]),
 });

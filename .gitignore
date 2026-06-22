@@ -3,3 +3,6 @@ dist
 .DS_Store
 *.local
 .env
+api-server/node_modules
+api-server/.env
+api-server/drizzle

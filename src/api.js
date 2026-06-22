@@ -101,4 +101,41 @@ export const api = {
   // --- Breeds ---
   listBreeds: () => request("/breeds"),
   addBreed: (species, breed) => request("/breeds", { method: "POST", body: JSON.stringify({ species, breed }) }),
+
+  // --- Workflow ---
+  getWorkflow: () => request("/workflow"),
+  saveWorkflow: (state) => request("/workflow", { method: "PUT", body: JSON.stringify(state) }),
+  getPublishedTasks: () => request("/workflow/published"),
+  getWorkflowStaff: () => request("/workflow/staff"),
+
+  // --- Sheep Feeding ---
+  getSheepPens: () => request("/sheep/pens"),
+  saveSheepPens: (pens) => request("/sheep/pens", { method: "POST", body: JSON.stringify(pens) }),
+  getSheepSettings: () => request("/sheep/settings"),
+  saveSheepSettings: (s) => request("/sheep/settings", { method: "PUT", body: JSON.stringify(s) }),
+  getSheepHistory: () => request("/sheep/history"),
+  addSheepHistory: (entry) => request("/sheep/history", { method: "POST", body: JSON.stringify(entry) }),
+
+  // --- Cattle Feedlot ---
+  getCattleElements: () => request("/cattle/elements"),
+  createCattleElement: (e) => request("/cattle/elements", { method: "POST", body: JSON.stringify(e) }),
+  updateCattleElement: (id, e) => request(`/cattle/elements/${id}`, { method: "PATCH", body: JSON.stringify(e) }),
+  deleteCattleElement: (id) => request(`/cattle/elements/${id}`, { method: "DELETE" }),
+  getCattleClasses: () => request("/cattle/animal-classes"),
+  createCattleClass: (c) => request("/cattle/animal-classes", { method: "POST", body: JSON.stringify(c) }),
+  deleteCattleClass: (id) => request(`/cattle/animal-classes/${id}`, { method: "DELETE" }),
+  getCattleRecipes: () => request("/cattle/recipes"),
+  saveCattleRecipes: (className, recipes) => request("/cattle/recipes", { method: "PUT", body: JSON.stringify({ className, recipes }) }),
+  getCattleMobs: () => request("/cattle/cattle-mobs"),
+  createCattleMob: (m) => request("/cattle/cattle-mobs", { method: "POST", body: JSON.stringify(m) }),
+  updateCattleMob: (id, m) => request(`/cattle/cattle-mobs/${id}`, { method: "PATCH", body: JSON.stringify(m) }),
+  deleteCattleMob: (id) => request(`/cattle/cattle-mobs/${id}`, { method: "DELETE" }),
+  getCattleLoads: () => request("/cattle/loads"),
+  createCattleLoad: (l) => request("/cattle/loads", { method: "POST", body: JSON.stringify(l) }),
+  deleteCattleLoad: (id) => request(`/cattle/loads/${id}`, { method: "DELETE" }),
+  getCattleAssignments: () => request("/cattle/load-assignments"),
+  createCattleAssignment: (a) => request("/cattle/load-assignments", { method: "POST", body: JSON.stringify(a) }),
+  deleteCattleAssignment: (id) => request(`/cattle/load-assignments/${id}`, { method: "DELETE" }),
+  getCattleHistory: () => request("/cattle/cattle-history"),
+  addCattleHistory: (entry) => request("/cattle/cattle-history", { method: "POST", body: JSON.stringify(entry) })
 };

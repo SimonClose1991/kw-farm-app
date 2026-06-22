@@ -163,6 +163,7 @@ const FARM_CENTERS = {
   Hamilton: [-37.745, 142.02],
   "Kurra-Wirra": [-36.95, 141.85],
   Mooralla: [-37.36, 141.65],
+  Carramar: [-37.10, 141.75],
 };
 
 // Convert a GeoJSON Polygon/MultiPolygon geometry into [lat,lng] pairs for Leaflet
@@ -196,10 +197,10 @@ function fallbackPolygon(center, index, ha) {
 }
 
 // Interactive map of paddocks, drawn as an SVG so it always renders offline / without external map tiles
-function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandmark, insightMode = "usage", paddockStats = {}, drawMode = false, drawPoints = [], onDrawPoint, projectRef, userLocation = null }) {
+function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandmark, insightMode = "usage", paddockStats = {}, drawMode = false, drawPoints = [], onDrawPoint, projectRef, userLocation = null, openGateIds = [] }) {
   // Gather all points (real geometry or generated fallback shapes) so we can fit a viewBox
   const shapes = paddocks.map((p, i) => {
-    const latlngs = geometryToLatLngs(p.geojson) || fallbackPolygon(center, i, p.ha || 10);
+    const latlngs = geometryToLatLngs(p.geojson) || fallbackPolygon(center, i, Number(p.ha) || 10);
     return { paddock: p, latlngs };
   });
 
@@ -300,13 +301,17 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
           const cy = points.reduce((s, pt) => s + pt[1], 0) / points.length;
           const fill = colourForPaddock(p);
           const stats = paddockStats[p.name] || {};
-          let badge = `${p.ha} ha`;
+          let badge = `${Number(p.ha||0).toFixed(1)} ha`;
           if (insightMode === "stocking") badge = `${(stats.dsePerHa || 0).toFixed(1)} DSE/ha`;
           else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "No data";
           else if (insightMode === "grazed") badge = stats.daysSinceGrazed != null ? `${stats.daysSinceGrazed}d since grazed` : "No data";
+          const openGate = landmarks.find(l =>
+            l.type === "Gate" && openGateIds.includes(String(l.id)) &&
+            (l.paddockA === p.name || l.paddockB === p.name)
+          );
           return (
             <g key={p.id} onClick={() => !drawMode && onSelect(p)} className={drawMode ? "" : "cursor-pointer"}>
-              <polygon points={pointsStr} fill={fill === "none" ? "none" : fill} fillOpacity={fill === "none" ? 0 : 0.55} stroke="#fff" strokeWidth="2" />
+              <polygon points={pointsStr} fill={fill === "none" ? "none" : fill} fillOpacity={fill === "none" ? 0 : 0.55} stroke={openGate ? "#eab308" : "#fff"} strokeWidth={openGate ? 4 : 2} />
               <text x={cx} y={cy - 6} textAnchor="middle" fontSize="20" fontWeight="700" fill="#fff" style={{ paintOrder: "stroke", stroke: "#00000099", strokeWidth: 4 }}>
                 {p.name}
               </text>
@@ -356,14 +361,28 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
 }
 
 // Real Google Maps satellite view with paddock polygon overlays (requires user-supplied API key)
-function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = "paddocks", mobs = [], onSelectPin, landmarks = [], onSelectLandmark, insightMode = "usage", paddockStats = {}, drawMode = false, drawPoints = [], onDrawPoint, userLocation = null }) {
+// ── Google Maps component ────────────────────────────────────────────────────
+// Handles both "paddocks" mode (polygons + zoom-aware labels + landmarks + pin placer)
+// and "livestock" mode (paddock outlines + per-species mob tiles + tag colour rings).
+function GooglePaddockMap({
+  paddocks, center, onSelect, apiKey, onError,
+  mode = "paddocks",
+  mobs = [], onSelectPin,
+  landmarks = [], onSelectLandmark,
+  insightMode = "usage", paddockStats = {},
+  drawMode = false, drawPoints = [], onDrawPoint,
+  userLocation = null,
+  openGateIds = [],
+  // Landmark pin-placement mode: when true, show a draggable pin on the map
+  landmarkPinMode = false, landmarkPinPos = null, onLandmarkPinMoved,
+}) {
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
 
   const colourForPaddock = (p) => {
     if (insightMode === "outline") return null;
     if (insightMode === "usage") return USAGE_COLOURS[p.landUse] || "#999999";
-    if (insightMode === "crop") return COLOUR_HEX[p.colour] || "#999999";
+    if (insightMode === "crop")  return COLOUR_HEX[p.colour] || "#999999";
     if (insightMode === "stocking") {
       const rate = (paddockStats[p.name] || {}).dsePerHa || 0;
       if (rate === 0) return "#475569";
@@ -390,88 +409,143 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
     return COLOUR_HEX[p.colour] || "#999999";
   };
 
+  // Abbreviate a paddock name for mid-zoom labels: "Squashy Island" → "SI"
+  const abbrev = (name) => name.split(/[\s\-_]+/).map(w => w[0]).join("").toUpperCase().slice(0,3);
+
+  // Helper: build/update paddock label marker based on zoom level
+  const updateLabelForZoom = (g, map, centroid, p, labelMarkerRef, zoom) => {
+    if (labelMarkerRef.setMap) labelMarkerRef.setMap(null);
+    let text = "";
+    if (zoom >= 15) text = p.name;                       // full name
+    else if (zoom >= 13) text = abbrev(p.name);          // abbreviation
+    // zoom < 13: no label
+    if (!text) return null;
+    const stats = paddockStats[p.name] || {};
+    let badge = `${Number(p.ha||0).toFixed(1)} ha`;
+    if (insightMode === "stocking") badge = `${(stats.dsePerHa||0).toFixed(1)} DSE/ha`;
+    else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "";
+    else if (insightMode === "grazed") badge = stats.daysSinceGrazed != null ? `${stats.daysSinceGrazed}d ago` : "";
+    const labelText = zoom >= 15 ? `${text}\n${badge}` : text;
+    const m = new g.Marker({
+      position: centroid, map,
+      label: { text: labelText, color: "#fff", fontWeight: "bold", fontSize: zoom >= 15 ? "12px" : "10px" },
+      icon: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", scaledSize: new g.Size(1, 1) },
+    });
+    return m;
+  };
+
   React.useEffect(() => {
     let cancelled = false;
     let timeoutId;
-
     const render = () => {
       if (cancelled || !mapDivRef.current || !window.google?.maps) return;
       const g = window.google.maps;
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.overlays?.forEach((o) => o.setMap(null));
+        mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
       }
       const map = new g.Map(mapDivRef.current, {
         center: { lat: center[0], lng: center[1] },
         zoom: 13,
         mapTypeId: "satellite",
-        streetViewControl: false,
-        fullscreenControl: false,
-        mapTypeControl: false,
+        streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
       });
       const bounds = new g.LatLngBounds();
       const overlays = [];
       const centroids = {};
+      const labelMarkers = {}; // paddock name → label marker
+      const polygons = {};
+
+      // ── Draw paddock polygons (both modes) ──
       paddocks.forEach((p, i) => {
-        const latlngs = geometryToLatLngs(p.geojson) || fallbackPolygon(center, i, p.ha || 10);
+        const latlngs = geometryToLatLngs(p.geojson) || fallbackPolygon(center, i, Number(p.ha) || 10);
         const path = latlngs.map(([lat, lng]) => ({ lat, lng }));
         path.forEach((pt) => bounds.extend(pt));
         const centroid = path.reduce((acc, pt) => ({ lat: acc.lat + pt.lat / path.length, lng: acc.lng + pt.lng / path.length }), { lat: 0, lng: 0 });
         centroids[p.name] = centroid;
 
-        if (mode === "paddocks") {
-          const fillColour = colourForPaddock(p);
-          const poly = new g.Polygon({
-            paths: path, strokeColor: "#ffffff", strokeWeight: 2,
-            fillColor: fillColour || "#999999", fillOpacity: fillColour ? 0.45 : 0, map,
-          });
-          poly.addListener("click", () => onSelect(p));
-          let badge = `${p.ha} ha`;
-          const stats = paddockStats[p.name] || {};
-          if (insightMode === "stocking") badge = `${(stats.dsePerHa || 0).toFixed(1)} DSE/ha`;
-          else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "No data";
-          else if (insightMode === "grazed") badge = stats.daysSinceGrazed != null ? `${stats.daysSinceGrazed}d` : "No data";
-          const label = new g.Marker({
-            position: centroid, map,
-            label: { text: `${p.name}\n${badge}`, color: "#fff", fontWeight: "bold", fontSize: "12px" },
-            icon: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", scaledSize: new g.Size(1, 1) },
-          });
-          overlays.push(poly, label);
-        } else {
-          const poly = new g.Polygon({
-            paths: path, strokeColor: "#ffffff", strokeWeight: 1, fillOpacity: 0, map,
-          });
-          overlays.push(poly);
-        }
+        const isGateOpen = landmarks.some(l => l.type === "Gate" && openGateIds.includes(String(l.id)) && (l.paddockA === p.name || l.paddockB === p.name));
+        const fillColour = mode === "paddocks" ? (colourForPaddock(p) || "#999999") : "transparent";
+        const poly = new g.Polygon({
+          paths: path,
+          strokeColor: isGateOpen ? "#eab308" : "#ffffff",
+          strokeWeight: isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5),
+          fillColor: mode === "paddocks" ? fillColour : "#38bdf8",
+          fillOpacity: mode === "paddocks" ? 0.45 : 0.15,
+          map,
+        });
+        if (mode === "paddocks") poly.addListener("click", () => onSelect(p));
+        else poly.addListener("click", () => onSelect(p));
+        polygons[p.name] = poly;
+        overlays.push(poly);
+
+        // Initial label at current zoom (always show in paddocks mode)
+        const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, mode === "paddocks" ? map.getZoom() : 14);
+        if (lm) { labelMarkers[p.name] = lm; overlays.push(lm); }
       });
 
-      if (mode === "livestock") {
-        mobs.forEach((m, i) => {
-          let pos = centroids[m.paddock];
-          if (!pos) {
-            // scatter mobs without a matching paddock around the centre
-            const angle = (i / Math.max(mobs.length, 1)) * 2 * Math.PI;
-            pos = { lat: center[0] + Math.cos(angle) * 0.01, lng: center[1] + Math.sin(angle) * 0.01 };
-          } else {
-            // jitter slightly if multiple mobs share a paddock
-            pos = { lat: pos.lat + (i % 3) * 0.0015, lng: pos.lng + Math.floor(i / 3) * 0.0015 };
-          }
-          bounds.extend(pos);
-          const ringColour = TAG_COLOUR_HEX[m.tag] || "#cbd5e1";
-          const marker = new g.Marker({
-            position: pos, map,
-            label: { text: String(m.count), color: "#1e293b", fontWeight: "bold", fontSize: "12px" },
-            icon: { path: g.SymbolPath.CIRCLE, scale: 16, fillColor: "#ffffff", fillOpacity: 1, strokeColor: ringColour, strokeWeight: 3 },
+      // Zoom-aware label update (paddocks mode)
+      if (mode === "paddocks") {
+        map.addListener("zoom_changed", () => {
+          const z = map.getZoom();
+          Object.entries(labelMarkers).forEach(([name, lm]) => {
+            if (lm) lm.setMap(null);
           });
-          marker.addListener("click", () => onSelectPin?.({ l: m.count, mob: m }));
-          overlays.push(marker);
+          paddocks.forEach((p) => {
+            if (!centroids[p.name]) return;
+            const newLm = updateLabelForZoom(g, map, centroids[p.name], p, { setMap: () => {} }, z);
+            if (newLm) { labelMarkers[p.name] = newLm; overlays.push(newLm); }
+            else labelMarkers[p.name] = null;
+          });
         });
       }
 
+      // ── Livestock pins (livestock mode) ──
+      if (mode === "livestock") {
+        // Group mobs by paddock + species so each species gets its own tile
+        const groups = {};
+        mobs.forEach((m) => {
+          const key = `${m.paddock || "_nopad"}::${m.species || "Other"}`;
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(m);
+        });
+        let gi = 0;
+        Object.entries(groups).forEach(([key, groupMobs]) => {
+          const [paddockName, species] = key.split("::");
+          let base = centroids[paddockName];
+          if (!base) {
+            const angle = (gi / Math.max(Object.keys(groups).length, 1)) * 2 * Math.PI;
+            base = { lat: center[0] + Math.cos(angle) * 0.012, lng: center[1] + Math.sin(angle) * 0.012 };
+          }
+          // Offset species tiles within the same paddock
+          const speciesOffset = species === "Cattle" || species === "Bulls" ? 0 : (species === "Sheep" ? 0.0008 : 0.0004);
+          const pos = { lat: base.lat + speciesOffset, lng: base.lng + speciesOffset * 0.5 };
+          bounds.extend(pos);
+          const totalCount = groupMobs.reduce((s, m) => s + m.count, 0);
+          const tagColour = TAG_COLOUR_HEX[groupMobs[0]?.tag] || "#cbd5e1";
+          const emoji = species === "Cattle" ? "🐄" : species === "Sheep" ? "🐑" : species === "Rams" ? "🐏" : species === "Bulls" ? "🐂" : "🐾";
+          const marker = new g.Marker({
+            position: pos, map,
+            label: { text: `${emoji} ${totalCount}`, color: "#1e293b", fontWeight: "bold", fontSize: "12px" },
+            icon: {
+              path: g.SymbolPath.CIRCLE,
+              scale: 18,
+              fillColor: "#ffffff",
+              fillOpacity: 1,
+              strokeColor: tagColour,
+              strokeWeight: 3,
+            },
+          });
+          marker.addListener("click", () => onSelectPin?.({ l: totalCount, mob: groupMobs[0], mobs: groupMobs }));
+          overlays.push(marker);
+          gi++;
+        });
+      }
+
+      // ── Landmarks (paddocks mode) ──
       if (mode === "paddocks") {
         landmarks.forEach((l) => {
           if (l.lat == null || l.lng == null) return;
-          const pos = { lat: l.lat, lng: l.lng };
-          bounds.extend(pos);
+          const pos = { lat: Number(l.lat), lng: Number(l.lng) };
           const cat = Object.values(LANDMARK_CATEGORIES).flat().find((c) => c.type === l.type);
           const marker = new g.Marker({
             position: pos, map,
@@ -483,10 +557,30 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
         });
       }
 
-      if (drawMode) {
-        map.addListener("click", (e) => {
-          onDrawPoint?.(e.latLng.lat(), e.latLng.lng());
+      // ── Draggable landmark placement pin ──
+      if (landmarkPinMode) {
+        const startPos = landmarkPinPos
+          ? { lat: landmarkPinPos.lat, lng: landmarkPinPos.lng }
+          : { lat: center[0], lng: center[1] };
+        const pinMarker = new g.Marker({
+          position: startPos,
+          map,
+          draggable: true,
+          label: { text: "📍", fontSize: "22px" },
+          icon: { path: g.SymbolPath.CIRCLE, scale: 2, fillOpacity: 0, strokeOpacity: 0 },
+          title: "Drag to place landmark",
+          zIndex: 999,
         });
+        pinMarker.addListener("dragend", (e) => {
+          onLandmarkPinMoved?.(e.latLng.lat(), e.latLng.lng());
+        });
+        overlays.push(pinMarker);
+        if (!landmarkPinPos) onLandmarkPinMoved?.(startPos.lat, startPos.lng);
+      }
+
+      // ── Draw mode ──
+      if (drawMode) {
+        map.addListener("click", (e) => onDrawPoint?.(e.latLng.lat(), e.latLng.lng()));
         if (drawPoints.length > 0) {
           const path = drawPoints.map((p) => ({ lat: p.lat, lng: p.lng }));
           const poly = new g.Polygon({ paths: path, strokeColor: "#22c55e", strokeWeight: 3, fillColor: "#22c55e", fillOpacity: drawPoints.length > 2 ? 0.3 : 0, map });
@@ -498,6 +592,7 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
         }
       }
 
+      // ── User location blue dot ──
       if (userLocation) {
         const dot = new g.Marker({
           position: { lat: userLocation.lat, lng: userLocation.lng },
@@ -505,18 +600,10 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
           icon: { path: g.SymbolPath.CIRCLE, scale: 8, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 },
           zIndex: 999,
         });
-        new g.Circle({
-          center: { lat: userLocation.lat, lng: userLocation.lng },
-          radius: 20,
-          map,
-          fillColor: "#4285F4",
-          fillOpacity: 0.15,
-          strokeOpacity: 0,
-        });
         overlays.push(dot);
       }
 
-      if (paddocks.length || landmarks.length) map.fitBounds(bounds, 40);
+      if (paddocks.length || landmarks.length) { try { map.fitBounds(bounds, 40); } catch {} }
       mapInstanceRef.current = { map, overlays };
     };
 
@@ -524,10 +611,7 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
       render();
     } else {
       const existing = document.getElementById("google-maps-js");
-      if (existing) {
-        existing.remove();
-        delete window.google;
-      }
+      if (existing) { existing.remove(); delete window.google; }
       window.__gmapsCallback = render;
       const script = document.createElement("script");
       script.id = "google-maps-js";
@@ -537,19 +621,19 @@ function GooglePaddockMap({ paddocks, center, onSelect, apiKey, onError, mode = 
       document.body.appendChild(script);
       timeoutId = setTimeout(() => { if (!cancelled && !window.google?.maps) onError?.(); }, 8000);
     }
-
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.overlays?.forEach((o) => o.setMap(null));
+        mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
         mapInstanceRef.current = null;
       }
     };
-  }, [paddocks, center, apiKey, mode, mobs, landmarks, insightMode, drawMode, drawPoints, userLocation]);
+  }, [paddocks, center, apiKey, mode, mobs, landmarks, insightMode, drawMode, drawPoints, userLocation, openGateIds, landmarkPinMode, landmarkPinPos]);
 
   return <div ref={mapDivRef} className="w-full h-full" />;
 }
+
 
 function geojsonToPaddocks(geojson) {
   const features = geojson?.features || (geojson?.type === "Feature" ? [geojson] : []);
@@ -740,22 +824,25 @@ export default function App() {
 
   const [tab, setTab] = useState("home");
   const [showMenu, setShowMenu] = useState(false);
-  const [farmsMobs, setFarmsMobs] = useState(FARMS_DATA);
+  const [farmsMobs, setFarmsMobs] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const [farmName, setFarmName] = useState("Arundale");
-  const [farmsPaddocks, setFarmsPaddocks] = useState(DEFAULT_PADDOCKS_DATA);
+  const [farmsPaddocks, setFarmsPaddocks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const paddocks = farmsPaddocks[farmName] || [];
   const setPaddocks = (updater) => setFarmsPaddocks((prev) => ({
     ...prev,
     [farmName]: typeof updater === "function" ? updater(prev[farmName] || []) : updater,
   }));
-  const [farmsLandmarks, setFarmsLandmarks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [] });
+  const [farmsLandmarks, setFarmsLandmarks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const landmarks = farmsLandmarks[farmName] || [];
   const setLandmarks = (updater) => setFarmsLandmarks((prev) => ({
     ...prev,
     [farmName]: typeof updater === "function" ? updater(prev[farmName] || []) : updater,
   }));
   const [showAddLandmark, setShowAddLandmark] = useState(false);
-  const [landmarkCategoryPick, setLandmarkCategoryPick] = useState(null); // category name while picking type
+  const [landmarkPinPos, setLandmarkPinPos] = useState(null);
+  const [landmarkPinMode, setLandmarkPinMode] = useState(false);
+  const [showPaddockAddMenu, setShowPaddockAddMenu] = useState(false);
+  const [landmarkCategoryPick, setLandmarkCategoryPick] = useState(null);
   const [newLandmarkForm, setNewLandmarkForm] = useState({});
   const [landmarkDetail, setLandmarkDetail] = useState(null);
   const [landmarkEditMode, setLandmarkEditMode] = useState(false);
@@ -766,6 +853,12 @@ export default function App() {
   const [showAddPaddock, setShowAddPaddock] = useState(false);
   const [newPaddockForm, setNewPaddockForm] = useState({});
   const [paddockDetail, setPaddockDetail] = useState(null);
+  // Gate state: array of {id, paddockA, paddockB, landmarkId} — when a gate is open, the two
+  // paddocks it connects are merged visually (yellow border) and their DSE/ha is combined.
+  const [openGates, setOpenGates] = useState([]);
+  // Bulk spray state: which paddocks are selected for a multi-paddock spray record
+  const [spraySelectedPaddocks, setSpraySelectedPaddocks] = useState([]);
+  const [showBulkSpray, setShowBulkSpray] = useState(false);
   const [showFoo, setShowFoo] = useState(false);
   const [fooTargetPaddock, setFooTargetPaddock] = useState(null);
   const [fooForm, setFooForm] = useState({});
@@ -882,6 +975,17 @@ export default function App() {
       });
     return () => { cancelled = true; };
   }, [loggedInEmail, farmName]);
+
+  // Pre-load ALL farms' mobs in the background so the Home screen all-farms totals are accurate
+  React.useEffect(() => {
+    if (!loggedInEmail) return;
+    const OTHER_FARMS = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"].filter(f => f !== farmName);
+    OTHER_FARMS.forEach((farm) => {
+      api.listMobs(farm)
+        .then((res) => setFarmsMobs((prev) => ({ ...prev, [farm]: res })))
+        .catch(() => {}); // silent — home screen shows 0 if it fails, not a critical error
+    });
+  }, [loggedInEmail]); // only runs once on login, not on every farm switch
 
   // Load accounts and remembered custom breeds once logged in (not farm-specific)
   React.useEffect(() => {
@@ -1075,8 +1179,13 @@ export default function App() {
 
   const Header = ({ title, right }) => (
     <div className="bg-white/80 backdrop-blur-md flex items-center justify-between px-5 py-4 sticky top-0 z-10 border-b border-slate-100">
-      <div className="w-6" />
-      <h1 className="text-base font-bold text-slate-800 tracking-tight">{title}</h1>
+      <button onClick={() => setTab("home")} className="flex items-center gap-1 text-red-900">
+        <span className="text-xs font-bold">🏠</span>
+      </button>
+      <div className="text-center">
+        <h1 className="text-base font-bold text-slate-800 tracking-tight">{title}</h1>
+        <div className="text-xs text-slate-400 font-medium">{farmName}</div>
+      </div>
       <button onClick={() => setShowHelp(true)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
         {right || <HelpCircle size={16} />}
       </button>
@@ -1111,80 +1220,127 @@ export default function App() {
     </div>
   );
 
-  const totalCattle = mobs.filter((m) => /steer|cow|calf|calves/i.test(m.name)).reduce((s, m) => s + m.count, 0);
-  const totalSheep = mobs.filter((m) => /ewe|sheep|merino/i.test(m.name)).reduce((s, m) => s + m.count, 0);
-  const totalDSE = mobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
+  // ── All-farms aggregate totals ──
+  const allMobs = Object.values(farmsMobs).flat();
+  const totalCattle = allMobs.filter((m) => m.species === "Cattle" || /steer|cow|calf|calves|bull|heifer/i.test(m.type || "")).reduce((s, m) => s + m.count, 0);
+  const totalSheep = allMobs.filter((m) => m.species === "Sheep" || /ewe|sheep|merino|lamb|wether|ram/i.test(m.type || "")).reduce((s, m) => s + m.count, 0);
+  const totalDSE = allMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
+  // Per-farm summaries for farm tiles
+  const FARM_NAMES = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"];
+  const farmSummaries = FARM_NAMES.map((name) => {
+    const farmMobs = farmsMobs[name] || [];
+    const cattle = farmMobs.filter((m) => m.species === "Cattle").reduce((s, m) => s + m.count, 0);
+    const sheep = farmMobs.filter((m) => m.species === "Sheep").reduce((s, m) => s + m.count, 0);
+    const dse = farmMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
+    return { name, cattle, sheep, dse };
+  });
 
   const HomeScreen = () => (
     <div className="pb-24 bg-slate-50 min-h-screen">
-      <Header title="Kurra-Wirra" />
-      {!isOnline && (
-        <div className="mx-4 mt-4 bg-slate-700 text-white flex items-center justify-between px-4 py-3 rounded-2xl">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            📡 Offline — working from data on this device{pendingChanges > 0 ? ` (${pendingChanges} pending change${pendingChanges > 1 ? "s" : ""})` : ""}
+      {/* Header */}
+      <div className="bg-red-950 text-white px-5 pt-6 pb-8">
+        <div className="flex items-center justify-between mb-1">
+          <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="h-10 rounded-lg" />
+          <div className="flex items-center gap-2">
+            {isOnline && syncCount === 0 && pendingChanges === 0 && (
+              <span className="text-xs bg-green-500/20 text-green-300 px-2 py-1 rounded-full font-semibold">✓ Synced</span>
+            )}
+            {(syncCount > 0 || pendingChanges > 0) && (
+              <button onClick={handleSync} disabled={syncing} className="text-xs bg-yellow-500 text-white px-3 py-1 rounded-full font-semibold">
+                {syncing ? "Syncing…" : `Sync ${syncCount + pendingChanges}`}
+              </button>
+            )}
+            {!isOnline && (
+              <span className="text-xs bg-slate-600/50 text-slate-300 px-2 py-1 rounded-full font-semibold">📡 Offline</span>
+            )}
           </div>
         </div>
-      )}
-      {isOnline && (syncCount > 0 || pendingChanges > 0) && (
-        <div className="mx-4 mt-4 bg-yellow-50 border border-yellow-200 text-yellow-700 flex items-center justify-between px-4 py-3 rounded-2xl">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            ⚠️ {syncing ? "Syncing..." : `${syncCount + pendingChanges} item${syncCount + pendingChanges > 1 ? "s" : ""} to sync`}
-          </div>
-          <button onClick={handleSync} disabled={syncing} className="bg-yellow-500 text-white rounded-full px-4 py-1.5 text-sm font-semibold">
-            {syncing ? "..." : "Sync"}
-          </button>
-        </div>
-      )}
-      {isOnline && syncCount === 0 && pendingChanges === 0 && (
-        <div className="mx-4 mt-4 bg-green-50 text-green-700 flex items-center px-4 py-2.5 text-sm font-medium rounded-2xl">
-          ✓ All synced
-        </div>
-      )}
-      <button onClick={() => setShowSwitchFarm(true)} className="w-full text-left px-5 py-5 flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2 font-bold text-2xl text-slate-800">{farmName}</div>
-          <div className="text-slate-400 text-xs font-medium mt-0.5">{FARM_DATE}</div>
-        </div>
-        <div className="w-10 h-10 rounded-2xl bg-amber-200 flex items-center justify-center text-red-950">
-          <Home size={18} />
-        </div>
-      </button>
-
-      <div className="px-4">
-        <div className="flex justify-between items-center mb-2 px-1">
-          <h2 className="font-bold text-slate-700">Livestock</h2>
-          <button className="text-red-950 text-sm font-semibold" onClick={() => setShowMobSummaryDetail(true)}>Details</button>
-        </div>
-        <div className="flex gap-3">
-          <button onClick={() => setTab("livestock")} className="flex-1 bg-white rounded-2xl p-4 text-left shadow-sm border border-slate-100">
-            <div className="text-xs text-slate-400 font-semibold tracking-wide">CATTLE</div>
-            <div className="text-3xl font-extrabold text-slate-800 mt-1">{totalCattle}</div>
-          </button>
-          <button onClick={() => setTab("livestock")} className="flex-1 bg-white rounded-2xl p-4 text-left shadow-sm border border-slate-100">
-            <div className="text-xs text-slate-400 font-semibold tracking-wide">SHEEP</div>
-            <div className="text-3xl font-extrabold text-slate-800 mt-1">{totalSheep}</div>
-          </button>
+        <div className="text-xs text-white/50 mb-4">{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+        {/* All-farms totals strip */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: "CATTLE", value: totalCattle.toLocaleString(), icon: "🐄" },
+            { label: "SHEEP", value: totalSheep.toLocaleString(), icon: "🐑" },
+            { label: "TOTAL DSE", value: totalDSE.toLocaleString(undefined, { maximumFractionDigits: 0 }), icon: "🌿" },
+          ].map(({ label, value, icon }) => (
+            <div key={label} className="bg-white/10 rounded-2xl p-3 text-center">
+              <div className="text-lg mb-0.5">{icon}</div>
+              <div className="text-xl font-extrabold text-white">{value}</div>
+              <div className="text-[10px] text-white/50 font-semibold tracking-wide">{label}</div>
+            </div>
+          ))}
         </div>
       </div>
 
-      <div className="px-4 mt-4">
-        <div className="flex justify-between items-center mb-2 px-1">
-          <h2 className="font-bold text-slate-700">Property DSE</h2>
-          <Sparkles size={16} className="text-amber-500" />
-        </div>
-        <div className="bg-gradient-to-br from-red-950 to-red-900 rounded-2xl p-5 text-white shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Total DSE</div>
-          <div className="text-4xl font-extrabold mt-1">{totalDSE.toLocaleString(undefined, { maximumFractionDigits: 1 })}</div>
-          <div className="text-xs opacity-80 mt-2">Calculated from head count × DSE rating per mob</div>
-        </div>
-      </div>
+      {/* ── Workflow Planner — front and centre ── */}
+      <div className="px-4 -mt-4">
+        <button
+          onClick={() => setTab("workflow")}
+          className="w-full bg-gradient-to-r from-amber-500 to-amber-600 rounded-2xl p-5 shadow-lg flex items-center gap-4 mb-4"
+        >
+          <div className="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center text-3xl flex-shrink-0">📋</div>
+          <div className="text-left flex-1">
+            <div className="font-extrabold text-white text-lg leading-tight">Weekly Workflow</div>
+            <div className="text-white/80 text-sm mt-0.5">Tasks, staff & machinery planning</div>
+            <div className="text-white/60 text-xs mt-1">Tap to open planner →</div>
+          </div>
+        </button>
 
-      <div className="px-4 mt-4">
+        {/* ── Feeding Systems ── */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button
+            onClick={() => setTab("cattle_feeding")}
+            className="bg-gradient-to-br from-red-900 to-red-950 rounded-2xl p-4 text-left shadow-sm"
+          >
+            <div className="text-2xl mb-2">🐄</div>
+            <div className="font-bold text-white text-sm leading-tight">Cattle Feeding System</div>
+            <div className="text-white/60 text-xs mt-1">Pens · rations · weights</div>
+          </button>
+          <button
+            onClick={() => setTab("sheep_feeding")}
+            className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-2xl p-4 text-left shadow-sm"
+          >
+            <div className="text-2xl mb-2">🐑</div>
+            <div className="font-bold text-white text-sm leading-tight">Sheep Feeding System</div>
+            <div className="text-white/60 text-xs mt-1">Pens · rations · weights</div>
+          </button>
+        </div>
+
+        {/* ── Farm tiles ── */}
         <div className="flex justify-between items-center mb-2 px-1">
-          <h2 className="font-bold text-slate-700">Rainfall</h2>
+          <h2 className="font-bold text-slate-700">Farms</h2>
+          <span className="text-xs text-slate-400">Tap to enter</span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          {farmSummaries.map(({ name, cattle, sheep, dse }) => (
+            <button
+              key={name}
+              onClick={() => {
+                setFarmName(name);
+                setFarmsMobs((prev) => ({ ...prev, [name]: [] }));
+                setFarmsPaddocks((prev) => ({ ...prev, [name]: [] }));
+                setFarmsLandmarks((prev) => ({ ...prev, [name]: [] }));
+                setTab("livestock");
+              }}
+              className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 text-left"
+            >
+              <div className="font-bold text-slate-800 mb-2">{name}</div>
+              <div className="space-y-1">
+                {cattle > 0 && <div className="text-xs text-slate-500">🐄 {cattle.toLocaleString()} cattle</div>}
+                {sheep > 0 && <div className="text-xs text-slate-500">🐑 {sheep.toLocaleString()} sheep</div>}
+                {cattle === 0 && sheep === 0 && <div className="text-xs text-slate-400">No livestock loaded</div>}
+                {dse > 0 && <div className="text-xs font-semibold text-red-950">{dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE</div>}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* ── Rainfall strip ── */}
+        <div className="flex justify-between items-center mb-2 px-1">
+          <h2 className="font-bold text-slate-700">Rainfall · {farmName}</h2>
           <button className="text-red-950 text-sm font-semibold" onClick={() => setShowRainfall(true)}>Records</button>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 mb-4">
           <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
             <div className="text-xs text-slate-400 font-semibold tracking-wide">YTD</div>
             <div className="text-2xl font-extrabold text-slate-800 mt-1">
@@ -1207,6 +1363,24 @@ export default function App() {
     </div>
   );
 
+
+      {!isOnline && (
+        <div className="mx-4 mt-4 bg-slate-700 text-white flex items-center justify-between px-4 py-3 rounded-2xl">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            📡 Offline — working from data on this device{pendingChanges > 0 ? ` (${pendingChanges} pending change${pendingChanges > 1 ? "s" : ""})` : ""}
+          </div>
+        </div>
+      )}
+      {isOnline && (syncCount > 0 || pendingChanges > 0) && (
+        <div className="mx-4 mt-4 bg-yellow-50 border border-yellow-200 text-yellow-700 flex items-center justify-between px-4 py-3 rounded-2xl">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            ⚠️ {syncing ? "Syncing..." : `${syncCount + pendingChanges} item${syncCount + pendingChanges > 1 ? "s" : ""} to sync`}
+          </div>
+          <button onClick={handleSync} disabled={syncing} className="bg-yellow-500 text-white rounded-full px-4 py-1.5 text-sm font-semibold">
+            {syncing ? "..." : "Sync"}
+          </button>
+        </div>
+      )}
   // Drive map pins from the real mobs list (deterministic scatter so positions don't jump on re-render)
   const PIN_DATA = mobs.map((m, i) => {
     const seed = (m.id * 37) % 100;
@@ -1216,7 +1390,6 @@ export default function App() {
     const left = `${15 + col * 22 + ((seed * 3) % 9)}%`;
     return { l: String(m.count), t, left, mob: m };
   });
-
 
   const MapScreen = () => (
     <div className="pb-24 relative">
@@ -1309,12 +1482,19 @@ export default function App() {
       )}
 
       {mapMode === "Paddocks" && (() => {
+        // Guard: dataLoading means paddocks may not be fetched yet
+        if (dataLoading) return (
+          <div className="flex items-center justify-center h-48 text-slate-400 text-sm">Loading paddocks...</div>
+        );
+        if (dataError) return (
+          <div className="flex items-center justify-center h-48 text-rose-500 text-sm p-4 text-center">{dataError}</div>
+        );
         // Compute per-paddock stats used by insight overlays
         const paddockStats = {};
         paddocks.forEach((p) => {
           const paddockMobs = mobs.filter((m) => m.paddock === p.name);
           const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
-          const dsePerHa = p.ha ? dseTotal / p.ha : 0;
+          const dsePerHa = p.ha ? dseTotal / Number(p.ha) : 0;
           const lastFooEntry = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
           const daysSinceGrazed = paddockMobs.length > 0 ? Math.min(...paddockMobs.map((m) => m.daysInPaddock ?? 999)) : null;
           paddockStats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed };
@@ -1324,7 +1504,7 @@ export default function App() {
         <div className="bg-slate-50 min-h-[78vh] p-4">
           <div className="bg-gradient-to-br from-red-950 to-red-900 rounded-2xl p-4 mb-3 text-white">
             <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Total Area</div>
-            <div className="text-3xl font-extrabold">{paddocks.reduce((s, p) => s + (p.ha || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} ha</div>
+            <div className="text-3xl font-extrabold">{paddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} ha</div>
             <div className="text-xs opacity-80 mt-1">{paddocks.length} paddocks · {totalDSE.toLocaleString(undefined,{maximumFractionDigits:1})} total DSE</div>
           </div>
 
@@ -1343,7 +1523,7 @@ export default function App() {
           </div>
 
           {paddocks.length > 0 || landmarks.length > 0 ? (
-            <div className="rounded-2xl overflow-hidden shadow-sm border border-slate-200 mb-3 relative" style={{ height: "45vh" }}>
+            <div className="rounded-2xl overflow-hidden shadow-sm border border-slate-200 mb-3 relative" style={{ height: "65vh" }}>
               {googleMapsKey && !mapLoadError ? (
                 <GooglePaddockMap
                   paddocks={paddocks}
@@ -1359,6 +1539,7 @@ export default function App() {
                   drawPoints={drawPoints}
                   onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
                   userLocation={userLocation}
+                  openGateIds={openGates}
                 />
               ) : (
                 <PaddockMap
@@ -1373,15 +1554,42 @@ export default function App() {
                   drawPoints={drawPoints}
                   onDrawPoint={(lat, lng, x, y) => setDrawPoints((prev) => [...prev, { lat, lng, x, y }])}
                   userLocation={userLocation}
+                  openGateIds={openGates}
                 />
               )}
+              {/* Floating action buttons over the paddock map */}
               {!mapDrawMode && (
-                <button onClick={locateMe} disabled={locating} className="absolute bottom-2 right-2 bg-white w-10 h-10 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50">
-                  {locating ? "…" : "◎"}
-                </button>
+                <div className="absolute right-3 bottom-3 flex flex-col gap-2 z-10">
+                  <button onClick={locateMe} disabled={locating} className="bg-white w-11 h-11 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 text-lg">
+                    {locating ? "…" : "◎"}
+                  </button>
+                  {canEdit && (
+                    <button
+                      onClick={() => setShowPaddockAddMenu((v) => !v)}
+                      className="bg-red-900 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-2xl font-bold"
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              )}
+              {showPaddockAddMenu && !mapDrawMode && (
+                <div className="absolute right-16 bottom-3 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-20 w-48">
+                  {[
+                    { label: "Add Paddock", action: () => { setNewPaddockForm({ landUse: "Grazing", pasture: "Native grass", colour: "Sky Blue" }); setShowAddPaddock(true); setShowPaddockAddMenu(false); } },
+                    { label: "✏️ Draw Paddock", action: () => { setDrawPoints([]); setMapDrawMode(true); setShowPaddockAddMenu(false); } },
+                    { label: "⬆ Import GeoJSON", action: () => { fileInputRef.current?.click(); setShowPaddockAddMenu(false); } },
+                    { label: "📍 Add Landmark", action: () => { setLandmarkCategoryPick(null); setNewLandmarkForm({}); setLandmarkPinPos(null); setShowAddLandmark(true); setShowPaddockAddMenu(false); } },
+                  ].map(({ label, action }) => (
+                    <button key={label} onClick={action} className="w-full text-left px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50 border-b border-slate-100 last:border-0">
+                      {label}
+                    </button>
+                  ))}
+                  <button onClick={() => setShowPaddockAddMenu(false)} className="w-full text-center px-4 py-2 text-xs text-slate-400">Cancel</button>
+                </div>
               )}
               {!googleMapsKey && isAdmin && !mapDrawMode && (
-                <button onClick={() => setShowSettings(true)} className="absolute top-2 right-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full">
+                <button onClick={() => setShowSettings(true)} className="absolute top-2 left-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full">
                   Maps key status
                 </button>
               )}
@@ -1491,7 +1699,7 @@ export default function App() {
                         <span className="w-3 h-3 rounded-full" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#999" }} />
                         <span className="font-bold text-slate-800">{p.name}</span>
                       </div>
-                      <span className="text-sm font-bold text-slate-700">{p.ha} ha</span>
+                      <span className="text-sm font-bold text-slate-700">{Number(p.ha||0).toFixed(1)} ha</span>
                     </div>
                     <div className="text-xs text-slate-400">{p.landUse} · {p.pasture}</div>
                     <div className="flex gap-4 mt-2 text-xs font-semibold flex-wrap">
@@ -1654,16 +1862,56 @@ export default function App() {
               <div className="space-y-3 mb-4">
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Name</label>
-                  <input value={newLandmarkForm.name || ""} onChange={(e) => setNewLandmarkForm((p) => ({ ...p, name: e.target.value }))} placeholder={`e.g. ${newLandmarkForm.type}`} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  <input
+                    value={newLandmarkForm.name || ""}
+                    onChange={(e) => setNewLandmarkForm((p) => ({ ...p, name: e.target.value }))}
+                    placeholder={newLandmarkForm.type === "Gate" && newLandmarkForm.paddockA && newLandmarkForm.paddockB
+                      ? `Gate between ${newLandmarkForm.paddockA} and ${newLandmarkForm.paddockB}`
+                      : `e.g. ${newLandmarkForm.type}`}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
+                  />
                 </div>
-                <div>
-                  <label className="text-sm font-semibold text-slate-600 block mb-1">Paddock / location</label>
-                  <select value={newLandmarkForm.paddock || ""} onChange={(e) => setNewLandmarkForm((p) => ({ ...p, paddock: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
-                    <option value="">Not paddock-specific</option>
-                    {paddocks.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
-                  </select>
-                  <p className="text-xs text-slate-400 mt-1">Placed at the centre of the selected paddock. Drag-to-place coming once on a deployed map.</p>
-                </div>
+
+                {newLandmarkForm.type === "Gate" ? (
+                  <div className="bg-amber-50 rounded-2xl p-3 space-y-2">
+                    <div className="text-xs font-bold text-amber-700 uppercase tracking-wide">Gate connects two paddocks</div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="text-xs font-semibold text-slate-600 block mb-1">Paddock A</label>
+                        <select value={newLandmarkForm.paddockA || ""} onChange={(e) => {
+                          const val = e.target.value;
+                          const auto = val && newLandmarkForm.paddockB ? `Gate between ${val} and ${newLandmarkForm.paddockB}` : "";
+                          setNewLandmarkForm((p) => ({ ...p, paddockA: val, paddock: val, name: p.name || auto }));
+                        }} className="w-full border border-slate-200 rounded-xl px-2 py-2 bg-white text-sm">
+                          <option value="">Select...</option>
+                          {[...paddocks].sort((a,b)=>a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex-1">
+                        <label className="text-xs font-semibold text-slate-600 block mb-1">Paddock B</label>
+                        <select value={newLandmarkForm.paddockB || ""} onChange={(e) => {
+                          const val = e.target.value;
+                          const auto = newLandmarkForm.paddockA && val ? `Gate between ${newLandmarkForm.paddockA} and ${val}` : "";
+                          setNewLandmarkForm((p) => ({ ...p, paddockB: val, name: p.name || auto }));
+                        }} className="w-full border border-slate-200 rounded-xl px-2 py-2 bg-white text-sm">
+                          <option value="">Select...</option>
+                          {[...paddocks].sort((a,b)=>a.name.localeCompare(b.name)).filter(p=>p.name!==newLandmarkForm.paddockA).map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-400">When you open this gate in its detail view, the two paddocks merge visually with a yellow border and their DSE/ha is combined.</p>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-sm font-semibold text-slate-600 block mb-1">Paddock / location</label>
+                    <select value={newLandmarkForm.paddock || ""} onChange={(e) => setNewLandmarkForm((p) => ({ ...p, paddock: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                      <option value="">Not paddock-specific</option>
+                      {paddocks.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                    </select>
+                    <p className="text-xs text-slate-400 mt-1">Placed at the centre of the selected paddock on the map.</p>
+                  </div>
+                )}
+
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Colour</label>
                   <select value={newLandmarkForm.colour || "Sky Blue"} onChange={(e) => setNewLandmarkForm((p) => ({ ...p, colour: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
@@ -1675,19 +1923,59 @@ export default function App() {
                   <textarea value={newLandmarkForm.notes || ""} onChange={(e) => setNewLandmarkForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Any additional details..." rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2.5" />
                 </div>
               </div>
+
+              {/* Pin placement map */}
+              <div className="mb-3">
+                <div className="text-sm font-bold text-slate-700 mb-1">Pin location on map</div>
+                <p className="text-xs text-slate-400 mb-2">Drag the 📍 pin to exactly where this landmark sits.</p>
+                <div className="rounded-2xl overflow-hidden border border-slate-200" style={{ height: "200px" }}>
+                  {googleMapsKey && !mapLoadError ? (
+                    <GooglePaddockMap
+                      paddocks={paddocks}
+                      center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
+                      onSelect={() => {}}
+                      apiKey={googleMapsKey}
+                      onError={() => setMapLoadError(true)}
+                      mode="paddocks"
+                      insightMode="outline"
+                      paddockStats={{}}
+                      landmarks={[]}
+                      landmarkPinMode={true}
+                      landmarkPinPos={landmarkPinPos}
+                      onLandmarkPinMoved={(lat, lng) => setLandmarkPinPos({ lat, lng })}
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-slate-700 flex items-center justify-center text-white text-xs text-center p-2">
+                      {landmarkPinPos
+                        ? `📍 Pinned at ${landmarkPinPos.lat.toFixed(5)}, ${landmarkPinPos.lng.toFixed(5)}`
+                        : "Add a Google Maps key (Settings) to place the pin accurately. Will default to farm centre."}
+                    </div>
+                  )}
+                </div>
+                {landmarkPinPos && (
+                  <div className="text-xs text-amber-600 font-semibold mt-1">
+                    📍 {landmarkPinPos.lat.toFixed(5)}, {landmarkPinPos.lng.toFixed(5)}
+                    <button onClick={() => setLandmarkPinPos(null)} className="ml-2 text-slate-400">Reset</button>
+                  </div>
+                )}
+              </div>
+
               <button
                 onClick={async () => {
-                  const center = FARM_CENTERS[farmName] || FARM_CENTERS.Arundale;
-                  let lat = center[0], lng = center[1];
-                  const targetPaddock = paddocks.find((p) => p.name === newLandmarkForm.paddock);
-                  if (targetPaddock) {
-                    const latlngs = geometryToLatLngs(targetPaddock.geojson) || fallbackPolygon(center, paddocks.indexOf(targetPaddock), targetPaddock.ha || 10);
-                    lat = latlngs.reduce((s, p) => s + p[0], 0) / latlngs.length;
-                    lng = latlngs.reduce((s, p) => s + p[1], 0) / latlngs.length;
-                  } else {
-                    // scatter randomly near farm centre if not tied to a paddock
-                    lat += (Math.random() - 0.5) * 0.01;
-                    lng += (Math.random() - 0.5) * 0.01;
+                  const farmCenter = FARM_CENTERS[farmName] || FARM_CENTERS.Arundale;
+                  // Use dragged pin position if available, else paddock centroid or random offset
+                  let lat = landmarkPinPos?.lat ?? farmCenter[0];
+                  let lng = landmarkPinPos?.lng ?? farmCenter[1];
+                  if (!landmarkPinPos) {
+                    const targetPaddock = paddocks.find((p) => p.name === newLandmarkForm.paddock);
+                    if (targetPaddock) {
+                      const latlngs = geometryToLatLngs(targetPaddock.geojson) || fallbackPolygon(farmCenter, paddocks.indexOf(targetPaddock), Number(targetPaddock.ha) || 10);
+                      lat = latlngs.reduce((s, p) => s + p[0], 0) / latlngs.length;
+                      lng = latlngs.reduce((s, p) => s + p[1], 0) / latlngs.length;
+                    } else {
+                      lat += (Math.random() - 0.5) * 0.01;
+                      lng += (Math.random() - 0.5) * 0.01;
+                    }
                   }
                   try {
                     const created = await api.createLandmark(farmName, { ...newLandmarkForm, lat, lng });
@@ -1695,6 +1983,8 @@ export default function App() {
                     setShowAddLandmark(false);
                     setLandmarkCategoryPick(null);
                     setNewLandmarkForm({});
+                    setLandmarkPinPos(null);
+                    setLandmarkPinMode(false);
                     markChanged();
                     showToast("Landmark added");
                   } catch (err) {
@@ -1765,6 +2055,37 @@ export default function App() {
               {landmarkDetail.notes && <p className="text-sm text-slate-600 mb-4">{landmarkDetail.notes}</p>}
               {canEdit && (
                 <div className="space-y-2">
+                  {landmarkDetail.type === "Gate" && landmarkDetail.paddockA && landmarkDetail.paddockB && (() => {
+                    const gateKey = `${landmarkDetail.id}`;
+                    const isOpen = openGates.includes(gateKey);
+                    const paddockAData = paddocks.find(p => p.name === landmarkDetail.paddockA);
+                    const paddockBData = paddocks.find(p => p.name === landmarkDetail.paddockB);
+                    const combinedHa = (Number(paddockAData?.ha||0) + Number(paddockBData?.ha||0)).toFixed(1);
+                    const mobsInA = mobs.filter(m => m.paddock === landmarkDetail.paddockA);
+                    const mobsInB = mobs.filter(m => m.paddock === landmarkDetail.paddockB);
+                    const combinedDSE = [...mobsInA, ...mobsInB].reduce((s,m) => s + m.count*(m.dse||0), 0);
+                    const combinedDsePerHa = Number(combinedHa) > 0 ? (combinedDSE / Number(combinedHa)).toFixed(2) : "0.00";
+                    return (
+                      <div className="mb-3">
+                        <button
+                          onClick={() => {
+                            setOpenGates(prev => isOpen ? prev.filter(g => g !== gateKey) : [...prev, gateKey]);
+                            showToast(isOpen ? `Gate closed — paddocks separated` : `Gate opened — ${landmarkDetail.paddockA} and ${landmarkDetail.paddockB} merged`);
+                          }}
+                          className={`w-full rounded-2xl py-3 font-bold text-sm mb-2 ${isOpen ? "bg-yellow-400 text-yellow-900" : "bg-slate-100 text-slate-700"}`}
+                        >
+                          {isOpen ? "🟡 Gate OPEN — tap to close" : "🔘 Gate CLOSED — tap to open"}
+                        </button>
+                        {isOpen && (
+                          <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-3 text-sm">
+                            <div className="font-bold text-yellow-800 mb-1">Combined paddock stats</div>
+                            <div className="text-yellow-700">{landmarkDetail.paddockA} + {landmarkDetail.paddockB} · {combinedHa} ha combined</div>
+                            <div className="font-extrabold text-yellow-900 text-lg mt-1">{combinedDsePerHa} DSE/ha</div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <button onClick={() => setLandmarkEditMode(true)} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">Edit Details</button>
                   <button
                     onClick={async () => {
@@ -1865,7 +2186,7 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
                 <div className="text-xs text-slate-400 font-semibold">TOTAL AREA</div>
-                <div className="text-2xl font-extrabold text-slate-800 mt-1">{paddockDetail.ha} ha</div>
+                <div className="text-2xl font-extrabold text-slate-800 mt-1">{Number(paddockDetail.ha||0).toFixed(1)} ha</div>
               </div>
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
                 <div className="text-xs text-slate-400 font-semibold">HEAD COUNT</div>
@@ -1912,20 +2233,18 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    setShowSprayForm(true);
-                    setSprayFormPaddock(paddockDetail);
-                    setSprayForm({
-                      location: paddockDetail.name,
-                      areaTreated: String(paddockDetail.ha || ""),
-                      treatmentDate: new Date().toISOString().split("T")[0],
-                    });
+                    // Pre-select this paddock but allow adding more
+                    setSpraySelectedPaddocks([paddockDetail.name]);
+                    setSprayFormPaddock(null);
+                    setSprayForm({ treatmentDate: todayStr(), areaTreated: String(Number(paddockDetail.ha||0).toFixed(1)) });
+                    setShowBulkSpray(true);
                   }}
                   className="w-full flex items-center gap-3 bg-amber-500 text-white rounded-2xl px-4 py-3 font-bold text-sm"
                 >
                   <span className="text-lg">🌿</span>
                   <div className="text-left">
                     <div>Log Spray Treatment</div>
-                    <div className="text-xs font-normal opacity-80">Chemical, rate, method, WHP/ESI, batch</div>
+                    <div className="text-xs font-normal opacity-80">Chemical, rate, method, WHP/ESI, batch — single or multiple paddocks</div>
                   </div>
                 </button>
                 {canEdit && (
@@ -2125,8 +2444,631 @@ export default function App() {
           </button>
         </Modal>
       )}
+
+      {/* ── Bulk Spray Modal ── */}
+      {showBulkSpray && (
+        <Modal title="Log Spray Treatment" onClose={() => { setShowBulkSpray(false); setSprayForm({}); setSpraySelectedPaddocks([]); }}>
+          <div className="mb-3">
+            <div className="text-sm font-bold text-slate-700 mb-2">Paddocks to spray (alphabetical)</div>
+            <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-2xl divide-y divide-slate-100">
+              {[...paddocks].sort((a,b) => a.name.localeCompare(b.name)).map((p) => {
+                const selected = spraySelectedPaddocks.includes(p.name);
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => setSpraySelectedPaddocks((prev) =>
+                      selected ? prev.filter((n) => n !== p.name) : [...prev, p.name]
+                    )}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left ${selected ? "bg-amber-50" : "bg-white"}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`w-4 h-4 rounded border-2 flex items-center justify-center text-xs ${selected ? "bg-amber-500 border-amber-500 text-white" : "border-slate-300"}`}>
+                        {selected ? "✓" : ""}
+                      </span>
+                      <span className="font-medium text-slate-700">{p.name}</span>
+                    </div>
+                    <span className="text-slate-400 text-xs">{Number(p.ha||0).toFixed(1)} ha</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="text-xs text-amber-600 font-semibold mt-1">
+              {spraySelectedPaddocks.length} selected · {spraySelectedPaddocks.reduce((s,n) => {
+                const p = paddocks.find(p=>p.name===n);
+                return s + Number(p?.ha||0);
+              }, 0).toFixed(1)} ha total
+            </div>
+          </div>
+          <div className="space-y-3 mb-4">
+            {[
+              { key: "treatmentDate", label: "Treatment date *", type: "date" },
+              { key: "title", label: "Chemical name *", type: "text", placeholder: "e.g. RoundUp" },
+              { key: "quantity", label: "Quantity used", type: "text", placeholder: "e.g. 5L in 100L water" },
+              { key: "applicationRate", label: "Application rate", type: "text", placeholder: "e.g. 2L/ha" },
+            ].map((f) => (
+              <div key={f.key}>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">{f.label}</label>
+                <input type={f.type} value={sprayForm[f.key] || ""}
+                  onChange={(e) => setSprayForm((p) => ({ ...p, [f.key]: e.target.value }))}
+                  placeholder={f.placeholder}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+            ))}
+            <div>
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Application method</label>
+              <select value={sprayForm.applicationMethod || ""} onChange={(e) => setSprayForm((p) => ({ ...p, applicationMethod: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                <option value="">Select...</option>
+                {["Boom spray", "Spot spray", "Aerial", "Drench", "Granules", "Other"].map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            {[
+              { key: "whp", label: "WHP (days)", placeholder: "e.g. 14" },
+              { key: "esi", label: "ESI (days)", placeholder: "e.g. 7" },
+              { key: "batchNumber", label: "Batch number", placeholder: "e.g. RU2026A" },
+            ].map((f) => (
+              <div key={f.key}>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">{f.label}</label>
+                <input type="text" value={sprayForm[f.key] || ""} onChange={(e) => setSprayForm((p) => ({ ...p, [f.key]: e.target.value }))} placeholder={f.placeholder} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={async () => {
+              if (!sprayForm.title || !sprayForm.treatmentDate) { showToast("Please enter a chemical name and date"); return; }
+              if (spraySelectedPaddocks.length === 0) { showToast("Select at least one paddock"); return; }
+              const totalHa = spraySelectedPaddocks.reduce((s,n) => {
+                const p = paddocks.find(p=>p.name===n);
+                return s + Number(p?.ha||0);
+              }, 0);
+              const fields = {
+                ...sprayForm,
+                location: spraySelectedPaddocks.join(", "),
+                areaTreated: String(totalHa.toFixed(1)),
+              };
+              try {
+                const created = await api.addSprayInventory(farmName, fields);
+                setSprayInventory((prev) => [...prev, created]);
+                setShowBulkSpray(false);
+                setSprayForm({});
+                setSpraySelectedPaddocks([]);
+                setPaddockDetail(null);
+                markChanged();
+                showToast(`Spray recorded for ${spraySelectedPaddocks.length} paddock${spraySelectedPaddocks.length > 1 ? "s" : ""}`);
+              } catch (err) {
+                showToast(err.message || "Couldn't save to the server");
+              }
+            }}
+            className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold"
+          >
+            Save Spray Record
+          </button>
+        </Modal>
+      )}
     </div>
   );
+
+  // ── Workflow Screen — embeds the workflow HTML via iframe ─────────────────
+  // Passes the JWT token to the iframe via postMessage so it can call our API
+  const WorkflowScreen = () => {
+    const iframeRef = React.useRef(null);
+    const apiUrl = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) || "http://localhost:3001/api";
+    const apiBase = apiUrl.replace(/\/api$/, "");
+
+    React.useEffect(() => {
+      const iframe = iframeRef.current;
+      if (!iframe) return;
+      const sendCreds = () => {
+        iframe.contentWindow?.postMessage({
+          type: "KW_INIT",
+          apiBase,
+          token: getStoredToken() || "",
+        }, "*");
+      };
+      // Listen for the iframe saying it's ready
+      const onMsg = (e) => { if (e.data?.type === "KW_WORKFLOW_READY") sendCreds(); };
+      window.addEventListener("message", onMsg);
+      iframe.addEventListener("load", sendCreds);
+      return () => {
+        window.removeEventListener("message", onMsg);
+        iframe.removeEventListener("load", sendCreds);
+      };
+    }, [apiBase]);
+
+    return (
+      <div className="flex flex-col min-h-screen">
+        <div className="bg-amber-500 text-white px-5 py-3 flex items-center justify-between flex-shrink-0">
+          <button onClick={() => setTab("home")} className="text-white/80 text-sm flex items-center gap-1">← Home</button>
+          <span className="font-bold">📋 Weekly Workflow</span>
+          <div className="w-16" />
+        </div>
+        <iframe
+          ref={iframeRef}
+          src={`${apiBase}/workflow.html`}
+          title="Weekly Workflow Planner"
+          className="flex-1 w-full border-0"
+          style={{ height: "calc(100vh - 52px)", minHeight: 600 }}
+        />
+      </div>
+    );
+  };
+
+  // ── Cattle Feeding Screen ─────────────────────────────────────────────────
+  const CattleFeedingScreen = () => {
+    const [cattleTab, setCattleTab] = React.useState("loads"); // loads | details | manage
+    const [loads, setLoads] = React.useState([]);
+    const [mobs, setMobs] = React.useState([]);
+    const [assignments, setAssignments] = React.useState([]);
+    const [elements, setElements] = React.useState([]);
+    const [classes, setClasses] = React.useState([]);
+    const [recipes, setRecipes] = React.useState([]);
+    const [selectedLoad, setSelectedLoad] = React.useState(null);
+    const [feederName, setFeederName] = React.useState(() => localStorage.getItem("kw_feeder") || "");
+    const [loading, setLoading] = React.useState(true);
+    const [showAddLoad, setShowAddLoad] = React.useState(false);
+    const [showAddMobForm, setShowAddMobForm] = React.useState(false);
+    const [newLoadName, setNewLoadName] = React.useState("");
+    const [newMobForm, setNewMobForm] = React.useState({});
+    const [manageTab, setManageTab] = React.useState("elements");
+
+    React.useEffect(() => {
+      setLoading(true);
+      Promise.all([
+        api.getCattleLoads(), api.getCattleMobs(), api.getCattleAssignments(),
+        api.getCattleElements(), api.getCattleClasses(), api.getCattleRecipes(),
+      ]).then(([l, m, a, e, c, r]) => {
+        setLoads(l); setMobs(m); setAssignments(a);
+        setElements(e); setClasses(c); setRecipes(r);
+        setLoading(false);
+      }).catch(() => setLoading(false));
+    }, []);
+
+    const totalOnFeed = mobs.filter(m => assignments.some(a => a.mobName === m.name))
+      .reduce((s, m) => s + m.headCount, 0);
+
+    const getMobsForLoad = (loadName) => {
+      const assigned = assignments.filter(a => a.loadName === loadName);
+      return assigned.map(a => ({ ...a, mob: mobs.find(m => m.name === a.mobName) })).filter(a => a.mob);
+    };
+
+    const getLoadIngredients = (loadName) => {
+      const loadMobs = getMobsForLoad(loadName);
+      const totals = {};
+      loadMobs.forEach(({ mob, multiplier }) => {
+        const classRecipes = recipes.filter(r => r.className === mob.className);
+        classRecipes.forEach(r => {
+          const kg = mob.headCount * Number(r.rate) * Number(mob.feedMultiplier) * Number(multiplier || 1);
+          totals[r.elementName] = (totals[r.elementName] || 0) + kg;
+        });
+      });
+      return Object.entries(totals).map(([name, kg]) => ({ name, kg }));
+    };
+
+    if (loading) return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-slate-400">Loading Cattle Feeding System...</div>
+      </div>
+    );
+
+    // Load detail view
+    if (selectedLoad) {
+      const ingredients = getLoadIngredients(selectedLoad.name);
+      const loadMobs = getMobsForLoad(selectedLoad.name);
+      const totalKg = ingredients.reduce((s, i) => s + i.kg, 0);
+      return (
+        <div className="pb-24 bg-slate-50 min-h-screen">
+          <div className="bg-red-950 text-white px-5 py-4 flex items-center gap-3">
+            <button onClick={() => setSelectedLoad(null)} className="text-white/70">← Back</button>
+            <h1 className="text-lg font-bold flex-1">{selectedLoad.name}</h1>
+          </div>
+          <div className="p-4 space-y-3">
+            {feederName === "" && (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
+                <label className="text-xs font-bold text-amber-700 block mb-1">YOUR NAME (for records)</label>
+                <input value={feederName} onChange={e => { setFeederName(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
+                  placeholder="Enter your name" className="w-full border border-amber-200 rounded-xl px-3 py-2 bg-white text-sm" />
+              </div>
+            )}
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+              <div className="text-xs font-bold text-slate-400 uppercase mb-3">Mixer Wagon Load — {feederName || "Set your name above"}</div>
+              {ingredients.length === 0 ? (
+                <div className="text-slate-400 text-sm text-center py-4">No recipes configured for the mobs in this load.</div>
+              ) : ingredients.map(({ name, kg }) => (
+                <div key={name} className="flex justify-between items-center py-2.5 border-b border-slate-100 last:border-0">
+                  <span className="font-semibold text-slate-700">{name}</span>
+                  <span className="font-extrabold text-red-950 text-lg">{kg.toFixed(0)} kg</span>
+                </div>
+              ))}
+              {ingredients.length > 0 && (
+                <div className="flex justify-between items-center pt-3 mt-1 border-t-2 border-slate-200">
+                  <span className="font-bold text-slate-600">TOTAL</span>
+                  <span className="font-extrabold text-2xl text-red-950">{totalKg.toFixed(0)} kg</span>
+                </div>
+              )}
+            </div>
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+              <div className="text-xs font-bold text-slate-400 uppercase mb-2">Mobs in this load</div>
+              {loadMobs.map(({ mob, id }) => (
+                <div key={id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                  <div>
+                    <div className="font-semibold text-slate-700 text-sm">{mob.name}</div>
+                    <div className="text-xs text-slate-400">{mob.className} · {mob.paddock}</div>
+                  </div>
+                  <div className="font-bold text-slate-600">{mob.headCount} head</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Management view
+    if (cattleTab === "manage") {
+      return (
+        <div className="pb-24 bg-slate-50 min-h-screen">
+          <div className="bg-red-950 text-white px-5 py-4 flex items-center gap-3">
+            <button onClick={() => setCattleTab("loads")} className="text-white/70">← Back</button>
+            <h1 className="text-lg font-bold flex-1">Cattle Management</h1>
+          </div>
+          <div className="flex gap-1 px-4 pt-4 pb-2 overflow-x-auto">
+            {["elements","classes","mobs","loads"].map(t => (
+              <button key={t} onClick={() => setManageTab(t)}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold flex-shrink-0 ${manageTab===t ? "bg-red-950 text-white" : "bg-white text-slate-600 border border-slate-200"}`}>
+                {t.charAt(0).toUpperCase()+t.slice(1)}
+              </button>
+            ))}
+          </div>
+          <div className="p-4 space-y-3">
+            {manageTab === "elements" && (
+              <>
+                {elements.map(e => (
+                  <div key={e.id} className="bg-white rounded-2xl p-4 border border-slate-100 flex justify-between items-center">
+                    <div>
+                      <div className="font-bold text-slate-700">{e.name}</div>
+                      <div className="text-xs text-slate-400">{e.unit} · Default: {e.defaultRate} · {e.costPerUnit} {e.costUnit}</div>
+                    </div>
+                    <button onClick={async () => { await api.deleteCattleElement(e.id); setElements(prev => prev.filter(x => x.id !== e.id)); }} className="text-rose-400 text-xs font-bold px-3 py-1 bg-rose-50 rounded-full">Remove</button>
+                  </div>
+                ))}
+                <div className="bg-white rounded-2xl p-4 border border-slate-100">
+                  <div className="text-xs font-bold text-slate-500 mb-2">Add Element</div>
+                  {[["Name","name","text"],["Unit (kg/head or L/head)","unit","text"],["Default rate","defaultRate","number"],["Cost per unit","costPerUnit","number"]].map(([label,key,type]) => (
+                    <div key={key} className="mb-2">
+                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                      <input type={type} value={newMobForm[key]||""} onChange={e => setNewMobForm(p=>({...p,[key]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                    </div>
+                  ))}
+                  <button onClick={async () => {
+                    const created = await api.createCattleElement({ name: newMobForm.name||"New Element", unit: newMobForm.unit||"kg/head", defaultRate: Number(newMobForm.defaultRate)||0, costPerUnit: Number(newMobForm.costPerUnit)||0, costUnit: "$/tonne" });
+                    setElements(prev => [...prev, created]); setNewMobForm({});
+                  }} className="w-full bg-red-900 text-white rounded-2xl py-2.5 font-bold text-sm mt-2">Add Element</button>
+                </div>
+              </>
+            )}
+            {manageTab === "classes" && (
+              <>
+                {classes.map(c => (
+                  <div key={c.id} className="bg-white rounded-2xl p-4 border border-slate-100 flex justify-between items-center">
+                    <span className="font-bold text-slate-700">{c.name}</span>
+                    <button onClick={async () => { await api.deleteCattleClass(c.id); setClasses(prev => prev.filter(x => x.id !== c.id)); }} className="text-rose-400 text-xs font-bold px-3 py-1 bg-rose-50 rounded-full">Remove</button>
+                  </div>
+                ))}
+                <div className="bg-white rounded-2xl p-4 border border-slate-100 flex gap-2">
+                  <input value={newMobForm.className||""} onChange={e => setNewMobForm(p=>({...p,className:e.target.value}))} placeholder="Class name e.g. Spring U Bulls" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                  <button onClick={async () => {
+                    const created = await api.createCattleClass({ name: newMobForm.className });
+                    setClasses(prev => [...prev, created]); setNewMobForm({});
+                  }} className="bg-red-900 text-white rounded-xl px-4 font-bold text-sm">Add</button>
+                </div>
+              </>
+            )}
+            {manageTab === "mobs" && (
+              <>
+                {mobs.map(m => (
+                  <div key={m.id} className="bg-white rounded-2xl p-4 border border-slate-100">
+                    <div className="flex justify-between">
+                      <div className="font-bold text-slate-700">{m.name}</div>
+                      <button onClick={async () => { await api.deleteCattleMob(m.id); setMobs(prev => prev.filter(x => x.id !== m.id)); }} className="text-rose-400 text-xs font-bold">Remove</button>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">{m.className} · {m.paddock} · {m.headCount} head</div>
+                  </div>
+                ))}
+                <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2">
+                  <div className="text-xs font-bold text-slate-500 mb-1">Add Mob</div>
+                  {[["Mob name","mobName"],["Paddock","mobPaddock"],["Head count","mobHead"]].map(([label,key]) => (
+                    <div key={key}>
+                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                      <input value={newMobForm[key]||""} onChange={e => setNewMobForm(p=>({...p,[key]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                    </div>
+                  ))}
+                  <div>
+                    <label className="text-xs text-slate-400 font-semibold block mb-1">Class</label>
+                    <select value={newMobForm.mobClass||""} onChange={e => setNewMobForm(p=>({...p,mobClass:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white">
+                      <option value="">Select class...</option>
+                      {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <button onClick={async () => {
+                    const created = await api.createCattleMob({ name: newMobForm.mobName, className: newMobForm.mobClass||"", paddock: newMobForm.mobPaddock||"", headCount: Number(newMobForm.mobHead)||0 });
+                    setMobs(prev => [...prev, created]); setNewMobForm({});
+                  }} className="w-full bg-red-900 text-white rounded-2xl py-2.5 font-bold text-sm">Add Mob</button>
+                </div>
+              </>
+            )}
+            {manageTab === "loads" && (
+              <>
+                {loads.map(l => {
+                  const loadMobNames = assignments.filter(a => a.loadName === l.name);
+                  return (
+                    <div key={l.id} className="bg-white rounded-2xl p-4 border border-slate-100">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-bold text-slate-700">{l.name}</div>
+                          <div className="text-xs text-slate-400 mt-1">{loadMobNames.length} mob{loadMobNames.length!==1?"s":""} assigned</div>
+                        </div>
+                        <button onClick={async () => { await api.deleteCattleLoad(l.id); setLoads(prev=>prev.filter(x=>x.id!==l.id)); }} className="text-rose-400 text-xs font-bold">Remove</button>
+                      </div>
+                      <div className="mt-3">
+                        <label className="text-xs font-semibold text-slate-500 block mb-1">Assign a mob to this load</label>
+                        <div className="flex gap-2">
+                          <select value={newMobForm[`assign_${l.name}`]||""} onChange={e => setNewMobForm(p=>({...p,[`assign_${l.name}`]:e.target.value}))} className="flex-1 border border-slate-200 rounded-xl px-2 py-2 text-sm bg-white">
+                            <option value="">Select mob...</option>
+                            {mobs.map(m => <option key={m.id} value={m.name}>{m.name} ({m.headCount})</option>)}
+                          </select>
+                          <button onClick={async () => {
+                            if (!newMobForm[`assign_${l.name}`]) return;
+                            const created = await api.createCattleAssignment({ loadName: l.name, mobName: newMobForm[`assign_${l.name}`], multiplier: 1 });
+                            setAssignments(prev => [...prev, created]); setNewMobForm(p=>({...p,[`assign_${l.name}`]:""}));
+                          }} className="bg-red-900 text-white rounded-xl px-3 font-bold text-sm">Add</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="bg-white rounded-2xl p-4 border border-slate-100 flex gap-2">
+                  <input value={newLoadName} onChange={e => setNewLoadName(e.target.value)} placeholder="Load name e.g. Load 1" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                  <button onClick={async () => {
+                    if (!newLoadName.trim()) return;
+                    const created = await api.createCattleLoad({ name: newLoadName.trim() });
+                    setLoads(prev => [...prev, created]); setNewLoadName("");
+                  }} className="bg-red-900 text-white rounded-xl px-4 font-bold text-sm">Add</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Main loads list
+    return (
+      <div className="pb-24 bg-slate-50 min-h-screen">
+        <div className="bg-red-950 text-white px-5 pt-6 pb-8">
+          <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
+          <div className="text-3xl mb-1">🐄</div>
+          <div className="text-2xl font-extrabold">Cattle Feeding System</div>
+          <div className="text-white/70 text-sm mt-1">Mixer wagon loads & recipes</div>
+        </div>
+        <div className="px-4 -mt-4 space-y-3">
+          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+            <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Feeder name</label>
+            <input value={feederName} onChange={e => { setFeederName(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
+              placeholder="Enter your name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+          </div>
+          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex items-center justify-between">
+            <div className="text-sm font-semibold text-slate-500">Total cattle on feed</div>
+            <div className="text-3xl font-extrabold text-red-950">{totalOnFeed.toLocaleString()}</div>
+          </div>
+          {loads.length === 0 ? (
+            <div className="bg-white rounded-2xl p-6 text-center text-slate-400 text-sm border border-slate-100">
+              No loads yet. Tap Manage to set up elements, classes, mobs and loads.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-xs font-bold text-slate-400 uppercase px-1">Select a load</div>
+              {[...loads].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map(l => {
+                const count = assignments.filter(a => a.loadName === l.name && mobs.some(m => m.name === a.mobName)).length;
+                return (
+                  <button key={l.id} onClick={() => setSelectedLoad(l)} className="w-full bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center justify-between text-left">
+                    <div>
+                      <div className="font-bold text-slate-800 text-lg">{l.name}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{count} mob{count!==1?"s":""}</div>
+                    </div>
+                    <span className="text-slate-300 text-xl">›</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <button onClick={() => setCattleTab("manage")} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">⚙️ Manage Elements, Mobs & Loads</button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Sheep Feeding Screen ──────────────────────────────────────────────────
+  const SheepFeedingScreen = () => {
+    const [sheepTab, setSheepTab] = React.useState("run");
+    const [pens, setPens] = React.useState([]);
+    const [settings, setSettings] = React.useState({ splitAm: 0.6, splitPm: 0.4 });
+    const [history, setHistory] = React.useState([]);
+    const [loading, setLoading] = React.useState(true);
+    const [runPeriod, setRunPeriod] = React.useState("AM");
+    const [feeder, setFeeder] = React.useState(() => localStorage.getItem("kw_feeder") || "");
+    const [showAddPen, setShowAddPen] = React.useState(false);
+    const [newPenForm, setNewPenForm] = React.useState({});
+
+    React.useEffect(() => {
+      setLoading(true);
+      Promise.all([api.getSheepPens(), api.getSheepSettings(), api.getSheepHistory()])
+        .then(([p, s, h]) => { setPens(p); setSettings(s || {}); setHistory(h); setLoading(false); })
+        .catch(() => setLoading(false));
+    }, []);
+
+    const totalHead = pens.filter(p => p.active).reduce((s, p) => s + p.headCount, 0);
+    const totalKg = pens.filter(p => p.active).reduce((s, p) => {
+      const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
+      return s + p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 * split;
+    }, 0);
+
+    const savePens = async (updated) => {
+      setPens(updated);
+      await api.saveSheepPens(updated);
+    };
+
+    if (loading) return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-slate-400">Loading Sheep Feeding System...</div>
+      </div>
+    );
+
+    return (
+      <div className="pb-24 bg-slate-50 min-h-screen">
+        <div className="bg-slate-800 text-white px-5 pt-6 pb-8">
+          <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
+          <div className="text-3xl mb-1">🐑</div>
+          <div className="text-2xl font-extrabold">Sheep Feeding System</div>
+          <div className="text-white/70 text-sm mt-1">Pen feed runs & grain rosters</div>
+        </div>
+        <div className="flex gap-1 px-4 -mt-4 mb-3 overflow-x-auto">
+          {[{id:"run",label:"🏃 Feed Run"},{id:"pens",label:"🐑 Pens"},{id:"history",label:"📋 History"}].map(t => (
+            <button key={t.id} onClick={() => setSheepTab(t.id)}
+              className={`px-4 py-2 rounded-2xl text-sm font-bold flex-shrink-0 shadow-sm ${sheepTab===t.id ? "bg-slate-800 text-white" : "bg-white text-slate-600 border border-slate-200"}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="px-4 space-y-3">
+          {sheepTab === "run" && (
+            <>
+              <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-xs font-bold text-slate-400 uppercase">Feeder</label>
+                  <div className="flex gap-1">
+                    {["AM","PM"].map(p => (
+                      <button key={p} onClick={() => setRunPeriod(p)}
+                        className={`px-4 py-1.5 rounded-full text-xs font-bold ${runPeriod===p ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600"}`}>
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input value={feeder} onChange={e => { setFeeder(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
+                  placeholder="Your name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm mb-3" />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-50 rounded-xl p-3 text-center">
+                    <div className="text-xs text-slate-400 font-semibold">Total Head</div>
+                    <div className="text-2xl font-extrabold text-slate-800">{totalHead.toLocaleString()}</div>
+                  </div>
+                  <div className="bg-slate-50 rounded-xl p-3 text-center">
+                    <div className="text-xs text-slate-400 font-semibold">Total kg ({runPeriod})</div>
+                    <div className="text-2xl font-extrabold text-slate-800">{totalKg.toFixed(0)}</div>
+                  </div>
+                </div>
+              </div>
+              {pens.filter(p => p.active).map((pen) => {
+                const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
+                const kg = pen.headCount * Number(pen.kgPerHead||0) * (pen.rationPercent||100)/100 * split;
+                return (
+                  <div key={pen.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-800">{pen.name}</div>
+                        <div className="text-xs text-slate-400">{pen.ration} · {pen.headCount} head · {pen.kgPerHead} kg/head</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-extrabold text-slate-800">{kg.toFixed(0)}</div>
+                        <div className="text-xs text-slate-400">kg</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {pens.filter(p=>p.active).length > 0 && (
+                <button onClick={async () => {
+                  const entry = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), feeder, period: runPeriod, splitFraction: runPeriod==="AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4), events: pens.filter(p=>p.active).map(p=>({ penId: p.id, penName: p.name, kg: p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 })) };
+                  const created = await api.addSheepHistory(entry);
+                  setHistory(prev => [created, ...prev]);
+                  showToast("Feed run recorded ✓");
+                }} className="w-full bg-slate-800 text-white rounded-2xl py-3.5 font-bold">
+                  ✓ Record Feed Run
+                </button>
+              )}
+            </>
+          )}
+          {sheepTab === "pens" && (
+            <>
+              {pens.map((pen, i) => (
+                <div key={pen.id} className={`bg-white rounded-2xl p-4 border shadow-sm ${pen.active ? "border-slate-100" : "border-slate-200 opacity-60"}`}>
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="font-bold text-slate-800">{pen.name}</div>
+                    <button onClick={() => { const updated = pens.map((p,j)=>j===i?{...p,active:!p.active}:p); savePens(updated); }}
+                      className={`text-xs font-bold px-2.5 py-1 rounded-full ${pen.active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                      {pen.active ? "Active" : "Inactive"}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[["Head",pen.headCount,"headCount"],["kg/head",pen.kgPerHead,"kgPerHead"],["Ration %",pen.rationPercent,"rationPercent"]].map(([label,val,key]) => (
+                      <div key={key}>
+                        <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                        <input type="number" value={val} onChange={e => {
+                          const updated = pens.map((p,j)=>j===i?{...p,[key]:Number(e.target.value)}:p);
+                          savePens(updated);
+                        }} className="w-full border border-slate-200 rounded-xl px-2 py-2 text-sm bg-white text-center font-bold" />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2">
+                    <label className="text-xs text-slate-400 font-semibold block mb-1">Ration type</label>
+                    <input value={pen.ration} onChange={e => { const updated = pens.map((p,j)=>j===i?{...p,ration:e.target.value}:p); savePens(updated); }}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                  </div>
+                </div>
+              ))}
+              {showAddPen ? (
+                <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2">
+                  {[["Pen name","penName","text"],["Head count","penHead","number"],["kg/head","penKg","number"]].map(([label,key,type]) => (
+                    <div key={key}>
+                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                      <input type={type} value={newPenForm[key]||""} onChange={e => setNewPenForm(p=>({...p,[key]:e.target.value}))}
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                    </div>
+                  ))}
+                  <button onClick={async () => {
+                    const newPen = { id: crypto.randomUUID(), name: newPenForm.penName||"New Pen", ration: "Grower", headCount: Number(newPenForm.penHead)||0, kgPerHead: Number(newPenForm.penKg)||0, rationPercent: 100, active: true };
+                    await savePens([...pens, newPen]);
+                    setNewPenForm({}); setShowAddPen(false);
+                  }} className="w-full bg-slate-800 text-white rounded-2xl py-2.5 font-bold text-sm">Add Pen</button>
+                  <button onClick={() => setShowAddPen(false)} className="w-full text-slate-400 text-sm">Cancel</button>
+                </div>
+              ) : (
+                <button onClick={() => setShowAddPen(true)} className="w-full border-2 border-dashed border-slate-300 rounded-2xl py-3 text-slate-400 font-semibold text-sm">+ Add Pen</button>
+              )}
+            </>
+          )}
+          {sheepTab === "history" && (
+            <>
+              {history.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">No feed runs recorded yet.</div>}
+              {history.map((h) => (
+                <div key={h.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="font-bold text-slate-700">{new Date(h.startedAt).toLocaleDateString("en-AU", {weekday:"short",day:"numeric",month:"short"})}</div>
+                      <div className="text-xs text-slate-400">{h.period} · {h.feeder}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-bold text-slate-600">{Array.isArray(h.events) ? h.events.reduce((s,e)=>s+(Number(e.kg)||0),0).toFixed(0) : 0} kg</div>
+                      <div className="text-xs text-slate-400">{Array.isArray(h.events) ? h.events.length : 0} pens</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const LivestockScreen = () => (
     <div className="pb-24 bg-slate-50 min-h-screen">
@@ -2639,9 +3581,18 @@ export default function App() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 px-6">
           <div className="bg-white rounded-3xl w-full overflow-hidden shadow-2xl">
             <div className="text-center font-extrabold py-4 border-b border-slate-100 text-slate-800">Switch farm</div>
-            {["Hamilton", "Kurra-Wirra", "Mooralla"].map((f) => (
-              <button key={f} onClick={() => { setFarmName(f); setShowSwitchFarm(false); setShowMenu(false); showToast(`Switched to ${f}`); }} className="w-full text-center py-4 border-b border-slate-50 font-medium text-slate-600">
-                {f}
+            {["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"].map((f) => (
+              <button key={f} onClick={() => {
+                setFarmName(f);
+                // Clear the new farm's stale data immediately so nothing leaks in while the API re-fetches
+                setFarmsMobs((prev) => ({ ...prev, [f]: [] }));
+                setFarmsPaddocks((prev) => ({ ...prev, [f]: [] }));
+                setFarmsLandmarks((prev) => ({ ...prev, [f]: [] }));
+                setShowSwitchFarm(false);
+                setShowMenu(false);
+                showToast(`Switched to ${f}`);
+              }} className={`w-full text-center py-4 border-b border-slate-50 font-medium ${farmName === f ? "text-red-900 font-extrabold" : "text-slate-600"}`}>
+                {f}{farmName === f ? " ✓" : ""}
               </button>
             ))}
             <button onClick={() => setShowSwitchFarm(false)} className="w-full text-center py-4 font-bold text-rose-500">Cancel</button>
@@ -3146,14 +4097,59 @@ export default function App() {
     );
   }
 
+  // ── Desktop layout: sidebar nav + content panel on wide screens ──
+  const DesktopSidebar = () => (
+    <div className="hidden md:flex flex-col w-56 min-h-screen bg-red-950 text-white fixed left-0 top-0 bottom-0 z-30">
+      <div className="px-4 py-6 border-b border-red-900">
+        <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-full rounded-lg" />
+        <div className="text-xs text-white/60 mt-2 text-center">{farmName}</div>
+      </div>
+      <nav className="flex-1 p-3 space-y-1">
+        {[
+          { id: "home", icon: "🏠", label: "Home" },
+          { id: "map", icon: "🗺️", label: "Map" },
+          { id: "livestock", icon: "🐄", label: "Livestock" },
+          { id: "workflow", icon: "📋", label: "Workflow" },
+          { id: "cattle_feeding", icon: "🐄", label: "Cattle Feeding" },
+          { id: "sheep_feeding", icon: "🐑", label: "Sheep Feeding" },
+        ].map(({ id, icon, label }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors ${tab === id ? "bg-white/15 text-white" : "text-white/60 hover:bg-white/10 hover:text-white"}`}
+          >
+            <span className="text-base">{icon}</span>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-red-900">
+        <button onClick={() => setShowMenu(true)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white">
+          <span className="text-base">☰</span>
+          Menu
+          {(syncCount + pendingChanges) > 0 && (
+            <span className="ml-auto bg-rose-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{syncCount + pendingChanges}</span>
+          )}
+        </button>
+        <div className="text-xs text-white/40 px-3 pt-2">{currentUser.name} · {currentUser.role}</div>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="max-w-md mx-auto bg-white min-h-screen font-sans relative">
+    <div className="md:flex min-h-screen bg-slate-100">
+      <DesktopSidebar />
+      <div className="md:ml-56 flex-1">
+    <div className="max-w-md md:max-w-none mx-auto bg-white min-h-screen font-sans relative">
       {tab === "home" && HomeScreen()}
       {tab === "map" && MapScreen()}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
       {tab === "mobactivity" && MobActivityScreen()}
-      <BottomNav />
+      {tab === "workflow" && WorkflowScreen()}
+      {tab === "cattle_feeding" && CattleFeedingScreen()}
+      {tab === "sheep_feeding" && SheepFeedingScreen()}
+      <div className="md:hidden"><BottomNav /></div>
       {selectedMob && MobDetails()}
       {showMenu && MenuScreen()}
       {showAddMob && AddMobModal()}
@@ -3200,7 +4196,15 @@ export default function App() {
               {farmStats.map((f) => (
                 <button
                   key={f.name}
-                  onClick={() => { setFarmName(f.name); setShowAllFarms(false); showToast(`Switched to ${f.name}`); }}
+                  onClick={() => {
+                    const name = f.name;
+                    setFarmName(name);
+                    setFarmsMobs((prev) => ({ ...prev, [name]: [] }));
+                    setFarmsPaddocks((prev) => ({ ...prev, [name]: [] }));
+                    setFarmsLandmarks((prev) => ({ ...prev, [name]: [] }));
+                    setShowAllFarms(false);
+                    showToast(`Switched to ${name}`);
+                  }}
                   className={`w-full text-left p-4 rounded-2xl border ${f.name === farmName ? "border-red-700 bg-orange-50" : "border-slate-100 bg-white"} shadow-sm`}
                 >
                   <div className="flex justify-between items-center mb-1">
@@ -3386,10 +4390,12 @@ export default function App() {
       )}
 
       {toast && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm font-medium px-5 py-2.5 rounded-full z-50 max-w-[90%] text-center shadow-xl">
+        <div className="fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm font-medium px-5 py-2.5 rounded-full z-50 max-w-[90%] text-center shadow-xl">
           {toast}
         </div>
       )}
+    </div>
+    </div>
     </div>
   );
 }
