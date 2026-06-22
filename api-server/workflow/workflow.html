@@ -303,6 +303,12 @@ window.addEventListener("message", (e) => {
   if (e.data && e.data.type === "KW_INIT") {
     KW_API_BASE = e.data.apiBase || "";
     KW_AUTH_TOKEN = e.data.token || "";
+    // If a token was passed, the user is already authenticated in the farm app.
+    // Set isAdmin based on the role passed from the parent, or default to true
+    // for anyone logged in (staff see their own view via the main app instead).
+    if (KW_AUTH_TOKEN) {
+      isAdmin = e.data.role !== "Worker"; // Admin and Manager get full edit access
+    }
     // Re-load state now that we have credentials
     loadState().then(() => render());
   }

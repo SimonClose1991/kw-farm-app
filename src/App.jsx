@@ -2502,6 +2502,7 @@ export default function App() {
             type: "KW_INIT",
             apiBase: API_BASE_URL,
             token: getStoredToken() || "",
+            role: currentAccount?.role || "Worker",
           }, "*");
         } catch (e) { /* cross-origin guard */ }
       };
