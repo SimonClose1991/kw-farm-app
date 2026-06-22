@@ -286,7 +286,7 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
   };
 
   return (
-    <div className="w-full h-full bg-slate-800 overflow-auto">
+    <div className="w-full h-full bg-stone-700 overflow-auto">
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className={`w-full h-full ${drawMode ? "cursor-crosshair" : ""}`}
@@ -843,6 +843,770 @@ function InventoryForm({ values, onChange, fields = TREATMENT_FIELDS }) {
   );
 }
 
+
+function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI }) {
+  // When a farm is "entered" from the home screen, show its farm dashboard
+  const [homeFarm, setHomeFarm] = React.useState(null); // null = all-farms overview
+
+  const enterFarm = (name) => {
+    setFarmName(name);
+    setFarmsMobs((prev) => ({ ...prev, [name]: [] }));
+    setFarmsPaddocks((prev) => ({ ...prev, [name]: [] }));
+    setFarmsLandmarks((prev) => ({ ...prev, [name]: [] }));
+    setHomeFarm(name);
+  };
+
+  // Farm-specific dashboard (matches AgriWebb screenshot)
+  if (homeFarm) {
+    const fMobs = farmsMobs[homeFarm] || [];
+    const fPaddocks = farmsPaddocks[homeFarm] || [];
+    const fCattle = fMobs.filter(m => m.species === "Cattle" || m.species === "Bulls").reduce((s, m) => s + m.count, 0);
+    const fSheep = fMobs.filter(m => m.species === "Sheep" || m.species === "Rams").reduce((s, m) => s + m.count, 0);
+    const fDSE = fMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
+    const totalHa = fPaddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0);
+    const avgDseHa = totalHa > 0 ? (fDSE / totalHa).toFixed(2) : "0.00";
+    const grazedHa = fPaddocks.filter(p => p.landUse === "Grazing" || !p.landUse || p.landUse === "").reduce((s, p) => s + (Number(p.ha) || 0), 0);
+    const arableHa = fPaddocks.filter(p => p.landUse && p.landUse !== "Grazing").reduce((s, p) => s + (Number(p.ha) || 0), 0);
+
+    return (
+      <div className="pb-24 bg-stone-50 min-h-screen">
+        {/* Clean white header with maroon accent */}
+        <div className="bg-white border-b border-stone-100 px-5 pt-5 pb-4">
+          <div className="flex items-center justify-between mb-3">
+            <button onClick={() => setHomeFarm(null)} className="flex items-center gap-1.5 text-sm font-medium text-stone-500 hover:text-stone-700">
+              <span className="text-stone-400">←</span> All Farms
+            </button>
+            <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="h-8 rounded-lg" />
+          </div>
+          <div className="flex items-end justify-between">
+            <div>
+              <div className="font-bold text-2xl tracking-tight text-stone-900">{homeFarm}</div>
+              <div className="text-xs text-stone-400 mt-0.5 font-medium">{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" })}</div>
+            </div>
+            <div className="w-1 h-10 rounded-full bg-amber-500 opacity-60" />
+          </div>
+        </div>
+
+        <div className="px-4 pt-4 space-y-3">
+          {/* Paddocks summary */}
+          <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100">
+              <span className="font-semibold text-stone-700 text-sm uppercase tracking-wide">Paddocks</span>
+              <button onClick={() => { setShowPaddockList(true); }} className="text-xs text-amber-700 font-semibold hover:text-amber-900">View all →</button>
+            </div>
+            <div className="grid grid-cols-2 divide-x divide-y divide-stone-100">
+              {[
+                { label: "PADDOCKS",  value: fPaddocks.length, accent: "border-l-blue-400" },
+                { label: "TOTAL HA",  value: totalHa.toFixed(0), accent: "border-l-amber-400" },
+                { label: "GRAZED HA", value: grazedHa.toFixed(0), accent: "border-l-green-400" },
+                { label: "OTHER HA",  value: arableHa.toFixed(0), accent: "border-l-stone-300" },
+              ].map(({ label, value, accent }) => (
+                <div key={label} className={`p-4 border-l-4 ${accent}`}>
+                  <div className="text-2xl font-bold text-stone-800 tracking-tight">{value}</div>
+                  <div className="text-[10px] text-stone-400 font-semibold tracking-widest mt-0.5">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Mobs summary */}
+          <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100">
+              <span className="font-semibold text-stone-700 text-sm uppercase tracking-wide">Livestock</span>
+              <button onClick={() => setTab("livestock")} className="text-xs text-amber-700 font-semibold hover:text-amber-900">View all mobs →</button>
+            </div>
+            <div className="grid grid-cols-2 divide-x divide-y divide-stone-100">
+              {[
+                { label: "CATTLE",    value: fCattle.toLocaleString(), accent: "border-l-red-800" },
+                { label: "SHEEP",     value: fSheep.toLocaleString(), accent: "border-l-amber-500" },
+                { label: "TOTAL DSE", value: fDSE.toLocaleString(undefined, { maximumFractionDigits: 0 }), accent: "border-l-green-500" },
+                { label: "AVG DSE/HA", value: avgDseHa, accent: "border-l-stone-400" },
+              ].map(({ label, value, accent }) => (
+                <div key={label} className={`p-4 border-l-4 ${accent}`}>
+                  <div className="text-2xl font-bold text-stone-800 tracking-tight">{value}</div>
+                  <div className="text-[10px] text-stone-400 font-semibold tracking-widest mt-0.5">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Quick links */}
+          <div className="grid grid-cols-2 gap-3">
+            <button onClick={() => setTab("map")} className="bg-white rounded-2xl p-4 border border-stone-200/80 text-left hover:border-amber-300 transition-colors">
+              <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-lg mb-2">🗺️</div>
+              <div className="font-semibold text-stone-700 text-sm">Map</div>
+              <div className="text-xs text-stone-400 mt-0.5">Paddocks & livestock</div>
+            </button>
+            <button onClick={() => setTab("livestock")} className="bg-white rounded-2xl p-4 border border-stone-200/80 text-left hover:border-amber-300 transition-colors">
+              <div className="w-9 h-9 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center text-lg mb-2">🐄</div>
+              <div className="font-semibold text-stone-700 text-sm">Livestock</div>
+              <div className="text-xs text-stone-400 mt-0.5">Mobs & actions</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // All-farms overview (default home screen)
+  return (
+  <div className="pb-24 bg-stone-50 min-h-screen">
+
+    {/* ── Clean white header ── */}
+    <div className="bg-white border-b border-stone-100 px-5 pt-5 pb-4">
+      <div className="flex items-center justify-between">
+        <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="h-10 rounded-xl" />
+        <div className="flex items-center gap-2">
+          {isOnline && syncCount === 0 && pendingChanges === 0 && (
+            <span className="text-xs bg-green-50 text-green-600 border border-green-100 px-2.5 py-1 rounded-full font-semibold">✓ Live</span>
+          )}
+          {(syncCount > 0 || pendingChanges > 0) && (
+            <button onClick={handleSync} disabled={syncing} className="text-xs bg-amber-500 text-white px-3 py-1 rounded-full font-semibold">
+              {syncing ? "Syncing…" : "Sync now"}
+            </button>
+          )}
+          {!isOnline && (
+            <span className="text-xs bg-stone-100 text-stone-500 border border-stone-200 px-2.5 py-1 rounded-full font-semibold">📡 Offline</span>
+          )}
+        </div>
+      </div>
+      <div className="text-xs text-stone-400 font-medium mt-2">{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+
+      {/* All-farms totals — clean inline strip */}
+      <div className="grid grid-cols-3 gap-2 mt-3">
+        {[
+          { label: "CATTLE", value: totalCattle.toLocaleString(), accent: "border-l-red-800" },
+          { label: "SHEEP",  value: totalSheep.toLocaleString(),  accent: "border-l-amber-500" },
+          { label: "DSE",    value: totalDSE.toLocaleString(undefined, { maximumFractionDigits: 0 }), accent: "border-l-green-600" },
+        ].map(({ label, value, accent }) => (
+          <div key={label} className={`bg-stone-50 border border-stone-100 rounded-xl px-3 py-2.5 border-l-4 ${accent}`}>
+            <div className="text-lg font-bold text-stone-800 tracking-tight leading-none">{value}</div>
+            <div className="text-[10px] text-stone-400 font-semibold tracking-widest mt-1">{label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <div className="px-4 pt-4 space-y-3">
+
+      {/* ── Workflow — clean card, amber accent ── */}
+      <button
+        onClick={() => setTab("workflow")}
+        className="w-full bg-white border border-stone-200/80 rounded-2xl p-4 flex items-center gap-4 text-left hover:border-amber-300 transition-colors"
+      >
+        <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-2xl flex-shrink-0">📋</div>
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-stone-800">Weekly Workflow</div>
+          <div className="text-xs text-stone-400 mt-0.5">Tasks, staff & machinery planning</div>
+        </div>
+        <div className="w-1.5 h-8 rounded-full bg-amber-400 flex-shrink-0" />
+      </button>
+
+      {/* ── Feeding Systems — clean 2-col ── */}
+      <div className="grid grid-cols-2 gap-3">
+        <button onClick={() => setTab("cattle_feeding")} className="bg-white border border-stone-200/80 rounded-2xl p-4 text-left hover:border-red-200 transition-colors">
+          <div className="w-9 h-9 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center text-xl mb-2.5">🐄</div>
+          <div className="font-semibold text-stone-700 text-sm">Cattle Feeding</div>
+          <div className="text-xs text-stone-400 mt-0.5">Pens · rations</div>
+        </button>
+        <button onClick={() => setTab("sheep_feeding")} className="bg-white border border-stone-200/80 rounded-2xl p-4 text-left hover:border-amber-200 transition-colors">
+          <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-xl mb-2.5">🐑</div>
+          <div className="font-semibold text-stone-700 text-sm">Sheep Feeding</div>
+          <div className="text-xs text-stone-400 mt-0.5">Pens · rations</div>
+        </button>
+      </div>
+
+      {/* ── Farm tiles ── */}
+      <div className="flex items-center justify-between pt-1 px-0.5">
+        <span className="text-xs font-semibold text-stone-400 uppercase tracking-widest">Properties</span>
+        <span className="text-xs text-stone-400">Tap for dashboard</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {farmSummaries.map(({ name, cattle, sheep, dse }) => (
+          <button
+            key={name}
+            onClick={() => enterFarm(name)}
+            className="bg-white rounded-2xl p-4 border border-stone-200/80 text-left hover:border-amber-300 transition-colors group"
+          >
+            <div className="flex items-start justify-between mb-2">
+              <div className="font-semibold text-stone-800 text-sm leading-tight">{name}</div>
+              <div className="w-1 h-5 rounded-full bg-amber-400 opacity-50 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2" />
+            </div>
+            <div className="space-y-0.5">
+              {cattle > 0 && <div className="text-xs text-stone-500">🐄 {cattle.toLocaleString()}</div>}
+              {sheep > 0 && <div className="text-xs text-stone-500">🐑 {sheep.toLocaleString()}</div>}
+              {cattle === 0 && sheep === 0 && <div className="text-xs text-stone-400 italic">No livestock</div>}
+              {dse > 0 && <div className="text-xs font-semibold text-stone-600 mt-1">{dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE</div>}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* ── Rainfall ── */}
+      <div className="flex items-center justify-between pt-1 px-0.5">
+        <span className="text-xs font-semibold text-stone-400 uppercase tracking-widest">Rainfall · {farmName}</span>
+        <button className="text-xs text-amber-700 font-semibold" onClick={() => setShowRainfall(true)}>Records →</button>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-white rounded-2xl p-4 border border-stone-200/80">
+          <div className="text-[10px] text-stone-400 font-semibold tracking-widest mb-1">YTD</div>
+          <div className="text-2xl font-bold text-stone-800 tracking-tight">
+            {Math.round(rainfall.filter((r) => r.date?.slice(0, 4) === String(new Date().getFullYear())).reduce((s, r) => s + Number(r.mm || 0), 0))}<span className="text-sm font-medium text-stone-400 ml-0.5">mm</span>
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl p-4 border border-stone-200/80">
+          <div className="text-[10px] text-stone-400 font-semibold tracking-widest mb-1">365 DAYS</div>
+          <div className="text-2xl font-bold text-stone-800 tracking-tight">
+            {(() => {
+              const cutoff = new Date();
+              cutoff.setDate(cutoff.getDate() - 365);
+              const cutoffStr = cutoff.toISOString().slice(0, 10);
+              return Math.round(rainfall.filter((r) => r.date >= cutoffStr).reduce((s, r) => s + Number(r.mm || 0), 0));
+            })()}<span className="text-sm font-medium text-stone-400 ml-0.5">mm</span>
+          </div>
+        </div>
+      </div>
+
+      {!isOnline && (
+        <div className="bg-stone-100 border border-stone-200 text-stone-600 flex items-center gap-2 px-4 py-3 rounded-2xl text-sm font-medium">
+          📡 Offline — changes will sync when you reconnect
+        </div>
+      )}
+    </div>
+  </div>
+  ); // end all-farms return
+
+}
+
+function WorkflowScreen({ setTab, currentAccount }) {
+  const iframeRef = React.useRef(null);
+
+  const sendCreds = React.useCallback(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    try {
+      iframe.contentWindow?.postMessage({
+        type: "KW_INIT",
+        apiBase: API_BASE_URL,
+        token: getStoredToken() || "",
+        role: currentAccount?.role || "Worker",
+      }, "*");
+    } catch (e) { /* cross-origin */ }
+  }, []);
+
+  React.useEffect(() => {
+    // Listen for the iframe signalling it's ready
+    const onMsg = (e) => { if (e.data?.type === "KW_WORKFLOW_READY") sendCreds(); };
+    window.addEventListener("message", onMsg);
+    // Also try sending after short delays as a fallback in case the ready
+    // event fired before our listener was attached
+    const t1 = setTimeout(sendCreds, 500);
+    const t2 = setTimeout(sendCreds, 1500);
+    const t3 = setTimeout(sendCreds, 3000);
+    return () => {
+      window.removeEventListener("message", onMsg);
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
+    };
+  }, [sendCreds]);
+
+  return (
+    <div className="flex flex-col min-h-screen">
+      <div className="bg-amber-600 text-white px-5 py-3 flex items-center justify-between flex-shrink-0">
+        <button onClick={() => setTab("home")} className="text-white/80 text-sm flex items-center gap-1 font-medium">← Home</button>
+        <span className="font-semibold tracking-tight">Weekly Workflow</span>
+        <div className="w-16" />
+      </div>
+      <iframe
+        ref={iframeRef}
+        src={`${API_BASE_URL}/workflow.html`}
+        title="Weekly Workflow Planner"
+        className="flex-1 w-full border-0"
+        onLoad={sendCreds}
+        style={{ height: "calc(100vh - 52px)", minHeight: 600 }}
+      />
+    </div>
+  );
+
+}
+
+function CattleFeedingScreen({ setTab, showToast, api }) {
+  const [cattleTab, setCattleTab] = React.useState("loads"); // loads | details | manage
+  const [loads, setLoads] = React.useState([]);
+  const [mobs, setMobs] = React.useState([]);
+  const [assignments, setAssignments] = React.useState([]);
+  const [elements, setElements] = React.useState([]);
+  const [classes, setClasses] = React.useState([]);
+  const [recipes, setRecipes] = React.useState([]);
+  const [selectedLoad, setSelectedLoad] = React.useState(null);
+  const [feederName, setFeederName] = React.useState(() => localStorage.getItem("kw_feeder") || "");
+  const [loading, setLoading] = React.useState(true);
+  const [showAddLoad, setShowAddLoad] = React.useState(false);
+  const [showAddMobForm, setShowAddMobForm] = React.useState(false);
+  const [newLoadName, setNewLoadName] = React.useState("");
+  const [newMobForm, setNewMobForm] = React.useState({});
+  const [manageTab, setManageTab] = React.useState("elements");
+
+  React.useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      api.getCattleLoads(), api.getCattleMobs(), api.getCattleAssignments(),
+      api.getCattleElements(), api.getCattleClasses(), api.getCattleRecipes(),
+    ]).then(([l, m, a, e, c, r]) => {
+      setLoads(l); setMobs(m); setAssignments(a);
+      setElements(e); setClasses(c); setRecipes(r);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const totalOnFeed = mobs.filter(m => assignments.some(a => a.mobName === m.name))
+    .reduce((s, m) => s + m.headCount, 0);
+
+  const getMobsForLoad = (loadName) => {
+    const assigned = assignments.filter(a => a.loadName === loadName);
+    return assigned.map(a => ({ ...a, mob: mobs.find(m => m.name === a.mobName) })).filter(a => a.mob);
+  };
+
+  const getLoadIngredients = (loadName) => {
+    const loadMobs = getMobsForLoad(loadName);
+    const totals = {};
+    loadMobs.forEach(({ mob, multiplier }) => {
+      const classRecipes = recipes.filter(r => r.className === mob.className);
+      classRecipes.forEach(r => {
+        const kg = mob.headCount * Number(r.rate) * Number(mob.feedMultiplier) * Number(multiplier || 1);
+        totals[r.elementName] = (totals[r.elementName] || 0) + kg;
+      });
+    });
+    return Object.entries(totals).map(([name, kg]) => ({ name, kg }));
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center min-h-screen">
+      <div className="text-slate-400">Loading Cattle Feeding System...</div>
+    </div>
+  );
+
+  // Load detail view
+  if (selectedLoad) {
+    const ingredients = getLoadIngredients(selectedLoad.name);
+    const loadMobs = getMobsForLoad(selectedLoad.name);
+    const totalKg = ingredients.reduce((s, i) => s + i.kg, 0);
+    return (
+      <div className="pb-24 bg-stone-50 min-h-screen">
+        <div className="bg-white border-b border-stone-200 px-5 py-4 flex items-center gap-3">
+          <button onClick={() => setSelectedLoad(null)} className="text-white/70">← Back</button>
+          <h1 className="text-lg font-bold flex-1">{selectedLoad.name}</h1>
+        </div>
+        <div className="p-4 space-y-3">
+          {feederName === "" && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
+              <label className="text-xs font-bold text-amber-700 block mb-1">YOUR NAME (for records)</label>
+              <input value={feederName} onChange={e => { setFeederName(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
+                placeholder="Enter your name" className="w-full border border-amber-200 rounded-xl px-3 py-2 bg-white text-sm" />
+            </div>
+          )}
+          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+            <div className="text-xs font-bold text-slate-400 uppercase mb-3">Mixer Wagon Load — {feederName || "Set your name above"}</div>
+            {ingredients.length === 0 ? (
+              <div className="text-slate-400 text-sm text-center py-4">No recipes configured for the mobs in this load.</div>
+            ) : ingredients.map(({ name, kg }) => (
+              <div key={name} className="flex justify-between items-center py-2.5 border-b border-slate-100 last:border-0">
+                <span className="font-semibold text-slate-700">{name}</span>
+                <span className="font-extrabold text-red-950 text-lg">{kg.toFixed(0)} kg</span>
+              </div>
+            ))}
+            {ingredients.length > 0 && (
+              <div className="flex justify-between items-center pt-3 mt-1 border-t-2 border-slate-200">
+                <span className="font-bold text-slate-600">TOTAL</span>
+                <span className="font-extrabold text-2xl text-red-950">{totalKg.toFixed(0)} kg</span>
+              </div>
+            )}
+          </div>
+          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+            <div className="text-xs font-bold text-slate-400 uppercase mb-2">Mobs in this load</div>
+            {loadMobs.map(({ mob, id }) => (
+              <div key={id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                <div>
+                  <div className="font-semibold text-slate-700 text-sm">{mob.name}</div>
+                  <div className="text-xs text-slate-400">{mob.className} · {mob.paddock}</div>
+                </div>
+                <div className="font-bold text-slate-600">{mob.headCount} head</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Management view
+  if (cattleTab === "manage") {
+    return (
+      <div className="pb-24 bg-stone-50 min-h-screen">
+        <div className="bg-white border-b border-stone-200 px-5 py-4 flex items-center gap-3">
+          <button onClick={() => setCattleTab("loads")} className="text-white/70">← Back</button>
+          <h1 className="text-lg font-bold flex-1">Cattle Management</h1>
+        </div>
+        <div className="flex gap-1 px-4 pt-4 pb-2 overflow-x-auto">
+          {["elements","classes","mobs","loads"].map(t => (
+            <button key={t} onClick={() => setManageTab(t)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 border ${manageTab===t ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}>
+              {t.charAt(0).toUpperCase()+t.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="p-4 space-y-3">
+          {manageTab === "elements" && (
+            <>
+              {elements.map(e => (
+                <div key={e.id} className="bg-white rounded-2xl p-4 border border-slate-100 flex justify-between items-center">
+                  <div>
+                    <div className="font-bold text-slate-700">{e.name}</div>
+                    <div className="text-xs text-slate-400">{e.unit} · Default: {e.defaultRate} · {e.costPerUnit} {e.costUnit}</div>
+                  </div>
+                  <button onClick={async () => { await api.deleteCattleElement(e.id); setElements(prev => prev.filter(x => x.id !== e.id)); }} className="text-rose-400 text-xs font-bold px-3 py-1 bg-rose-50 rounded-full">Remove</button>
+                </div>
+              ))}
+              <div className="bg-white rounded-2xl p-4 border border-slate-100">
+                <div className="text-xs font-bold text-slate-500 mb-2">Add Element</div>
+                {[["Name","name","text"],["Unit (kg/head or L/head)","unit","text"],["Default rate","defaultRate","number"],["Cost per unit","costPerUnit","number"]].map(([label,key,type]) => (
+                  <div key={key} className="mb-2">
+                    <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                    <input type={type} value={newMobForm[key]||""} onChange={e => setNewMobForm(p=>({...p,[key]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                  </div>
+                ))}
+                <button onClick={async () => {
+                  const created = await api.createCattleElement({ name: newMobForm.name||"New Element", unit: newMobForm.unit||"kg/head", defaultRate: Number(newMobForm.defaultRate)||0, costPerUnit: Number(newMobForm.costPerUnit)||0, costUnit: "$/tonne" });
+                  setElements(prev => [...prev, created]); setNewMobForm({});
+                }} className="w-full bg-red-900 text-white rounded-2xl py-2.5 font-bold text-sm mt-2">Add Element</button>
+              </div>
+            </>
+          )}
+          {manageTab === "classes" && (
+            <>
+              {classes.map(c => (
+                <div key={c.id} className="bg-white rounded-2xl p-4 border border-slate-100 flex justify-between items-center">
+                  <span className="font-bold text-slate-700">{c.name}</span>
+                  <button onClick={async () => { await api.deleteCattleClass(c.id); setClasses(prev => prev.filter(x => x.id !== c.id)); }} className="text-rose-400 text-xs font-bold px-3 py-1 bg-rose-50 rounded-full">Remove</button>
+                </div>
+              ))}
+              <div className="bg-white rounded-2xl p-4 border border-slate-100 flex gap-2">
+                <input value={newMobForm.className||""} onChange={e => setNewMobForm(p=>({...p,className:e.target.value}))} placeholder="Class name e.g. Spring U Bulls" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                <button onClick={async () => {
+                  const created = await api.createCattleClass({ name: newMobForm.className });
+                  setClasses(prev => [...prev, created]); setNewMobForm({});
+                }} className="bg-red-900 text-white rounded-xl px-4 font-bold text-sm">Add</button>
+              </div>
+            </>
+          )}
+          {manageTab === "mobs" && (
+            <>
+              {mobs.map(m => (
+                <div key={m.id} className="bg-white rounded-2xl p-4 border border-slate-100">
+                  <div className="flex justify-between">
+                    <div className="font-bold text-slate-700">{m.name}</div>
+                    <button onClick={async () => { await api.deleteCattleMob(m.id); setMobs(prev => prev.filter(x => x.id !== m.id)); }} className="text-rose-400 text-xs font-bold">Remove</button>
+                  </div>
+                  <div className="text-xs text-slate-400 mt-1">{m.className} · {m.paddock} · {m.headCount} head</div>
+                </div>
+              ))}
+              <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2">
+                <div className="text-xs font-bold text-slate-500 mb-1">Add Mob</div>
+                {[["Mob name","mobName"],["Paddock","mobPaddock"],["Head count","mobHead"]].map(([label,key]) => (
+                  <div key={key}>
+                    <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                    <input value={newMobForm[key]||""} onChange={e => setNewMobForm(p=>({...p,[key]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                  </div>
+                ))}
+                <div>
+                  <label className="text-xs text-slate-400 font-semibold block mb-1">Class</label>
+                  <select value={newMobForm.mobClass||""} onChange={e => setNewMobForm(p=>({...p,mobClass:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white">
+                    <option value="">Select class...</option>
+                    {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <button onClick={async () => {
+                  const created = await api.createCattleMob({ name: newMobForm.mobName, className: newMobForm.mobClass||"", paddock: newMobForm.mobPaddock||"", headCount: Number(newMobForm.mobHead)||0 });
+                  setMobs(prev => [...prev, created]); setNewMobForm({});
+                }} className="w-full bg-red-900 text-white rounded-2xl py-2.5 font-bold text-sm">Add Mob</button>
+              </div>
+            </>
+          )}
+          {manageTab === "loads" && (
+            <>
+              {loads.map(l => {
+                const loadMobNames = assignments.filter(a => a.loadName === l.name);
+                return (
+                  <div key={l.id} className="bg-white rounded-2xl p-4 border border-slate-100">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-bold text-slate-700">{l.name}</div>
+                        <div className="text-xs text-slate-400 mt-1">{loadMobNames.length} mob{loadMobNames.length!==1?"s":""} assigned</div>
+                      </div>
+                      <button onClick={async () => { await api.deleteCattleLoad(l.id); setLoads(prev=>prev.filter(x=>x.id!==l.id)); }} className="text-rose-400 text-xs font-bold">Remove</button>
+                    </div>
+                    <div className="mt-3">
+                      <label className="text-xs font-semibold text-slate-500 block mb-1">Assign a mob to this load</label>
+                      <div className="flex gap-2">
+                        <select value={newMobForm[`assign_${l.name}`]||""} onChange={e => setNewMobForm(p=>({...p,[`assign_${l.name}`]:e.target.value}))} className="flex-1 border border-slate-200 rounded-xl px-2 py-2 text-sm bg-white">
+                          <option value="">Select mob...</option>
+                          {mobs.map(m => <option key={m.id} value={m.name}>{m.name} ({m.headCount})</option>)}
+                        </select>
+                        <button onClick={async () => {
+                          if (!newMobForm[`assign_${l.name}`]) return;
+                          const created = await api.createCattleAssignment({ loadName: l.name, mobName: newMobForm[`assign_${l.name}`], multiplier: 1 });
+                          setAssignments(prev => [...prev, created]); setNewMobForm(p=>({...p,[`assign_${l.name}`]:""}));
+                        }} className="bg-red-900 text-white rounded-xl px-3 font-bold text-sm">Add</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="bg-white rounded-2xl p-4 border border-slate-100 flex gap-2">
+                <input value={newLoadName} onChange={e => setNewLoadName(e.target.value)} placeholder="Load name e.g. Load 1" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                <button onClick={async () => {
+                  if (!newLoadName.trim()) return;
+                  const created = await api.createCattleLoad({ name: newLoadName.trim() });
+                  setLoads(prev => [...prev, created]); setNewLoadName("");
+                }} className="bg-red-900 text-white rounded-xl px-4 font-bold text-sm">Add</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Main loads list
+  return (
+    <div className="pb-24 bg-stone-50 min-h-screen">
+      <div className="bg-white border-b border-stone-100 px-5 pt-5 pb-5">
+        <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
+        <div className="text-3xl mb-1">🐄</div>
+        <div className="text-2xl font-bold tracking-tight">Cattle Feeding System</div>
+        <div className="text-white/70 text-sm mt-1">Mixer wagon loads & recipes</div>
+      </div>
+      <div className="px-4 -mt-4 space-y-3">
+        <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+          <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Feeder name</label>
+          <input value={feederName} onChange={e => { setFeederName(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
+            placeholder="Enter your name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+        </div>
+        <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex items-center justify-between">
+          <div className="text-sm font-semibold text-slate-500">Total cattle on feed</div>
+          <div className="text-3xl font-extrabold text-red-950">{totalOnFeed.toLocaleString()}</div>
+        </div>
+        {loads.length === 0 ? (
+          <div className="bg-white rounded-2xl p-6 text-center text-slate-400 text-sm border border-slate-100">
+            No loads yet. Tap Manage to set up elements, classes, mobs and loads.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="text-xs font-bold text-slate-400 uppercase px-1">Select a load</div>
+            {[...loads].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map(l => {
+              const count = assignments.filter(a => a.loadName === l.name && mobs.some(m => m.name === a.mobName)).length;
+              return (
+                <button key={l.id} onClick={() => setSelectedLoad(l)} className="w-full bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center justify-between text-left">
+                  <div>
+                    <div className="font-bold text-slate-800 text-lg">{l.name}</div>
+                    <div className="text-xs text-slate-400 mt-0.5">{count} mob{count!==1?"s":""}</div>
+                  </div>
+                  <span className="text-slate-300 text-xl">›</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <button onClick={() => setCattleTab("manage")} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">⚙️ Manage Elements, Mobs & Loads</button>
+      </div>
+    </div>
+  );
+
+}
+
+function SheepFeedingScreen({ setTab, showToast, api }) {
+  const [sheepTab, setSheepTab] = React.useState("run");
+  const [pens, setPens] = React.useState([]);
+  const [settings, setSettings] = React.useState({ splitAm: 0.6, splitPm: 0.4 });
+  const [history, setHistory] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [runPeriod, setRunPeriod] = React.useState("AM");
+  const [feeder, setFeeder] = React.useState(() => localStorage.getItem("kw_feeder") || "");
+  const [showAddPen, setShowAddPen] = React.useState(false);
+  const [newPenForm, setNewPenForm] = React.useState({});
+
+  React.useEffect(() => {
+    setLoading(true);
+    Promise.all([api.getSheepPens(), api.getSheepSettings(), api.getSheepHistory()])
+      .then(([p, s, h]) => { setPens(p); setSettings(s || {}); setHistory(h); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const totalHead = pens.filter(p => p.active).reduce((s, p) => s + p.headCount, 0);
+  const totalKg = pens.filter(p => p.active).reduce((s, p) => {
+    const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
+    return s + p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 * split;
+  }, 0);
+
+  const savePens = async (updated) => {
+    setPens(updated);
+    await api.saveSheepPens(updated);
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center min-h-screen">
+      <div className="text-slate-400">Loading Sheep Feeding System...</div>
+    </div>
+  );
+
+  return (
+    <div className="pb-24 bg-stone-50 min-h-screen">
+      <div className="bg-white border-b border-stone-100 px-5 pt-5 pb-5">
+        <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
+        <div className="text-3xl mb-1">🐑</div>
+        <div className="text-2xl font-bold tracking-tight">Sheep Feeding System</div>
+        <div className="text-white/70 text-sm mt-1">Pen feed runs & grain rosters</div>
+      </div>
+      <div className="flex gap-1 px-4 -mt-4 mb-3 overflow-x-auto">
+        {[{id:"run",label:"🏃 Feed Run"},{id:"pens",label:"🐑 Pens"},{id:"history",label:"📋 History"}].map(t => (
+          <button key={t.id} onClick={() => setSheepTab(t.id)}
+            className={`px-4 py-2 rounded-2xl text-sm font-semibold flex-shrink-0 border ${sheepTab===t.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="px-4 space-y-3">
+        {sheepTab === "run" && (
+          <>
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-xs font-bold text-slate-400 uppercase">Feeder</label>
+                <div className="flex gap-1">
+                  {["AM","PM"].map(p => (
+                    <button key={p} onClick={() => setRunPeriod(p)}
+                      className={`px-4 py-1.5 rounded-full text-xs font-semibold border ${runPeriod===p ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}>
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <input value={feeder} onChange={e => { setFeeder(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
+                placeholder="Your name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm mb-3" />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-50 rounded-xl p-3 text-center">
+                  <div className="text-xs text-slate-400 font-semibold">Total Head</div>
+                  <div className="text-2xl font-extrabold text-slate-800">{totalHead.toLocaleString()}</div>
+                </div>
+                <div className="bg-slate-50 rounded-xl p-3 text-center">
+                  <div className="text-xs text-slate-400 font-semibold">Total kg ({runPeriod})</div>
+                  <div className="text-2xl font-extrabold text-slate-800">{totalKg.toFixed(0)}</div>
+                </div>
+              </div>
+            </div>
+            {pens.filter(p => p.active).map((pen) => {
+              const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
+              const kg = pen.headCount * Number(pen.kgPerHead||0) * (pen.rationPercent||100)/100 * split;
+              return (
+                <div key={pen.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-slate-800">{pen.name}</div>
+                      <div className="text-xs text-slate-400">{pen.ration} · {pen.headCount} head · {pen.kgPerHead} kg/head</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-2xl font-extrabold text-slate-800">{kg.toFixed(0)}</div>
+                      <div className="text-xs text-slate-400">kg</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {pens.filter(p=>p.active).length > 0 && (
+              <button onClick={async () => {
+                const entry = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), feeder, period: runPeriod, splitFraction: runPeriod==="AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4), events: pens.filter(p=>p.active).map(p=>({ penId: p.id, penName: p.name, kg: p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 })) };
+                const created = await api.addSheepHistory(entry);
+                setHistory(prev => [created, ...prev]);
+                showToast("Feed run recorded ✓");
+              }} className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold">
+                ✓ Record Feed Run
+              </button>
+            )}
+          </>
+        )}
+        {sheepTab === "pens" && (
+          <>
+            {pens.map((pen, i) => (
+              <div key={pen.id} className={`bg-white rounded-2xl p-4 border shadow-sm ${pen.active ? "border-slate-100" : "border-slate-200 opacity-60"}`}>
+                <div className="flex items-start justify-between mb-2">
+                  <div className="font-bold text-slate-800">{pen.name}</div>
+                  <button onClick={() => { const updated = pens.map((p,j)=>j===i?{...p,active:!p.active}:p); savePens(updated); }}
+                    className={`text-xs font-bold px-2.5 py-1 rounded-full ${pen.active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                    {pen.active ? "Active" : "Inactive"}
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {[["Head",pen.headCount,"headCount"],["kg/head",pen.kgPerHead,"kgPerHead"],["Ration %",pen.rationPercent,"rationPercent"]].map(([label,val,key]) => (
+                    <div key={key}>
+                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                      <input type="number" value={val} onChange={e => {
+                        const updated = pens.map((p,j)=>j===i?{...p,[key]:Number(e.target.value)}:p);
+                        savePens(updated);
+                      }} className="w-full border border-slate-200 rounded-xl px-2 py-2 text-sm bg-white text-center font-bold" />
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2">
+                  <label className="text-xs text-slate-400 font-semibold block mb-1">Ration type</label>
+                  <input value={pen.ration} onChange={e => { const updated = pens.map((p,j)=>j===i?{...p,ration:e.target.value}:p); savePens(updated); }}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                </div>
+              </div>
+            ))}
+            {showAddPen ? (
+              <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2">
+                {[["Pen name","penName","text"],["Head count","penHead","number"],["kg/head","penKg","number"]].map(([label,key,type]) => (
+                  <div key={key}>
+                    <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
+                    <input type={type} value={newPenForm[key]||""} onChange={e => setNewPenForm(p=>({...p,[key]:e.target.value}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
+                  </div>
+                ))}
+                <button onClick={async () => {
+                  const newPen = { id: crypto.randomUUID(), name: newPenForm.penName||"New Pen", ration: "Grower", headCount: Number(newPenForm.penHead)||0, kgPerHead: Number(newPenForm.penKg)||0, rationPercent: 100, active: true };
+                  await savePens([...pens, newPen]);
+                  setNewPenForm({}); setShowAddPen(false);
+                }} className="w-full bg-stone-800 text-white rounded-2xl py-2.5 font-semibold text-sm">Add Pen</button>
+                <button onClick={() => setShowAddPen(false)} className="w-full text-slate-400 text-sm">Cancel</button>
+              </div>
+            ) : (
+              <button onClick={() => setShowAddPen(true)} className="w-full border-2 border-dashed border-slate-300 rounded-2xl py-3 text-slate-400 font-semibold text-sm">+ Add Pen</button>
+            )}
+          </>
+        )}
+        {sheepTab === "history" && (
+          <>
+            {history.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">No feed runs recorded yet.</div>}
+            {history.map((h) => (
+              <div key={h.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="font-bold text-slate-700">{new Date(h.startedAt).toLocaleDateString("en-AU", {weekday:"short",day:"numeric",month:"short"})}</div>
+                    <div className="text-xs text-slate-400">{h.period} · {h.feeder}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold text-slate-600">{Array.isArray(h.events) ? h.events.reduce((s,e)=>s+(Number(e.kg)||0),0).toFixed(0) : 0} kg</div>
+                    <div className="text-xs text-slate-400">{Array.isArray(h.events) ? h.events.length : 0} pens</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+}
+
 export default function App() {
   // --- Splash screen ---
   const [showSplash, setShowSplash] = useState(true);
@@ -1379,7 +2143,7 @@ export default function App() {
   );
 
   const BottomNav = () => (
-    <div className="bg-white/95 backdrop-blur-xl border-t border-slate-100/80 flex justify-around items-center py-2 fixed bottom-0 left-0 right-0 max-w-md mx-auto shadow-[0_-1px_20px_rgba(0,0,0,0.06)]">
+    <div className="bg-white border-t border-stone-100 flex justify-around items-center py-2 fixed bottom-0 left-0 right-0 max-w-md mx-auto">
       {[
         { id: "home", icon: Home, label: "Home" },
         { id: "map", icon: MapPin, label: "Map" },
@@ -1421,238 +2185,7 @@ export default function App() {
     return { name, cattle, sheep, dse };
   });
 
-  const HomeScreen = () => {
-    // When a farm is "entered" from the home screen, show its farm dashboard
-    const [homeFarm, setHomeFarm] = React.useState(null); // null = all-farms overview
-
-    const enterFarm = (name) => {
-      setFarmName(name);
-      setFarmsMobs((prev) => ({ ...prev, [name]: [] }));
-      setFarmsPaddocks((prev) => ({ ...prev, [name]: [] }));
-      setFarmsLandmarks((prev) => ({ ...prev, [name]: [] }));
-      setHomeFarm(name);
-    };
-
-    // Farm-specific dashboard (matches AgriWebb screenshot)
-    if (homeFarm) {
-      const fMobs = farmsMobs[homeFarm] || [];
-      const fPaddocks = farmsPaddocks[homeFarm] || [];
-      const fCattle = fMobs.filter(m => m.species === "Cattle" || m.species === "Bulls").reduce((s, m) => s + m.count, 0);
-      const fSheep = fMobs.filter(m => m.species === "Sheep" || m.species === "Rams").reduce((s, m) => s + m.count, 0);
-      const fDSE = fMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
-      const totalHa = fPaddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0);
-      const avgDseHa = totalHa > 0 ? (fDSE / totalHa).toFixed(2) : "0.00";
-      const grazedHa = fPaddocks.filter(p => p.landUse === "Grazing" || !p.landUse || p.landUse === "").reduce((s, p) => s + (Number(p.ha) || 0), 0);
-      const arableHa = fPaddocks.filter(p => p.landUse && p.landUse !== "Grazing").reduce((s, p) => s + (Number(p.ha) || 0), 0);
-
-      return (
-        <div className="pb-24 bg-slate-50 min-h-screen">
-          <div className="bg-red-950 text-white px-5 pt-5 pb-6">
-            <div className="flex items-center gap-3 mb-4">
-              <button onClick={() => setHomeFarm(null)} className="text-white/70 text-sm">← All Farms</button>
-              <div className="flex-1" />
-              <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="h-8 rounded-lg" />
-            </div>
-            <div className="font-bold text-2xl tracking-tight">{homeFarm}</div>
-            <div className="text-white/50 text-xs mt-1">{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
-          </div>
-
-          <div className="px-4 -mt-4 space-y-4">
-            {/* Paddocks summary */}
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-                <span className="font-semibold text-slate-700">Paddocks</span>
-                <button onClick={() => { setShowPaddockList(true); }} className="text-xs text-red-900 font-semibold">View all paddocks</button>
-              </div>
-              <div className="grid grid-cols-2 divide-x divide-y divide-slate-100">
-                {[
-                  { icon: "▦", label: "PADDOCKS",    value: fPaddocks.length,          colour: "text-blue-600" },
-                  { icon: "🌾", label: "TOTAL HA",    value: totalHa.toFixed(0),        colour: "text-amber-600" },
-                  { icon: "🌿", label: "GRAZED HA",   value: grazedHa.toFixed(0),       colour: "text-green-600" },
-                  { icon: "🏗️", label: "OTHER HA",    value: arableHa.toFixed(0),       colour: "text-slate-500" },
-                ].map(({ icon, label, value, colour }) => (
-                  <div key={label} className="p-4">
-                    <div className={`text-2xl font-bold ${colour}`}>{value}</div>
-                    <div className="text-xs text-slate-400 font-semibold tracking-wide mt-0.5">{label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Mobs summary */}
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-                <span className="font-semibold text-slate-700">Mobs</span>
-                <button onClick={() => setTab("livestock")} className="text-xs text-red-900 font-semibold">View all mobs</button>
-              </div>
-              <div className="grid grid-cols-2 divide-x divide-y divide-slate-100">
-                {[
-                  { icon: "🐄", label: "CATTLE",    value: fCattle.toLocaleString() },
-                  { icon: "🐑", label: "SHEEP",     value: fSheep.toLocaleString() },
-                  { icon: "🌿", label: "TOTAL DSE", value: fDSE.toLocaleString(undefined, { maximumFractionDigits: 0 }) },
-                  { icon: "📊", label: "AVG DSE/HA", value: avgDseHa },
-                ].map(({ icon, label, value }) => (
-                  <div key={label} className="p-4">
-                    <div className="text-2xl font-bold text-slate-800">{value}</div>
-                    <div className="text-xs text-slate-400 font-semibold tracking-wide mt-0.5">{label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Quick actions */}
-            <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => setTab("map")} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm text-left">
-                <div className="text-2xl mb-1">🗺️</div>
-                <div className="font-semibold text-slate-700 text-sm">Map</div>
-                <div className="text-xs text-slate-400">Paddocks & livestock</div>
-              </button>
-              <button onClick={() => setTab("livestock")} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm text-left">
-                <div className="text-2xl mb-1">🐄</div>
-                <div className="font-semibold text-slate-700 text-sm">Livestock</div>
-                <div className="text-xs text-slate-400">Mobs & actions</div>
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // All-farms overview (default home screen)
-    return (
-    <div className="pb-24 bg-slate-50 min-h-screen">
-      {/* Header */}
-      <div className="bg-red-950 text-white px-5 pt-6 pb-8">
-        <div className="flex items-center justify-between mb-1">
-          <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="h-10 rounded-lg" />
-          <div className="flex items-center gap-2">
-            {isOnline && syncCount === 0 && pendingChanges === 0 && (
-              <span className="text-xs bg-green-500/20 text-green-300 px-2 py-1 rounded-full font-semibold">✓ Synced</span>
-            )}
-            {(syncCount > 0 || pendingChanges > 0) && (
-              <button onClick={handleSync} disabled={syncing} className="text-xs bg-yellow-500 text-white px-3 py-1 rounded-full font-semibold">
-                {syncing ? "Syncing…" : `Sync ${syncCount + pendingChanges}`}
-              </button>
-            )}
-            {!isOnline && (
-              <span className="text-xs bg-slate-600/50 text-slate-300 px-2 py-1 rounded-full font-semibold">📡 Offline</span>
-            )}
-          </div>
-        </div>
-        <div className="text-xs text-white/50 mb-4">{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
-        {/* All-farms totals strip */}
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { label: "CATTLE", value: totalCattle.toLocaleString(), icon: "🐄" },
-            { label: "SHEEP", value: totalSheep.toLocaleString(), icon: "🐑" },
-            { label: "TOTAL DSE", value: totalDSE.toLocaleString(undefined, { maximumFractionDigits: 0 }), icon: "🌿" },
-          ].map(({ label, value, icon }) => (
-            <div key={label} className="bg-white/10 rounded-2xl p-3 text-center">
-              <div className="text-lg mb-0.5">{icon}</div>
-              <div className="text-xl font-bold text-white">{value}</div>
-              <div className="text-[10px] text-white/50 font-semibold tracking-wide">{label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Workflow Planner — front and centre ── */}
-      <div className="px-4 -mt-4">
-        <button
-          onClick={() => setTab("workflow")}
-          className="w-full bg-gradient-to-r from-amber-500 to-amber-600 rounded-2xl p-5 shadow-lg flex items-center gap-4 mb-4"
-        >
-          <div className="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center text-3xl flex-shrink-0">📋</div>
-          <div className="text-left flex-1">
-            <div className="font-bold text-white text-lg leading-tight tracking-tight">Weekly Workflow</div>
-            <div className="text-white/80 text-sm mt-0.5">Tasks, staff & machinery planning</div>
-            <div className="text-white/60 text-xs mt-1">Tap to open planner →</div>
-          </div>
-        </button>
-
-        {/* ── Feeding Systems ── */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <button onClick={() => setTab("cattle_feeding")} className="bg-gradient-to-br from-red-900 to-red-950 rounded-2xl p-4 text-left shadow-sm">
-            <div className="text-2xl mb-2">🐄</div>
-            <div className="font-bold text-white text-sm leading-tight">Cattle Feeding</div>
-            <div className="text-white/60 text-xs mt-1">Pens · rations · weights</div>
-          </button>
-          <button onClick={() => setTab("sheep_feeding")} className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-2xl p-4 text-left shadow-sm">
-            <div className="text-2xl mb-2">🐑</div>
-            <div className="font-bold text-white text-sm leading-tight">Sheep Feeding</div>
-            <div className="text-white/60 text-xs mt-1">Pens · rations · weights</div>
-          </button>
-        </div>
-
-        {/* ── Farm tiles ── */}
-        <div className="flex justify-between items-center mb-2 px-1">
-          <h2 className="font-semibold text-slate-700">Farms</h2>
-          <span className="text-xs text-slate-400">Tap for farm dashboard</span>
-        </div>
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          {farmSummaries.map(({ name, cattle, sheep, dse }) => (
-            <button
-              key={name}
-              onClick={() => enterFarm(name)}
-              className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 text-left"
-            >
-              <div className="font-semibold text-slate-800 mb-2">{name}</div>
-              <div className="space-y-1">
-                {cattle > 0 && <div className="text-xs text-slate-500">🐄 {cattle.toLocaleString()} cattle</div>}
-                {sheep > 0 && <div className="text-xs text-slate-500">🐑 {sheep.toLocaleString()} sheep</div>}
-                {cattle === 0 && sheep === 0 && <div className="text-xs text-slate-400">No livestock loaded</div>}
-                {dse > 0 && <div className="text-xs font-semibold text-red-950">{dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE</div>}
-              </div>
-            </button>
-          ))}
-        </div>
-
-        {/* ── Rainfall strip ── */}
-        <div className="flex justify-between items-center mb-2 px-1">
-          <h2 className="font-semibold text-slate-700">Rainfall · {farmName}</h2>
-          <button className="text-red-950 text-sm font-semibold" onClick={() => setShowRainfall(true)}>Records</button>
-        </div>
-        <div className="flex gap-3 mb-4">
-          <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
-            <div className="text-xs text-slate-400 font-semibold tracking-wide">YTD</div>
-            <div className="text-2xl font-extrabold text-slate-800 mt-1">
-              {Math.round(rainfall.filter((r) => r.date?.slice(0, 4) === String(new Date().getFullYear())).reduce((s, r) => s + Number(r.mm || 0), 0))}mm
-            </div>
-          </div>
-          <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
-            <div className="text-xs text-slate-400 font-semibold tracking-wide">365 DAYS</div>
-            <div className="text-2xl font-bold text-slate-800 mt-1">
-              {(() => {
-                const cutoff = new Date();
-                cutoff.setDate(cutoff.getDate() - 365);
-                const cutoffStr = cutoff.toISOString().slice(0, 10);
-                return Math.round(rainfall.filter((r) => r.date >= cutoffStr).reduce((s, r) => s + Number(r.mm || 0), 0));
-              })()}mm
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {!isOnline && (
-        <div className="mx-4 mt-4 bg-slate-700 text-white flex items-center justify-between px-4 py-3 rounded-2xl">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            📡 Offline — working from data on this device{pendingChanges > 0 ? ` (${pendingChanges} pending change${pendingChanges > 1 ? "s" : ""})` : ""}
-          </div>
-        </div>
-      )}
-      {isOnline && (syncCount > 0 || pendingChanges > 0) && (
-        <div className="mx-4 mt-4 bg-yellow-50 border border-yellow-200 text-yellow-700 flex items-center justify-between px-4 py-3 rounded-2xl">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            ⚠️ {syncing ? "Syncing..." : `${syncCount + pendingChanges} item${syncCount + pendingChanges > 1 ? "s" : ""} to sync`}
-          </div>
-          <button onClick={handleSync} disabled={syncing} className="bg-yellow-500 text-white rounded-full px-4 py-1.5 text-sm font-semibold">
-            {syncing ? "..." : "Sync"}
-          </button>
-        </div>
-      )}
-    </div>
-    ); // end all-farms return
-  }; // end HomeScreen
+  // [extracted to top-level component]
   const PIN_DATA = mobs.map((m, i) => {
     const seed = (m.id * 37) % 100;
     const row = Math.floor(i / 4);
@@ -1673,7 +2206,7 @@ export default function App() {
 
   const MapScreen = () => (
     <div className="pb-24 relative">
-      <div className="bg-white/90 backdrop-blur-md flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-slate-100">
+      <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
           onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowSettings(true)}
           className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
@@ -2054,7 +2587,7 @@ export default function App() {
                 showToast(err.message || "Couldn't save paddock to the server");
               }
             }}
-            className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold"
+            className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold"
           >
             Save Paddock
           </button>
@@ -2756,536 +3289,16 @@ export default function App() {
 
   // ── Workflow Screen — embeds the workflow HTML via iframe ─────────────────
   // Passes the JWT token to the iframe via postMessage so it can call our API
-  const WorkflowScreen = () => {
-    const iframeRef = React.useRef(null);
-
-    const sendCreds = React.useCallback(() => {
-      const iframe = iframeRef.current;
-      if (!iframe) return;
-      try {
-        iframe.contentWindow?.postMessage({
-          type: "KW_INIT",
-          apiBase: API_BASE_URL,
-          token: getStoredToken() || "",
-          role: currentAccount?.role || "Worker",
-        }, "*");
-      } catch (e) { /* cross-origin */ }
-    }, []);
-
-    React.useEffect(() => {
-      // Listen for the iframe signalling it's ready
-      const onMsg = (e) => { if (e.data?.type === "KW_WORKFLOW_READY") sendCreds(); };
-      window.addEventListener("message", onMsg);
-      // Also try sending after short delays as a fallback in case the ready
-      // event fired before our listener was attached
-      const t1 = setTimeout(sendCreds, 500);
-      const t2 = setTimeout(sendCreds, 1500);
-      const t3 = setTimeout(sendCreds, 3000);
-      return () => {
-        window.removeEventListener("message", onMsg);
-        clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
-      };
-    }, [sendCreds]);
-
-    return (
-      <div className="flex flex-col min-h-screen">
-        <div className="bg-amber-600 text-white px-5 py-3 flex items-center justify-between flex-shrink-0">
-          <button onClick={() => setTab("home")} className="text-white/80 text-sm flex items-center gap-1 font-medium">← Home</button>
-          <span className="font-semibold tracking-tight">Weekly Workflow</span>
-          <div className="w-16" />
-        </div>
-        <iframe
-          ref={iframeRef}
-          src={`${API_BASE_URL}/workflow.html`}
-          title="Weekly Workflow Planner"
-          className="flex-1 w-full border-0"
-          onLoad={sendCreds}
-          style={{ height: "calc(100vh - 52px)", minHeight: 600 }}
-        />
-      </div>
-    );
-  };
+  // [extracted to top-level component]
 
   // ── Cattle Feeding Screen ─────────────────────────────────────────────────
-  const CattleFeedingScreen = () => {
-    const [cattleTab, setCattleTab] = React.useState("loads"); // loads | details | manage
-    const [loads, setLoads] = React.useState([]);
-    const [mobs, setMobs] = React.useState([]);
-    const [assignments, setAssignments] = React.useState([]);
-    const [elements, setElements] = React.useState([]);
-    const [classes, setClasses] = React.useState([]);
-    const [recipes, setRecipes] = React.useState([]);
-    const [selectedLoad, setSelectedLoad] = React.useState(null);
-    const [feederName, setFeederName] = React.useState(() => localStorage.getItem("kw_feeder") || "");
-    const [loading, setLoading] = React.useState(true);
-    const [showAddLoad, setShowAddLoad] = React.useState(false);
-    const [showAddMobForm, setShowAddMobForm] = React.useState(false);
-    const [newLoadName, setNewLoadName] = React.useState("");
-    const [newMobForm, setNewMobForm] = React.useState({});
-    const [manageTab, setManageTab] = React.useState("elements");
-
-    React.useEffect(() => {
-      setLoading(true);
-      Promise.all([
-        api.getCattleLoads(), api.getCattleMobs(), api.getCattleAssignments(),
-        api.getCattleElements(), api.getCattleClasses(), api.getCattleRecipes(),
-      ]).then(([l, m, a, e, c, r]) => {
-        setLoads(l); setMobs(m); setAssignments(a);
-        setElements(e); setClasses(c); setRecipes(r);
-        setLoading(false);
-      }).catch(() => setLoading(false));
-    }, []);
-
-    const totalOnFeed = mobs.filter(m => assignments.some(a => a.mobName === m.name))
-      .reduce((s, m) => s + m.headCount, 0);
-
-    const getMobsForLoad = (loadName) => {
-      const assigned = assignments.filter(a => a.loadName === loadName);
-      return assigned.map(a => ({ ...a, mob: mobs.find(m => m.name === a.mobName) })).filter(a => a.mob);
-    };
-
-    const getLoadIngredients = (loadName) => {
-      const loadMobs = getMobsForLoad(loadName);
-      const totals = {};
-      loadMobs.forEach(({ mob, multiplier }) => {
-        const classRecipes = recipes.filter(r => r.className === mob.className);
-        classRecipes.forEach(r => {
-          const kg = mob.headCount * Number(r.rate) * Number(mob.feedMultiplier) * Number(multiplier || 1);
-          totals[r.elementName] = (totals[r.elementName] || 0) + kg;
-        });
-      });
-      return Object.entries(totals).map(([name, kg]) => ({ name, kg }));
-    };
-
-    if (loading) return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-slate-400">Loading Cattle Feeding System...</div>
-      </div>
-    );
-
-    // Load detail view
-    if (selectedLoad) {
-      const ingredients = getLoadIngredients(selectedLoad.name);
-      const loadMobs = getMobsForLoad(selectedLoad.name);
-      const totalKg = ingredients.reduce((s, i) => s + i.kg, 0);
-      return (
-        <div className="pb-24 bg-slate-50 min-h-screen">
-          <div className="bg-red-950 text-white px-5 py-4 flex items-center gap-3">
-            <button onClick={() => setSelectedLoad(null)} className="text-white/70">← Back</button>
-            <h1 className="text-lg font-bold flex-1">{selectedLoad.name}</h1>
-          </div>
-          <div className="p-4 space-y-3">
-            {feederName === "" && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
-                <label className="text-xs font-bold text-amber-700 block mb-1">YOUR NAME (for records)</label>
-                <input value={feederName} onChange={e => { setFeederName(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
-                  placeholder="Enter your name" className="w-full border border-amber-200 rounded-xl px-3 py-2 bg-white text-sm" />
-              </div>
-            )}
-            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-              <div className="text-xs font-bold text-slate-400 uppercase mb-3">Mixer Wagon Load — {feederName || "Set your name above"}</div>
-              {ingredients.length === 0 ? (
-                <div className="text-slate-400 text-sm text-center py-4">No recipes configured for the mobs in this load.</div>
-              ) : ingredients.map(({ name, kg }) => (
-                <div key={name} className="flex justify-between items-center py-2.5 border-b border-slate-100 last:border-0">
-                  <span className="font-semibold text-slate-700">{name}</span>
-                  <span className="font-extrabold text-red-950 text-lg">{kg.toFixed(0)} kg</span>
-                </div>
-              ))}
-              {ingredients.length > 0 && (
-                <div className="flex justify-between items-center pt-3 mt-1 border-t-2 border-slate-200">
-                  <span className="font-bold text-slate-600">TOTAL</span>
-                  <span className="font-extrabold text-2xl text-red-950">{totalKg.toFixed(0)} kg</span>
-                </div>
-              )}
-            </div>
-            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-              <div className="text-xs font-bold text-slate-400 uppercase mb-2">Mobs in this load</div>
-              {loadMobs.map(({ mob, id }) => (
-                <div key={id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
-                  <div>
-                    <div className="font-semibold text-slate-700 text-sm">{mob.name}</div>
-                    <div className="text-xs text-slate-400">{mob.className} · {mob.paddock}</div>
-                  </div>
-                  <div className="font-bold text-slate-600">{mob.headCount} head</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // Management view
-    if (cattleTab === "manage") {
-      return (
-        <div className="pb-24 bg-slate-50 min-h-screen">
-          <div className="bg-red-950 text-white px-5 py-4 flex items-center gap-3">
-            <button onClick={() => setCattleTab("loads")} className="text-white/70">← Back</button>
-            <h1 className="text-lg font-bold flex-1">Cattle Management</h1>
-          </div>
-          <div className="flex gap-1 px-4 pt-4 pb-2 overflow-x-auto">
-            {["elements","classes","mobs","loads"].map(t => (
-              <button key={t} onClick={() => setManageTab(t)}
-                className={`px-3 py-1.5 rounded-full text-xs font-bold flex-shrink-0 ${manageTab===t ? "bg-red-950 text-white" : "bg-white text-slate-600 border border-slate-200"}`}>
-                {t.charAt(0).toUpperCase()+t.slice(1)}
-              </button>
-            ))}
-          </div>
-          <div className="p-4 space-y-3">
-            {manageTab === "elements" && (
-              <>
-                {elements.map(e => (
-                  <div key={e.id} className="bg-white rounded-2xl p-4 border border-slate-100 flex justify-between items-center">
-                    <div>
-                      <div className="font-bold text-slate-700">{e.name}</div>
-                      <div className="text-xs text-slate-400">{e.unit} · Default: {e.defaultRate} · {e.costPerUnit} {e.costUnit}</div>
-                    </div>
-                    <button onClick={async () => { await api.deleteCattleElement(e.id); setElements(prev => prev.filter(x => x.id !== e.id)); }} className="text-rose-400 text-xs font-bold px-3 py-1 bg-rose-50 rounded-full">Remove</button>
-                  </div>
-                ))}
-                <div className="bg-white rounded-2xl p-4 border border-slate-100">
-                  <div className="text-xs font-bold text-slate-500 mb-2">Add Element</div>
-                  {[["Name","name","text"],["Unit (kg/head or L/head)","unit","text"],["Default rate","defaultRate","number"],["Cost per unit","costPerUnit","number"]].map(([label,key,type]) => (
-                    <div key={key} className="mb-2">
-                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
-                      <input type={type} value={newMobForm[key]||""} onChange={e => setNewMobForm(p=>({...p,[key]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                    </div>
-                  ))}
-                  <button onClick={async () => {
-                    const created = await api.createCattleElement({ name: newMobForm.name||"New Element", unit: newMobForm.unit||"kg/head", defaultRate: Number(newMobForm.defaultRate)||0, costPerUnit: Number(newMobForm.costPerUnit)||0, costUnit: "$/tonne" });
-                    setElements(prev => [...prev, created]); setNewMobForm({});
-                  }} className="w-full bg-red-900 text-white rounded-2xl py-2.5 font-bold text-sm mt-2">Add Element</button>
-                </div>
-              </>
-            )}
-            {manageTab === "classes" && (
-              <>
-                {classes.map(c => (
-                  <div key={c.id} className="bg-white rounded-2xl p-4 border border-slate-100 flex justify-between items-center">
-                    <span className="font-bold text-slate-700">{c.name}</span>
-                    <button onClick={async () => { await api.deleteCattleClass(c.id); setClasses(prev => prev.filter(x => x.id !== c.id)); }} className="text-rose-400 text-xs font-bold px-3 py-1 bg-rose-50 rounded-full">Remove</button>
-                  </div>
-                ))}
-                <div className="bg-white rounded-2xl p-4 border border-slate-100 flex gap-2">
-                  <input value={newMobForm.className||""} onChange={e => setNewMobForm(p=>({...p,className:e.target.value}))} placeholder="Class name e.g. Spring U Bulls" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                  <button onClick={async () => {
-                    const created = await api.createCattleClass({ name: newMobForm.className });
-                    setClasses(prev => [...prev, created]); setNewMobForm({});
-                  }} className="bg-red-900 text-white rounded-xl px-4 font-bold text-sm">Add</button>
-                </div>
-              </>
-            )}
-            {manageTab === "mobs" && (
-              <>
-                {mobs.map(m => (
-                  <div key={m.id} className="bg-white rounded-2xl p-4 border border-slate-100">
-                    <div className="flex justify-between">
-                      <div className="font-bold text-slate-700">{m.name}</div>
-                      <button onClick={async () => { await api.deleteCattleMob(m.id); setMobs(prev => prev.filter(x => x.id !== m.id)); }} className="text-rose-400 text-xs font-bold">Remove</button>
-                    </div>
-                    <div className="text-xs text-slate-400 mt-1">{m.className} · {m.paddock} · {m.headCount} head</div>
-                  </div>
-                ))}
-                <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2">
-                  <div className="text-xs font-bold text-slate-500 mb-1">Add Mob</div>
-                  {[["Mob name","mobName"],["Paddock","mobPaddock"],["Head count","mobHead"]].map(([label,key]) => (
-                    <div key={key}>
-                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
-                      <input value={newMobForm[key]||""} onChange={e => setNewMobForm(p=>({...p,[key]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                    </div>
-                  ))}
-                  <div>
-                    <label className="text-xs text-slate-400 font-semibold block mb-1">Class</label>
-                    <select value={newMobForm.mobClass||""} onChange={e => setNewMobForm(p=>({...p,mobClass:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white">
-                      <option value="">Select class...</option>
-                      {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                    </select>
-                  </div>
-                  <button onClick={async () => {
-                    const created = await api.createCattleMob({ name: newMobForm.mobName, className: newMobForm.mobClass||"", paddock: newMobForm.mobPaddock||"", headCount: Number(newMobForm.mobHead)||0 });
-                    setMobs(prev => [...prev, created]); setNewMobForm({});
-                  }} className="w-full bg-red-900 text-white rounded-2xl py-2.5 font-bold text-sm">Add Mob</button>
-                </div>
-              </>
-            )}
-            {manageTab === "loads" && (
-              <>
-                {loads.map(l => {
-                  const loadMobNames = assignments.filter(a => a.loadName === l.name);
-                  return (
-                    <div key={l.id} className="bg-white rounded-2xl p-4 border border-slate-100">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className="font-bold text-slate-700">{l.name}</div>
-                          <div className="text-xs text-slate-400 mt-1">{loadMobNames.length} mob{loadMobNames.length!==1?"s":""} assigned</div>
-                        </div>
-                        <button onClick={async () => { await api.deleteCattleLoad(l.id); setLoads(prev=>prev.filter(x=>x.id!==l.id)); }} className="text-rose-400 text-xs font-bold">Remove</button>
-                      </div>
-                      <div className="mt-3">
-                        <label className="text-xs font-semibold text-slate-500 block mb-1">Assign a mob to this load</label>
-                        <div className="flex gap-2">
-                          <select value={newMobForm[`assign_${l.name}`]||""} onChange={e => setNewMobForm(p=>({...p,[`assign_${l.name}`]:e.target.value}))} className="flex-1 border border-slate-200 rounded-xl px-2 py-2 text-sm bg-white">
-                            <option value="">Select mob...</option>
-                            {mobs.map(m => <option key={m.id} value={m.name}>{m.name} ({m.headCount})</option>)}
-                          </select>
-                          <button onClick={async () => {
-                            if (!newMobForm[`assign_${l.name}`]) return;
-                            const created = await api.createCattleAssignment({ loadName: l.name, mobName: newMobForm[`assign_${l.name}`], multiplier: 1 });
-                            setAssignments(prev => [...prev, created]); setNewMobForm(p=>({...p,[`assign_${l.name}`]:""}));
-                          }} className="bg-red-900 text-white rounded-xl px-3 font-bold text-sm">Add</button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                <div className="bg-white rounded-2xl p-4 border border-slate-100 flex gap-2">
-                  <input value={newLoadName} onChange={e => setNewLoadName(e.target.value)} placeholder="Load name e.g. Load 1" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                  <button onClick={async () => {
-                    if (!newLoadName.trim()) return;
-                    const created = await api.createCattleLoad({ name: newLoadName.trim() });
-                    setLoads(prev => [...prev, created]); setNewLoadName("");
-                  }} className="bg-red-900 text-white rounded-xl px-4 font-bold text-sm">Add</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    // Main loads list
-    return (
-      <div className="pb-24 bg-slate-50 min-h-screen">
-        <div className="bg-red-950 text-white px-5 pt-6 pb-8">
-          <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
-          <div className="text-3xl mb-1">🐄</div>
-          <div className="text-2xl font-bold tracking-tight">Cattle Feeding System</div>
-          <div className="text-white/70 text-sm mt-1">Mixer wagon loads & recipes</div>
-        </div>
-        <div className="px-4 -mt-4 space-y-3">
-          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
-            <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Feeder name</label>
-            <input value={feederName} onChange={e => { setFeederName(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
-              placeholder="Enter your name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
-          </div>
-          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex items-center justify-between">
-            <div className="text-sm font-semibold text-slate-500">Total cattle on feed</div>
-            <div className="text-3xl font-extrabold text-red-950">{totalOnFeed.toLocaleString()}</div>
-          </div>
-          {loads.length === 0 ? (
-            <div className="bg-white rounded-2xl p-6 text-center text-slate-400 text-sm border border-slate-100">
-              No loads yet. Tap Manage to set up elements, classes, mobs and loads.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="text-xs font-bold text-slate-400 uppercase px-1">Select a load</div>
-              {[...loads].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map(l => {
-                const count = assignments.filter(a => a.loadName === l.name && mobs.some(m => m.name === a.mobName)).length;
-                return (
-                  <button key={l.id} onClick={() => setSelectedLoad(l)} className="w-full bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center justify-between text-left">
-                    <div>
-                      <div className="font-bold text-slate-800 text-lg">{l.name}</div>
-                      <div className="text-xs text-slate-400 mt-0.5">{count} mob{count!==1?"s":""}</div>
-                    </div>
-                    <span className="text-slate-300 text-xl">›</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <button onClick={() => setCattleTab("manage")} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">⚙️ Manage Elements, Mobs & Loads</button>
-        </div>
-      </div>
-    );
-  };
+  // [extracted to top-level component]
 
   // ── Sheep Feeding Screen ──────────────────────────────────────────────────
-  const SheepFeedingScreen = () => {
-    const [sheepTab, setSheepTab] = React.useState("run");
-    const [pens, setPens] = React.useState([]);
-    const [settings, setSettings] = React.useState({ splitAm: 0.6, splitPm: 0.4 });
-    const [history, setHistory] = React.useState([]);
-    const [loading, setLoading] = React.useState(true);
-    const [runPeriod, setRunPeriod] = React.useState("AM");
-    const [feeder, setFeeder] = React.useState(() => localStorage.getItem("kw_feeder") || "");
-    const [showAddPen, setShowAddPen] = React.useState(false);
-    const [newPenForm, setNewPenForm] = React.useState({});
-
-    React.useEffect(() => {
-      setLoading(true);
-      Promise.all([api.getSheepPens(), api.getSheepSettings(), api.getSheepHistory()])
-        .then(([p, s, h]) => { setPens(p); setSettings(s || {}); setHistory(h); setLoading(false); })
-        .catch(() => setLoading(false));
-    }, []);
-
-    const totalHead = pens.filter(p => p.active).reduce((s, p) => s + p.headCount, 0);
-    const totalKg = pens.filter(p => p.active).reduce((s, p) => {
-      const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
-      return s + p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 * split;
-    }, 0);
-
-    const savePens = async (updated) => {
-      setPens(updated);
-      await api.saveSheepPens(updated);
-    };
-
-    if (loading) return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-slate-400">Loading Sheep Feeding System...</div>
-      </div>
-    );
-
-    return (
-      <div className="pb-24 bg-slate-50 min-h-screen">
-        <div className="bg-slate-800 text-white px-5 pt-6 pb-8">
-          <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
-          <div className="text-3xl mb-1">🐑</div>
-          <div className="text-2xl font-bold tracking-tight">Sheep Feeding System</div>
-          <div className="text-white/70 text-sm mt-1">Pen feed runs & grain rosters</div>
-        </div>
-        <div className="flex gap-1 px-4 -mt-4 mb-3 overflow-x-auto">
-          {[{id:"run",label:"🏃 Feed Run"},{id:"pens",label:"🐑 Pens"},{id:"history",label:"📋 History"}].map(t => (
-            <button key={t.id} onClick={() => setSheepTab(t.id)}
-              className={`px-4 py-2 rounded-2xl text-sm font-bold flex-shrink-0 shadow-sm ${sheepTab===t.id ? "bg-slate-800 text-white" : "bg-white text-slate-600 border border-slate-200"}`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div className="px-4 space-y-3">
-          {sheepTab === "run" && (
-            <>
-              <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Feeder</label>
-                  <div className="flex gap-1">
-                    {["AM","PM"].map(p => (
-                      <button key={p} onClick={() => setRunPeriod(p)}
-                        className={`px-4 py-1.5 rounded-full text-xs font-bold ${runPeriod===p ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600"}`}>
-                        {p}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <input value={feeder} onChange={e => { setFeeder(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
-                  placeholder="Your name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm mb-3" />
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-slate-50 rounded-xl p-3 text-center">
-                    <div className="text-xs text-slate-400 font-semibold">Total Head</div>
-                    <div className="text-2xl font-extrabold text-slate-800">{totalHead.toLocaleString()}</div>
-                  </div>
-                  <div className="bg-slate-50 rounded-xl p-3 text-center">
-                    <div className="text-xs text-slate-400 font-semibold">Total kg ({runPeriod})</div>
-                    <div className="text-2xl font-extrabold text-slate-800">{totalKg.toFixed(0)}</div>
-                  </div>
-                </div>
-              </div>
-              {pens.filter(p => p.active).map((pen) => {
-                const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
-                const kg = pen.headCount * Number(pen.kgPerHead||0) * (pen.rationPercent||100)/100 * split;
-                return (
-                  <div key={pen.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-slate-800">{pen.name}</div>
-                        <div className="text-xs text-slate-400">{pen.ration} · {pen.headCount} head · {pen.kgPerHead} kg/head</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-extrabold text-slate-800">{kg.toFixed(0)}</div>
-                        <div className="text-xs text-slate-400">kg</div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {pens.filter(p=>p.active).length > 0 && (
-                <button onClick={async () => {
-                  const entry = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), feeder, period: runPeriod, splitFraction: runPeriod==="AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4), events: pens.filter(p=>p.active).map(p=>({ penId: p.id, penName: p.name, kg: p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 })) };
-                  const created = await api.addSheepHistory(entry);
-                  setHistory(prev => [created, ...prev]);
-                  showToast("Feed run recorded ✓");
-                }} className="w-full bg-slate-800 text-white rounded-2xl py-3.5 font-bold">
-                  ✓ Record Feed Run
-                </button>
-              )}
-            </>
-          )}
-          {sheepTab === "pens" && (
-            <>
-              {pens.map((pen, i) => (
-                <div key={pen.id} className={`bg-white rounded-2xl p-4 border shadow-sm ${pen.active ? "border-slate-100" : "border-slate-200 opacity-60"}`}>
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="font-bold text-slate-800">{pen.name}</div>
-                    <button onClick={() => { const updated = pens.map((p,j)=>j===i?{...p,active:!p.active}:p); savePens(updated); }}
-                      className={`text-xs font-bold px-2.5 py-1 rounded-full ${pen.active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>
-                      {pen.active ? "Active" : "Inactive"}
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[["Head",pen.headCount,"headCount"],["kg/head",pen.kgPerHead,"kgPerHead"],["Ration %",pen.rationPercent,"rationPercent"]].map(([label,val,key]) => (
-                      <div key={key}>
-                        <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
-                        <input type="number" value={val} onChange={e => {
-                          const updated = pens.map((p,j)=>j===i?{...p,[key]:Number(e.target.value)}:p);
-                          savePens(updated);
-                        }} className="w-full border border-slate-200 rounded-xl px-2 py-2 text-sm bg-white text-center font-bold" />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-2">
-                    <label className="text-xs text-slate-400 font-semibold block mb-1">Ration type</label>
-                    <input value={pen.ration} onChange={e => { const updated = pens.map((p,j)=>j===i?{...p,ration:e.target.value}:p); savePens(updated); }}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                  </div>
-                </div>
-              ))}
-              {showAddPen ? (
-                <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2">
-                  {[["Pen name","penName","text"],["Head count","penHead","number"],["kg/head","penKg","number"]].map(([label,key,type]) => (
-                    <div key={key}>
-                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
-                      <input type={type} value={newPenForm[key]||""} onChange={e => setNewPenForm(p=>({...p,[key]:e.target.value}))}
-                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                    </div>
-                  ))}
-                  <button onClick={async () => {
-                    const newPen = { id: crypto.randomUUID(), name: newPenForm.penName||"New Pen", ration: "Grower", headCount: Number(newPenForm.penHead)||0, kgPerHead: Number(newPenForm.penKg)||0, rationPercent: 100, active: true };
-                    await savePens([...pens, newPen]);
-                    setNewPenForm({}); setShowAddPen(false);
-                  }} className="w-full bg-slate-800 text-white rounded-2xl py-2.5 font-bold text-sm">Add Pen</button>
-                  <button onClick={() => setShowAddPen(false)} className="w-full text-slate-400 text-sm">Cancel</button>
-                </div>
-              ) : (
-                <button onClick={() => setShowAddPen(true)} className="w-full border-2 border-dashed border-slate-300 rounded-2xl py-3 text-slate-400 font-semibold text-sm">+ Add Pen</button>
-              )}
-            </>
-          )}
-          {sheepTab === "history" && (
-            <>
-              {history.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">No feed runs recorded yet.</div>}
-              {history.map((h) => (
-                <div key={h.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="font-bold text-slate-700">{new Date(h.startedAt).toLocaleDateString("en-AU", {weekday:"short",day:"numeric",month:"short"})}</div>
-                      <div className="text-xs text-slate-400">{h.period} · {h.feeder}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-bold text-slate-600">{Array.isArray(h.events) ? h.events.reduce((s,e)=>s+(Number(e.kg)||0),0).toFixed(0) : 0} kg</div>
-                      <div className="text-xs text-slate-400">{Array.isArray(h.events) ? h.events.length : 0} pens</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-    );
-  };
+  // [extracted to top-level component]
 
   const LivestockScreen = () => (
-    <div className="pb-24 bg-slate-50 min-h-screen">
+    <div className="pb-24 bg-stone-50 min-h-screen">
       <Header title="Livestock" />
       <div className="p-4 space-y-3">
         {[
@@ -3312,8 +3325,8 @@ export default function App() {
       entries.map((e) => ({ ...e, mob: mobs.find((m) => m.id === Number(mobId))?.name || "Unknown" }))
     );
     return (
-      <div className="pb-24 bg-slate-50 min-h-screen">
-        <div className="bg-white/80 backdrop-blur-md flex items-center px-4 py-4 sticky top-0 z-10 border-b border-slate-100">
+      <div className="pb-24 bg-stone-50 min-h-screen">
+        <div className="bg-white flex items-center px-4 py-4 sticky top-0 z-10 border-b border-stone-100">
           <button onClick={() => setTab("livestock")} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 mr-2">‹</button>
           <h1 className="text-base font-bold flex-1 text-center text-slate-800">Mob Activity</h1>
           <div className="w-8" />
@@ -3377,7 +3390,7 @@ export default function App() {
   const MobCard = (m) => (
     <div
       key={m.id}
-      className="w-full flex items-center justify-between px-4 py-4 bg-white rounded-2xl shadow-sm border border-slate-100 text-left"
+      className="w-full flex items-center justify-between px-4 py-4 bg-white rounded-2xl border border-stone-200/80 text-left"
     >
       <button onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); }} className="flex-1 text-left min-w-0">
         <div className="flex items-center gap-2">
@@ -3407,8 +3420,8 @@ export default function App() {
   );
 
   const MobListScreen = () => (
-    <div className="pb-24 bg-slate-50 min-h-screen">
-      <div className="bg-white/80 backdrop-blur-md flex items-center px-4 py-4 sticky top-0 z-10 border-b border-slate-100">
+    <div className="pb-24 bg-stone-50 min-h-screen">
+      <div className="bg-white flex items-center px-4 py-4 sticky top-0 z-10 border-b border-stone-100">
         <button onClick={() => setTab("livestock")} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 mr-2">‹</button>
         <h1 className="text-base font-bold flex-1 text-center text-slate-800">Mob List</h1>
         <div className="w-8" />
@@ -3996,7 +4009,7 @@ export default function App() {
                   showToast(err.message || "Couldn't save to the server");
                 }
               }}
-              className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold"
+              className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold"
             >
               Save Record
             </button>
@@ -4055,7 +4068,7 @@ export default function App() {
                 <button
                   key={opt.id}
                   onClick={() => { setInsightMode(opt.id); setShowInsightPicker(false); }}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-left transition-colors ${insightMode === opt.id ? "bg-red-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100"}`}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-left transition-colors border ${insightMode === opt.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-700 border-stone-100 hover:border-stone-300"}`}
                 >
                   <span className="text-lg">{opt.icon}</span>
                   <span className="font-medium text-sm">{opt.label}</span>
@@ -4200,7 +4213,7 @@ export default function App() {
         return (
           <div className="fixed inset-0 bg-white z-50 flex flex-col max-w-full">
             {/* Header */}
-            <div className="bg-red-950 text-white px-5 py-4 flex items-center gap-3 flex-shrink-0">
+            <div className="bg-white border-b border-stone-200 px-5 py-4 flex items-center gap-3 flex-shrink-0">
               <button onClick={() => setShowRecords(false)} className="text-white/70 font-medium text-sm">← Menu</button>
               <div className="flex-1">
                 <div className="font-semibold tracking-tight">Records</div>
@@ -4226,7 +4239,7 @@ export default function App() {
                       setRecordsLoading(false);
                     }
                   }}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition-colors ${recordsType === t.id ? "bg-red-950 text-white" : "bg-slate-100 text-slate-600"}`}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition-colors border ${recordsType === t.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}
                 >
                   {t.label}
                 </button>
@@ -4460,7 +4473,7 @@ export default function App() {
 
     return (
       <div className="fixed inset-0 bg-slate-50 z-40 flex flex-col max-w-md mx-auto">
-        <div className="bg-slate-800 text-white flex items-center justify-between px-4 py-4">
+        <div className="bg-white border-b border-stone-200 flex items-center justify-between px-4 py-4">
           <button onClick={() => { setShowAddMob(false); setEditingMobId(null); }} className="text-sm font-semibold text-slate-300">CANCEL</button>
           <h1 className="text-base font-bold">{editingMobId ? "Edit Mob" : "Add Mob"}</h1>
           <div className="w-14" />
@@ -4606,7 +4619,7 @@ export default function App() {
 
   if (showSplash || authLoading) {
     return (
-      <div className="max-w-md mx-auto min-h-screen bg-red-950 flex flex-col items-center justify-center gap-6 px-8">
+      <div className="max-w-md mx-auto min-h-screen bg-stone-50 flex flex-col items-center justify-center gap-6 px-8">
         <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-48 rounded-xl shadow-2xl" />
         {apiWaking && (
           <div className="text-center">
@@ -4625,8 +4638,8 @@ export default function App() {
   // ── Password setup screen (invite link from email) ───────────────────────
   if (setupToken && setupAccount) {
     return (
-      <div className="max-w-md mx-auto min-h-screen bg-gradient-to-br from-red-950 to-amber-600 flex flex-col items-center justify-center px-6">
-        <div className="bg-white rounded-3xl shadow-2xl w-full p-6">
+      <div className="max-w-md mx-auto min-h-screen bg-stone-50 flex flex-col items-center justify-center px-6">
+        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6">
           <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-24 mx-auto rounded-xl mb-4" />
           <h1 className="text-xl font-bold text-slate-800 text-center mb-1">Welcome, {setupAccount.name}</h1>
           <p className="text-sm text-slate-400 text-center mb-5">Set your password to get started</p>
@@ -4664,7 +4677,7 @@ export default function App() {
                 setSetupError(err.message || "Something went wrong. Please try again.");
               }
             }}
-            className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
+            className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
           >
             Set Password
           </button>
@@ -4675,14 +4688,14 @@ export default function App() {
 
   if (locked && loggedInEmail) {
     return (
-      <div className="max-w-md mx-auto min-h-screen font-sans bg-gradient-to-br from-red-950 to-amber-600 flex flex-col items-center justify-center px-6">
-        <div className="bg-white rounded-3xl shadow-2xl w-full p-6 text-center">
+      <div className="max-w-md mx-auto min-h-screen font-sans bg-stone-50 flex flex-col items-center justify-center px-6">
+        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6 text-center">
           <div className="w-16 h-16 rounded-full bg-orange-50 text-red-950 flex items-center justify-center text-2xl font-extrabold mx-auto mb-4">
             {(currentUser.name || currentUser.email)[0].toUpperCase()}
           </div>
           <div className="text-lg font-extrabold text-slate-800">Welcome back</div>
           <div className="text-sm text-slate-400 mb-6">{currentUser.name} · {currentUser.email}</div>
-          <button onClick={() => setLocked(false)} className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold">Continue</button>
+          <button onClick={() => setLocked(false)} className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold">Continue</button>
           <button
             onClick={() => { setAuthToken(null); setCurrentAccount(null); setLoggedInEmail(null); setLocked(false); setLoginEmail(""); setStayLoggedIn(true); }}
             className="w-full text-slate-400 text-sm font-semibold mt-3"
@@ -4696,8 +4709,8 @@ export default function App() {
 
   if (!loggedInEmail) {
     return (
-      <div className="max-w-md mx-auto min-h-screen font-sans bg-gradient-to-br from-red-950 to-amber-600 flex flex-col items-center justify-center px-6">
-        <div className="bg-white rounded-3xl shadow-2xl w-full p-6">
+      <div className="max-w-md mx-auto min-h-screen font-sans bg-stone-50 flex flex-col items-center justify-center px-6">
+        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6">
           <div className="text-center mb-6">
             <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-32 mx-auto mb-3 rounded-lg shadow" />
             <div className="text-sm text-slate-400 mt-1">Sign in with your invited account</div>
@@ -4756,7 +4769,7 @@ export default function App() {
                   : (err.message || "Couldn't sign in. Please try again."));
               }
             }}
-            className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
+            className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
           >
             Sign in
           </button>
@@ -4770,7 +4783,7 @@ export default function App() {
 
   // ── Desktop layout: sidebar nav + content panel on wide screens ──
   const DesktopSidebar = () => (
-    <div className="hidden md:flex flex-col w-56 min-h-screen bg-red-950 text-white fixed left-0 top-0 bottom-0 z-30">
+    <div className="hidden md:flex flex-col w-56 min-h-screen bg-white border-r border-stone-200 fixed left-0 top-0 bottom-0 z-30">
       <div className="px-4 py-6 border-b border-red-900">
         <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-full rounded-lg" />
         <div className="text-xs text-white/60 mt-2 text-center">{farmName}</div>
@@ -4811,15 +4824,24 @@ export default function App() {
     <div className="md:flex min-h-screen bg-slate-100">
       <DesktopSidebar />
       <div className="md:ml-56 flex-1">
-    <div className="max-w-md md:max-w-none mx-auto bg-white min-h-screen font-sans relative">
-      {tab === "home" && <HomeScreen />}
+    <div className="max-w-md md:max-w-none mx-auto bg-stone-50 min-h-screen font-sans relative">
+      {tab === "home" && <HomeScreen
+        setTab={setTab} setFarmName={setFarmName}
+        setFarmsMobs={setFarmsMobs} setFarmsPaddocks={setFarmsPaddocks} setFarmsLandmarks={setFarmsLandmarks}
+        farmsMobs={farmsMobs} farmsPaddocks={farmsPaddocks} farmName={farmName}
+        totalCattle={totalCattle} totalSheep={totalSheep} totalDSE={totalDSE}
+        farmSummaries={farmSummaries} rainfall={rainfall} setShowRainfall={setShowRainfall}
+        isOnline={isOnline} pendingChanges={pendingChanges} syncCount={syncCount}
+        syncing={syncing} handleSync={handleSync} setShowPaddockList={setShowPaddockList}
+        paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI}
+      />}
       {tab === "map" && MapScreen()}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
       {tab === "mobactivity" && MobActivityScreen()}
-      {tab === "workflow" && <WorkflowScreen />}
-      {tab === "cattle_feeding" && <CattleFeedingScreen />}
-      {tab === "sheep_feeding" && <SheepFeedingScreen />}
+      {tab === "workflow" && <WorkflowScreen setTab={setTab} currentAccount={currentAccount} />}
+      {tab === "cattle_feeding" && <CattleFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
+      {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
       <div className="md:hidden"><BottomNav /></div>
       {selectedMob && MobDetails()}
       {showMenu && MenuScreen()}
@@ -5023,7 +5045,7 @@ export default function App() {
                       showToast(err.message || "Couldn't send invite");
                     }
                   }}
-                  className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-semibold"
+                  className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold"
                 >
                   Send Invite Email
                 </button>
@@ -5053,7 +5075,7 @@ export default function App() {
               setShowAllFarms(false);
               showToast(`${newFarmName} added`);
             }}
-            className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold"
+            className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold"
           >
             Save Farm
           </button>

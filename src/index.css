@@ -6,6 +6,7 @@ html, body, #root {
   height: 100%;
   margin: 0;
   -webkit-tap-highlight-color: transparent;
+  background: #fafaf9;
 }
 
 body {
@@ -13,31 +14,19 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: contain;
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11"; /* Inter optical features */
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  color: #1a1a1a;
 }
 
-/* Tighter tracking for headings - feels more premium */
-h1, h2, h3, h4 {
-  letter-spacing: -0.025em;
-}
+h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
-/* Refined number rendering */
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
-}
+* { box-sizing: border-box; }
 
-/* Smooth page transitions */
-* {
-  box-sizing: border-box;
-}
+/* Warm off-white background throughout */
+.bg-app { background-color: #fafaf9; }
 
-/* Better focus rings */
-button:focus-visible {
-  outline: 2px solid #7f1d1d;
-  outline-offset: 2px;
-}
+button:focus-visible { outline: 2px solid #7f1d1d; outline-offset: 2px; }
+input, textarea, select { -webkit-appearance: none; }
 
-/* Remove iOS input styling */
-input, textarea, select {
-  -webkit-appearance: none;
-}
+/* Subtle card shadow */
+.card-shadow { box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04); }
