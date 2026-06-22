@@ -4,10 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
     <title>Kurra-Wirra Farm Management</title>
-    <meta name="theme-color" content="#3b0a0a" />
+
+    <!-- PWA / Install to home screen -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#3b0808" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Kurra-Wirra" />
+
+    <!-- Icons (iPhone, Android, browser tab) -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
     <style>
       *, *::before, *::after { box-sizing: border-box; }
       html, body, #root { height: 100%; margin: 0; }
@@ -16,12 +32,12 @@
         -webkit-font-smoothing: antialiased;
         overscroll-behavior-y: contain;
         -webkit-tap-highlight-color: transparent;
+        background: #fafaf9;
       }
       #startup-error {
-        display: none;
-        position: fixed; inset: 0; background: #450a0a;
-        color: white; padding: 24px; font-family: system-ui, sans-serif;
-        z-index: 9999; overflow-y: auto;
+        display: none; position: fixed; inset: 0;
+        background: #3b0808; color: white; padding: 24px;
+        font-family: system-ui, sans-serif; z-index: 9999; overflow-y: auto;
       }
       #startup-error h2 { font-size: 18px; margin-bottom: 12px; }
       #startup-error pre { font-size: 11px; background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-all; }
@@ -32,12 +48,10 @@
       <h2>⚠️ App failed to start</h2>
       <p id="startup-error-msg" style="margin-bottom:12px; font-size:14px;"></p>
       <pre id="startup-error-stack"></pre>
-      <button onclick="window.location.reload()" style="margin-top:16px; background:white; color:#450a0a; border:none; padding:12px 24px; border-radius:8px; font-weight:700; font-size:14px;">Reload</button>
+      <button onclick="window.location.reload()" style="margin-top:16px; background:white; color:#3b0808; border:none; padding:12px 24px; border-radius:8px; font-weight:700; font-size:14px;">Reload</button>
     </div>
     <div id="root"></div>
     <script>
-      // Catch any uncaught errors before React loads and show them visibly on screen
-      // This is critical for mobile debugging where we can't open DevTools
       window.addEventListener('error', function(e) {
         var el = document.getElementById('startup-error');
         if (el) {
