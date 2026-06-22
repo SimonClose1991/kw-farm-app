@@ -164,15 +164,27 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Accurate geodesic polygon area in hectares using the spherical excess formula.
+// Input: array of [lon, lat] pairs in DEGREES (GeoJSON order).
+// Uses the WGS84 mean Earth radius for accuracy at Australian latitudes.
 function ringAreaHa(ring) {
-  const R = 6378137;
+  if (!ring || ring.length < 3) return 0;
+  const R = 6378137; // WGS84 equatorial radius in metres
+  const toRad = d => d * Math.PI / 180;
   let area = 0;
-  for (let i = 0; i < ring.length - 1; i++) {
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
     const [lon1, lat1] = ring[i];
-    const [lon2, lat2] = ring[i + 1];
-    area += ((lon2 - lon1) * Math.PI / 180) * (2 + Math.sin(lat1 * Math.PI / 180) + Math.sin(lat2 * Math.PI / 180));
+    const [lon2, lat2] = ring[(i + 1) % n];
+    area += toRad(lon2 - lon1) * (2 + Math.sin(toRad(lat1)) + Math.sin(toRad(lat2)));
   }
-  return Math.abs(area * R * R / 2) / 10000;
+  return Math.abs(area * R * R / 2) / 10000; // m² → hectares
+}
+
+// ringAreaHaFromLatLng: same but takes [lat, lng] pairs (as drawn on the map)
+function ringAreaHaFromLatLng(points) {
+  // Convert [lat,lng] → [lng,lat] for the standard geodesic formula
+  return ringAreaHa(points.map(([lat, lng]) => [lng, lat]));
 }
 
 // Approximate farm locations (lat, lng) — used to centre the interactive map
@@ -515,8 +527,9 @@ function GooglePaddockMap({
           fillOpacity: mode === "paddocks" ? 0.45 : 0.15,
           map,
         });
-        if (mode === "paddocks") poly.addListener("click", () => onSelect(p));
-        else poly.addListener("click", () => onSelect(p));
+        // Only allow paddock selection when not in draw mode
+        if (!drawMode) poly.addListener("click", () => onSelect(p));
+        if (!drawMode) poly.addListener("click", () => onSelect(p));
         polygons[p.name] = poly;
         overlays.push(poly);
 
@@ -583,18 +596,45 @@ function GooglePaddockMap({
 
       // ── Landmarks (paddocks mode) ──
       if (mode === "paddocks") {
-        landmarks.forEach((l) => {
-          if (l.lat == null || l.lng == null) return;
-          const pos = { lat: Number(l.lat), lng: Number(l.lng) };
-          const cat = Object.values(LANDMARK_CATEGORIES).flat().find((c) => c.type === l.type);
-          const marker = new g.Marker({
-            position: pos, map,
-            label: { text: cat?.icon || "📍", fontSize: "16px" },
-            icon: { path: g.SymbolPath.CIRCLE, scale: 14, fillColor: LANDMARK_COLOUR_HEX[l.colour] || "#64748b", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+        const currentZoom = map.getZoom();
+        const renderLandmarks = (zoom) => {
+          // Remove existing landmark overlays
+          overlays.filter(o => o._isLandmark).forEach(o => { o.setMap(null); });
+          landmarks.forEach((l) => {
+            if (l.lat == null || l.lng == null) return;
+            const pos = { lat: Number(l.lat), lng: Number(l.lng) };
+            const cat = Object.values(LANDMARK_CATEGORIES).flat().find((c) => c.type === l.type);
+            const isGate = l.type === "Gate";
+
+            // Gates: only show at zoom 13+, render as small ⊗ symbol on boundary
+            if (isGate) {
+              if (zoom < 13) return; // too zoomed out — skip
+              const m = new g.Marker({
+                position: pos, map,
+                label: { text: "⊗", fontSize: zoom >= 15 ? "14px" : "10px", color: "#dc2626", fontWeight: "bold" },
+                icon: { path: g.SymbolPath.CIRCLE, scale: 0, fillOpacity: 0, strokeOpacity: 0 },
+                zIndex: 10,
+              });
+              m._isLandmark = true;
+              m.addListener("click", () => onSelectLandmark?.(l));
+              overlays.push(m);
+            } else {
+              // Other landmarks: show at zoom 12+
+              if (zoom < 12) return;
+              const m = new g.Marker({
+                position: pos, map,
+                label: { text: cat?.icon || "📍", fontSize: zoom >= 14 ? "16px" : "12px" },
+                icon: { path: g.SymbolPath.CIRCLE, scale: zoom >= 14 ? 14 : 10, fillColor: LANDMARK_COLOUR_HEX[l.colour] || "#64748b", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+                zIndex: 10,
+              });
+              m._isLandmark = true;
+              m.addListener("click", () => onSelectLandmark?.(l));
+              overlays.push(m);
+            }
           });
-          marker.addListener("click", () => onSelectLandmark?.(l));
-          overlays.push(marker);
-        });
+        };
+        renderLandmarks(currentZoom);
+        map.addListener("zoom_changed", () => renderLandmarks(map.getZoom()));
       }
 
       // ── Draggable landmark placement pin ──
@@ -654,7 +694,8 @@ function GooglePaddockMap({
         overlays.push(dot);
       }
 
-      if (paddocks.length || landmarks.length) { try { map.fitBounds(bounds, 40); } catch {} }
+      // Only fit bounds on initial load, not during draw mode
+      if ((paddocks.length || landmarks.length) && !drawMode) { try { map.fitBounds(bounds, 40); } catch {} }
       mapInstanceRef.current = { map, overlays, polygons, labelMarkers };
     };
 
@@ -680,7 +721,7 @@ function GooglePaddockMap({
         mapInstanceRef.current = null;
       }
     };
-  }, [paddocks, center, apiKey, mode, mobs, landmarks, drawMode, drawPoints, userLocation, openGateIds, landmarkPinMode]);
+  }, [paddocks, center, apiKey, mode, mobs, landmarks, drawMode, userLocation, openGateIds, landmarkPinMode]); // drawPoints intentionally omitted — handled by separate effect to prevent map rebuild
 
   // Separate effect: update polygon fill colors when insight mode changes — no map rebuild
   React.useEffect(() => {
@@ -692,11 +733,32 @@ function GooglePaddockMap({
       const fill = colourForPaddock(p);
       if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
     });
-    // Clear old labels so they rebuild with updated badges on next zoom event
     if (ref.labelMarkers) {
       Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
     }
   }, [insightMode]);
+
+  // Separate effect: update draw polygon without rebuilding map
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.map || !window.google?.maps || !drawPoints.length) return;
+    // Remove old draw overlays
+    if (ref.drawOverlays) ref.drawOverlays.forEach(o => { try { o.setMap(null); } catch {} });
+    const g = window.google.maps;
+    const path = drawPoints.map(p => ({ lat: p.lat, lng: p.lng }));
+    const poly = new g.Polygon({
+      paths: path, strokeColor: "#22c55e", strokeWeight: 3,
+      fillColor: "#22c55e", fillOpacity: drawPoints.length > 2 ? 0.3 : 0,
+      map: ref.map, clickable: false,
+    });
+    const dots = drawPoints.map((p, i) => new g.Marker({
+      position: { lat: p.lat, lng: p.lng }, map: ref.map,
+      label: { text: String(i+1), fontSize: "11px", fontWeight: "bold", color: "#fff" },
+      icon: { path: g.SymbolPath.CIRCLE, scale: 10, fillColor: "#22c55e", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+      zIndex: 200, clickable: false,
+    }));
+    ref.drawOverlays = [poly, ...dots];
+  }, [drawPoints]);
 
   // Separate effect: update draggable pin position without rebuilding map
   React.useEffect(() => {
@@ -766,8 +828,8 @@ const ACTION_FIELDS = {
 
 function Modal({ title, onClose, children }) {
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-50 max-w-md mx-auto">
-      <div className="bg-white rounded-t-3xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[250]">
+      <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="flex justify-center pt-3 flex-shrink-0"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
         <div className="flex justify-between items-center px-5 pt-2 pb-3 flex-shrink-0 border-b border-slate-100">
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center"><X size={16} /></button>
@@ -2338,8 +2400,9 @@ export default function App() {
     <div className="pb-24 relative">
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
-          onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowSettings(true)}
+          onClick={() => setShowSettings(true)}
           className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
+          title="Settings"
         >
           <Settings size={16} />
         </button>
@@ -2356,9 +2419,10 @@ export default function App() {
         </div>
         <button
           onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowHelp(true)}
-          className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
+          className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${mapMode === "Paddocks" ? "bg-amber-100 text-amber-700 font-bold" : "bg-slate-100 text-slate-500"}`}
+          title={mapMode === "Paddocks" ? "Map overlay" : "Help"}
         >
-          {mapMode === "Paddocks" ? <Settings size={16} /> : <HelpCircle size={16} />}
+          {mapMode === "Paddocks" ? "🗺" : <HelpCircle size={16} />}
         </button>
       </div>
 
@@ -2389,7 +2453,33 @@ export default function App() {
                 landmarks={[]}
                 landmarkPinMode={true}
                 landmarkPinPos={landmarkPinPos}
-                onLandmarkPinMoved={(lat, lng) => setLandmarkPinPos({ lat, lng })}
+                onLandmarkPinMoved={(lat, lng) => {
+                  setLandmarkPinPos({ lat, lng });
+                  // Auto-detect nearest paddocks for gate placement
+                  if (newLandmarkForm.type === "Gate" && paddocks.length > 0) {
+                    // Find two nearest paddock centroids to the pin position
+                    const withDist = paddocks.map(p => {
+                      if (!p.geojson) return { p, d: Infinity };
+                      try {
+                        const coords = p.geojson.coordinates?.[0] || [];
+                        if (!coords.length) return { p, d: Infinity };
+                        // Centroid
+                        const cx = coords.reduce((s,c)=>s+c[0],0)/coords.length;
+                        const cy = coords.reduce((s,c)=>s+c[1],0)/coords.length;
+                        const dx = cx - lng, dy = cy - lat;
+                        return { p, d: Math.sqrt(dx*dx+dy*dy) };
+                      } catch { return { p, d: Infinity }; }
+                    }).filter(x=>x.d<Infinity).sort((a,b)=>a.d-b.d);
+                    if (withDist.length >= 2) {
+                      const a = withDist[0].p.name;
+                      const b = withDist[1].p.name;
+                      setNewLandmarkForm(prev => ({
+                        ...prev, paddockA: a, paddockB: b,
+                        name: prev.name || `Gate between ${a} and ${b}`
+                      }));
+                    }
+                  }
+                }}
               />
             ) : (
               <div className="w-full h-full bg-slate-700 flex flex-col items-center justify-center text-white p-6 text-center gap-3">
@@ -2403,6 +2493,9 @@ export default function App() {
               <div className="absolute bottom-20 left-4 right-4 bg-white/90 backdrop-blur-sm rounded-2xl px-4 py-3 text-center shadow-lg">
                 <div className="text-xs text-slate-400 font-semibold">PIN LOCATION</div>
                 <div className="font-semibold text-slate-700 mt-0.5">{landmarkPinPos.lat.toFixed(5)}, {landmarkPinPos.lng.toFixed(5)}</div>
+                {newLandmarkForm.type === "Gate" && newLandmarkForm.paddockA && newLandmarkForm.paddockB && (
+                  <div className="text-xs text-amber-700 font-semibold mt-1">⊗ {newLandmarkForm.paddockA} ↔ {newLandmarkForm.paddockB}</div>
+                )}
               </div>
             )}
           </div>
@@ -2584,11 +2677,16 @@ export default function App() {
             )}
             {mapDrawMode && drawPoints.length >= 3 && (
               <div className="absolute bottom-16 left-4 right-4 flex gap-2 z-10">
+                <div className="absolute -top-8 left-0 right-0 text-center">
+                  <span className="bg-black/70 text-white text-xs px-3 py-1 rounded-full font-semibold">
+                    ≈ {ringAreaHaFromLatLng(drawPoints.map(p => [p.lat, p.lng])).toFixed(1)} ha · {drawPoints.length} points
+                  </span>
+                </div>
                 <button onClick={() => { setDrawPoints([]); setMapDrawMode(false); }} className="flex-1 bg-white text-slate-600 rounded-2xl py-3 font-bold text-sm border border-slate-200">Cancel</button>
                 <button onClick={() => {
                   const center = FARM_CENTERS[farmName] || FARM_CENTERS.Arundale;
                   const latlngs = drawPoints.map(p => [p.lat, p.lng]);
-                  const ha = ringAreaHa(latlngs);
+                  const ha = Math.round(ringAreaHaFromLatLng(latlngs) * 10) / 10;
                   const geojson = { type: "Polygon", coordinates: [[...latlngs.map(([lat,lng])=>[lng,lat]), [latlngs[0][1],latlngs[0][0]]]] };
                   setNewPaddockForm({ landUse: "Grazing", pasture: "Native grass", colour: PADDOCK_COLOURS[paddocks.length % PADDOCK_COLOURS.length], ha: String(ha), geojson });
                   setMapDrawMode(false);
@@ -3131,21 +3229,19 @@ export default function App() {
                 </button>
                 {canEdit && (
                   <button
-                    onClick={async () => {
+                    onClick={() => {
+                      if (!window.confirm(`Are you sure you want to permanently delete "${paddockDetail.name}"? This cannot be undone.`)) return;
                       const id = paddockDetail.id;
                       setPaddocks((prev) => prev.filter((p) => p.id !== id));
                       setPaddockDetail(null);
                       markChanged();
-                      try {
-                        await api.deletePaddock(id);
-                        showToast("Paddock removed");
-                      } catch (err) {
-                        showToast(err.message || "Couldn't remove paddock on the server");
-                      }
+                      api.deletePaddock(id)
+                        .then(() => showToast("Paddock removed"))
+                        .catch((err) => showToast(err.message || "Couldn't remove paddock"));
                     }}
-                    className="w-full bg-rose-50 text-rose-500 rounded-2xl py-3 font-bold text-sm"
+                    className="w-full bg-rose-50 text-rose-500 border border-rose-200 rounded-2xl py-3 font-semibold text-sm mt-2"
                   >
-                    Remove Paddock
+                    🗑 Delete Paddock
                   </button>
                 )}
               </div>
@@ -3926,9 +4022,9 @@ export default function App() {
   };
 
   const MenuScreen = () => (
-    <div className="fixed inset-0 z-30 flex max-w-md mx-auto">
+    <div className="fixed inset-0 z-[100] flex justify-end">
       <div className="flex-1 bg-black/30 backdrop-blur-sm" onClick={() => { setShowMenu(false); setInventoryView(null); }} />
-      <div className="w-[82%] bg-white flex flex-col">
+      <div className="w-[82%] max-w-sm bg-white flex flex-col shadow-2xl">
         <div className="px-5 py-5 border-b border-slate-100">
           <div className="font-extrabold text-xl text-slate-800">{farmName}</div>
           <div className="text-xs text-slate-400 font-medium">Farm menu</div>
@@ -3965,18 +4061,15 @@ export default function App() {
             </div>
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
-          <button onClick={async () => {
-            setRecordsType("deaths");
+          <button onClick={() => {
             setShowRecords(true);
             setShowMenu(false);
-            // Pre-load mob history
+            // Load mob history in background — screen shows immediately
             if (allMobHistory.length === 0) {
               setRecordsLoading(true);
-              try {
-                const h = await api.listAllMobHistory(farmName);
-                setAllMobHistory(h);
-              } catch { /* silent */ }
-              setRecordsLoading(false);
+              api.listAllMobHistory(farmName)
+                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+                .catch(() => setRecordsLoading(false));
             }
           }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 text-sm font-bold">📋</div>
@@ -4366,12 +4459,12 @@ export default function App() {
           <div className="fixed inset-0 bg-white z-50 flex flex-col max-w-full">
             {/* Header */}
             <div className="bg-white border-b border-stone-200 px-5 py-4 flex items-center gap-3 flex-shrink-0">
-              <button onClick={() => setShowRecords(false)} className="text-white/70 font-medium text-sm">← Menu</button>
+              <button onClick={() => setShowRecords(false)} className="text-stone-600 font-semibold text-sm flex items-center gap-1">← Back</button>
               <div className="flex-1">
-                <div className="font-semibold tracking-tight">Records</div>
-                <div className="text-xs text-white/60">{farmName}</div>
+                <div className="font-semibold tracking-tight text-stone-800">Records</div>
+                <div className="text-xs text-stone-400">{farmName}</div>
               </div>
-              {recordsLoading && <div className="text-xs text-white/60">Loading…</div>}
+              {recordsLoading && <div className="text-xs text-stone-400">Loading…</div>}
             </div>
 
             {/* Type tabs */}
@@ -4489,8 +4582,46 @@ export default function App() {
             <div className="space-y-2 mb-4">
               {sortedRainfall.length === 0 && <p className="text-slate-400 text-sm py-2">No rainfall recorded yet.</p>}
               {sortedRainfall.map((r) => (
-                <div key={r.id} className="flex justify-between border-b border-slate-100 py-2">
-                  <span className="text-slate-600">{r.date}</span><span className="font-bold text-slate-800">{r.mm}mm</span>
+                <div key={r.id} className="flex justify-between items-center border-b border-slate-100 py-2.5 gap-2">
+                  {rainfallForm.editId === r.id ? (
+                    // Inline edit mode
+                    <>
+                      <input type="date" value={rainfallForm.date || r.date}
+                        onChange={(e) => setRainfallForm(p => ({ ...p, date: e.target.value }))}
+                        className="flex-1 border border-amber-300 rounded-lg px-2 py-1 text-sm bg-white" />
+                      <input type="number" value={rainfallForm.mm ?? r.mm}
+                        onChange={(e) => setRainfallForm(p => ({ ...p, mm: e.target.value }))}
+                        className="w-16 border border-amber-300 rounded-lg px-2 py-1 text-sm bg-white text-center" />
+                      <button onClick={async () => {
+                        try {
+                          const updated = await api.updateRainfall(r.id, { date: rainfallForm.date || r.date, mm: rainfallForm.mm ?? r.mm });
+                          setRainfall(prev => prev.map(x => x.id === r.id ? { ...x, ...updated } : x));
+                          setRainfallForm({});
+                          showToast("Updated");
+                        } catch { showToast("Couldn't save"); }
+                      }} className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg font-semibold">Save</button>
+                      <button onClick={() => setRainfallForm({})} className="text-xs text-slate-400">✕</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-slate-600 text-sm">{r.date}</span>
+                      <span className="font-bold text-slate-800">{r.mm}mm</span>
+                      {canEdit && (
+                        <div className="flex gap-1 ml-auto">
+                          <button onClick={() => setRainfallForm({ editId: r.id, date: r.date, mm: r.mm })}
+                            className="text-xs text-amber-700 font-semibold px-2 py-1 bg-amber-50 rounded-lg">Edit</button>
+                          <button onClick={async () => {
+                            if (!window.confirm("Delete this rainfall entry?")) return;
+                            try {
+                              await api.deleteRainfall(r.id);
+                              setRainfall(prev => prev.filter(x => x.id !== r.id));
+                              showToast("Deleted");
+                            } catch { showToast("Couldn't delete"); }
+                          }} className="text-xs text-rose-500 font-semibold px-2 py-1 bg-rose-50 rounded-lg">✕</button>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               ))}
             </div>

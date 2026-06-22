@@ -29,3 +29,20 @@ router.post("/", requireAuth, requireEditor, async (req, res) => {
 });
 
 export default router;
+
+// PUT /api/rainfall/:id
+router.put("/:id", requireAuth, async (req, res) => {
+  const { date, mm } = req.body;
+  const [updated] = await db.update(rainfallRecords)
+    .set({ ...(date && { date }), ...(mm && { mm: String(mm) }) })
+    .where(eq(rainfallRecords.id, Number(req.params.id)))
+    .returning();
+  if (!updated) return res.status(404).json({ error: "Record not found" });
+  res.json(updated);
+});
+
+// DELETE /api/rainfall/:id
+router.delete("/:id", requireAuth, async (req, res) => {
+  await db.delete(rainfallRecords).where(eq(rainfallRecords.id, Number(req.params.id)));
+  res.json({ ok: true });
+});

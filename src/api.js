@@ -97,6 +97,8 @@ export const api = {
   // --- Rainfall ---
   listRainfall: (farm) => request(`/rainfall?farm=${encodeURIComponent(farm)}`),
   addRainfall: (farm, date, mm) => request("/rainfall", { method: "POST", body: JSON.stringify({ farm, date, mm }) }),
+  updateRainfall: (id, data) => request(`/rainfall/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteRainfall: (id) => request(`/rainfall/${id}`, { method: "DELETE" }),
 
   // --- Breeds ---
   listBreeds: () => request("/breeds"),
