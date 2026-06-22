@@ -427,26 +427,48 @@ function GooglePaddockMap({
   // Abbreviate a paddock name for mid-zoom labels: "Squashy Island" → "SI"
   const abbrev = (name) => name.split(/[\s\-_]+/).map(w => w[0]).join("").toUpperCase().slice(0,3);
 
-  // Helper: build/update paddock label marker based on zoom level
+  // Helper: build paddock label markers — name on one line, ha/badge below it
   const updateLabelForZoom = (g, map, centroid, p, labelMarkerRef, zoom) => {
     if (labelMarkerRef.setMap) labelMarkerRef.setMap(null);
     let text = "";
-    if (zoom >= 14) text = p.name;           // full name when zoomed in
-    else if (zoom >= 11) text = abbrev(p.name); // abbreviation at medium zoom
-    // zoom < 11: no label — too crowded
+    if (zoom >= 14) text = p.name;
+    else if (zoom >= 11) text = abbrev(p.name);
     if (!text) return null;
     const stats = paddockStats[p.name] || {};
     let badge = `${Number(p.ha||0).toFixed(1)} ha`;
     if (insightMode === "stocking") badge = `${(stats.dsePerHa||0).toFixed(1)} DSE/ha`;
     else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "";
     else if (insightMode === "grazed") badge = stats.daysSinceGrazed != null ? `${stats.daysSinceGrazed}d ago` : "";
-    const labelText = zoom >= 14 ? `${text}\n${badge}` : text;
-    const m = new g.Marker({
+
+    // Name marker — no icon, just white bold text
+    const nameMarker = new g.Marker({
       position: centroid, map,
-      label: { text: labelText, color: "#fff", fontWeight: "bold", fontSize: zoom >= 15 ? "12px" : "10px" },
+      label: { text, color: "#fff", fontWeight: "bold", fontSize: zoom >= 14 ? "13px" : "11px" },
       icon: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", scaledSize: new g.Size(1, 1) },
+      zIndex: 2,
     });
-    return m;
+
+    // Badge marker — offset below the name using anchorPoint
+    let badgeMarker = null;
+    if (zoom >= 14 && badge) {
+      // Offset centroid slightly south
+      const badgePos = { lat: centroid.lat - 0.00025, lng: centroid.lng };
+      badgeMarker = new g.Marker({
+        position: badgePos, map,
+        label: { text: badge, color: "rgba(255,255,255,0.85)", fontWeight: "600", fontSize: "11px" },
+        icon: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", scaledSize: new g.Size(1, 1) },
+        zIndex: 1,
+      });
+    }
+
+    // Return an object with setMap that clears both
+    return {
+      _markers: [nameMarker, badgeMarker].filter(Boolean),
+      setMap: (m) => {
+        nameMarker.setMap(m);
+        if (badgeMarker) badgeMarker.setMap(m);
+      },
+    };
   };
 
   React.useEffect(() => {
@@ -581,11 +603,18 @@ function GooglePaddockMap({
           position: startPos,
           map,
           draggable: true,
-          label: { text: "📍", fontSize: "22px" },
-          icon: { path: g.SymbolPath.CIRCLE, scale: 2, fillOpacity: 0, strokeOpacity: 0 },
+          label: { text: "📍", fontSize: "28px" },
+          icon: {
+            path: g.SymbolPath.CIRCLE,
+            scale: 0,
+            fillOpacity: 0,
+            strokeOpacity: 0,
+          },
           title: "Drag to place landmark",
-          zIndex: 999,
+          zIndex: 9999,
         });
+        // Tag so the separate pin-update effect can find it
+        pinMarker._isLandmarkPin = true;
         pinMarker.addListener("dragend", (e) => {
           onLandmarkPinMoved?.(e.latLng.lat(), e.latLng.lng());
         });
@@ -619,7 +648,7 @@ function GooglePaddockMap({
       }
 
       if (paddocks.length || landmarks.length) { try { map.fitBounds(bounds, 40); } catch {} }
-      mapInstanceRef.current = { map, overlays };
+      mapInstanceRef.current = { map, overlays, polygons, labelMarkers };
     };
 
     if (window.google?.maps) {
@@ -644,7 +673,34 @@ function GooglePaddockMap({
         mapInstanceRef.current = null;
       }
     };
-  }, [paddocks, center, apiKey, mode, mobs, landmarks, insightMode, drawMode, drawPoints, userLocation, openGateIds, landmarkPinMode, landmarkPinPos]);
+  }, [paddocks, center, apiKey, mode, mobs, landmarks, drawMode, drawPoints, userLocation, openGateIds, landmarkPinMode]);
+
+  // Separate effect: update polygon fill colors when insight mode changes — no map rebuild
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.polygons || !window.google?.maps) return;
+    paddocks.forEach((p) => {
+      const poly = ref.polygons[p.name];
+      if (!poly) return;
+      const fill = colourForPaddock(p);
+      if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
+    });
+    // Clear old labels so they rebuild with updated badges on next zoom event
+    if (ref.labelMarkers) {
+      Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
+    }
+  }, [insightMode]);
+
+  // Separate effect: update draggable pin position without rebuilding map
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref || !landmarkPinMode) return;
+    // Find and update the pin marker position directly
+    const pinM = ref.overlays?.find?.(o => o._isLandmarkPin);
+    if (pinM && landmarkPinPos) {
+      try { pinM.setPosition?.({ lat: landmarkPinPos.lat, lng: landmarkPinPos.lng }); } catch {}
+    }
+  }, [landmarkPinPos, landmarkPinMode]);
 
   return <div ref={mapDivRef} className="w-full h-full" />;
 }
@@ -1024,24 +1080,26 @@ export default function App() {
   React.useEffect(() => {
     if (!loggedInEmail) return;
     let cancelled = false;
+    const loadingFarm = farmName; // capture at effect start — won't change during this async run
     setDataLoading(true);
     setDataError("");
     Promise.all([
-      api.listMobs(farmName),
-      api.listPaddocks(farmName),
-      api.listLandmarks(farmName),
-      api.listTreatments(farmName),
-      api.listSprayInventory(farmName),
-      api.listFoo(farmName),
+      api.listMobs(loadingFarm),
+      api.listPaddocks(loadingFarm),
+      api.listLandmarks(loadingFarm),
+      api.listTreatments(loadingFarm),
+      api.listSprayInventory(loadingFarm),
+      api.listFoo(loadingFarm),
     ])
       .then(([mobsRes, paddocksRes, landmarksRes, treatmentsRes, sprayRes, fooRes]) => {
         if (cancelled) return;
-        setFarmsMobs((prev) => ({ ...prev, [farmName]: mobsRes }));
-        setFarmsPaddocks((prev) => ({ ...prev, [farmName]: paddocksRes }));
-        setFarmsLandmarks((prev) => ({ ...prev, [farmName]: landmarksRes }));
+        // Only write to the farm we were loading for — never overwrites other farms
+        setFarmsMobs((prev) => ({ ...prev, [loadingFarm]: mobsRes }));
+        setFarmsPaddocks((prev) => ({ ...prev, [loadingFarm]: paddocksRes }));
+        setFarmsLandmarks((prev) => ({ ...prev, [loadingFarm]: landmarksRes }));
         setInventory(treatmentsRes);
         setSprayInventory(sprayRes);
-        setFooHistory((prev) => [...prev.filter((r) => r._farm !== farmName), ...fooRes.map((r) => ({ ...r, _farm: farmName }))]);
+        setFooHistory((prev) => [...prev.filter((r) => r._farm !== loadingFarm), ...fooRes.map((r) => ({ ...r, _farm: loadingFarm }))]);
       })
       .catch((err) => {
         if (!cancelled) setDataError(err.message || "Couldn't load farm data");
@@ -1052,16 +1110,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [loggedInEmail, farmName]);
 
-  // Pre-load ALL farms' mobs in the background so the Home screen all-farms totals are accurate
+  // Pre-load ALL farms' mobs in the background so the Home screen all-farms totals are accurate.
+  // Only runs once on login. Never overwrites the current farm (the main effect handles that).
   React.useEffect(() => {
     if (!loggedInEmail) return;
-    const OTHER_FARMS = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"].filter(f => f !== farmName);
-    OTHER_FARMS.forEach((farm) => {
-      api.listMobs(farm)
-        .then((res) => setFarmsMobs((prev) => ({ ...prev, [farm]: res })))
-        .catch(() => {}); // silent — home screen shows 0 if it fails, not a critical error
+    const ALL_FARMS = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"];
+    ALL_FARMS.forEach((farm) => {
+      // Small delay so this doesn't race with the main per-farm load on login
+      setTimeout(() => {
+        api.listMobs(farm)
+          .then((res) => setFarmsMobs((prev) => {
+            // Only update if this farm's array is still empty — don't overwrite real data
+            if (prev[farm] && prev[farm].length > 0) return prev;
+            return { ...prev, [farm]: res };
+          }))
+          .catch(() => {});
+      }, 1500); // wait 1.5s for the main load to finish first
     });
-  }, [loggedInEmail]); // only runs once on login, not on every farm switch
+  }, [loggedInEmail]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load accounts and remembered custom breeds once logged in (not farm-specific)
   React.useEffect(() => {
@@ -1098,17 +1164,61 @@ export default function App() {
     setTimeout(() => setToast(null), 1800);
   };
 
-  const handleSync = () => {
-    if (!isOnline) { showToast("You're offline — will sync automatically when back online"); return; }
+  const handleSync = async () => {
+    if (!isOnline) { showToast("You're offline — changes will sync when you reconnect"); return; }
+    if (syncing) return;
     setSyncing(true);
-    setTimeout(() => {
-      setSyncing(false);
+    try {
+      const [mobsRes, paddocksRes, landmarksRes, treatmentsRes, sprayRes, fooRes, rainfallRes] = await Promise.all([
+        api.listMobs(farmName),
+        api.listPaddocks(farmName),
+        api.listLandmarks(farmName),
+        api.listTreatments(farmName),
+        api.listSprayInventory(farmName),
+        api.listFoo(farmName),
+        api.listRainfall(farmName),
+      ]);
+      const loadingFarm = farmName;
+      setFarmsMobs((prev) => ({ ...prev, [loadingFarm]: mobsRes }));
+      setFarmsPaddocks((prev) => ({ ...prev, [loadingFarm]: paddocksRes }));
+      setFarmsLandmarks((prev) => ({ ...prev, [loadingFarm]: landmarksRes }));
+      setInventory(treatmentsRes);
+      setSprayInventory(sprayRes);
+      setFooHistory((prev) => [...prev.filter((r) => r._farm !== loadingFarm), ...fooRes.map((r) => ({ ...r, _farm: loadingFarm }))]);
+      setRainfall(rainfallRes);
       setSyncCount(0);
-      const synced = pendingChanges;
       setPendingChanges(0);
-      showToast(synced > 0 ? `Synced ${synced} change${synced > 1 ? "s" : ""} (yours + team)` : "Sync complete");
-    }, 1200);
+      showToast("✓ All data refreshed from server");
+    } catch (err) {
+      showToast("Couldn't sync — check your connection");
+    } finally {
+      setSyncing(false);
+    }
   };
+
+  // Auto-sync when coming back online
+  React.useEffect(() => {
+    if (isOnline && loggedInEmail && pendingChanges > 0) {
+      const t = setTimeout(() => handleSync(), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [isOnline]);
+
+  // Periodic refresh every 60s while online — picks up changes from other devices/phones
+  React.useEffect(() => {
+    if (!loggedInEmail) return;
+    const interval = setInterval(() => {
+      if (!isOnline || syncing) return;
+      const loadingFarm = farmName;
+      Promise.all([api.listMobs(loadingFarm), api.listPaddocks(loadingFarm)])
+        .then(([mobsRes, paddocksRes]) => {
+          setFarmsMobs((prev) => ({ ...prev, [loadingFarm]: mobsRes }));
+          setFarmsPaddocks((prev) => ({ ...prev, [loadingFarm]: paddocksRes }));
+        })
+        .catch(() => {}); // silent background refresh
+    }, 60000); // every 60 seconds
+    return () => clearInterval(interval);
+  }, [loggedInEmail, farmName, isOnline, syncing]);
 
   const openAction = (name) => {
     if (name === "Edit") {
@@ -1311,7 +1421,105 @@ export default function App() {
     return { name, cattle, sheep, dse };
   });
 
-  const HomeScreen = () => (
+  const HomeScreen = () => {
+    // When a farm is "entered" from the home screen, show its farm dashboard
+    const [homeFarm, setHomeFarm] = React.useState(null); // null = all-farms overview
+
+    const enterFarm = (name) => {
+      setFarmName(name);
+      setFarmsMobs((prev) => ({ ...prev, [name]: [] }));
+      setFarmsPaddocks((prev) => ({ ...prev, [name]: [] }));
+      setFarmsLandmarks((prev) => ({ ...prev, [name]: [] }));
+      setHomeFarm(name);
+    };
+
+    // Farm-specific dashboard (matches AgriWebb screenshot)
+    if (homeFarm) {
+      const fMobs = farmsMobs[homeFarm] || [];
+      const fPaddocks = farmsPaddocks[homeFarm] || [];
+      const fCattle = fMobs.filter(m => m.species === "Cattle" || m.species === "Bulls").reduce((s, m) => s + m.count, 0);
+      const fSheep = fMobs.filter(m => m.species === "Sheep" || m.species === "Rams").reduce((s, m) => s + m.count, 0);
+      const fDSE = fMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
+      const totalHa = fPaddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0);
+      const avgDseHa = totalHa > 0 ? (fDSE / totalHa).toFixed(2) : "0.00";
+      const grazedHa = fPaddocks.filter(p => p.landUse === "Grazing" || !p.landUse || p.landUse === "").reduce((s, p) => s + (Number(p.ha) || 0), 0);
+      const arableHa = fPaddocks.filter(p => p.landUse && p.landUse !== "Grazing").reduce((s, p) => s + (Number(p.ha) || 0), 0);
+
+      return (
+        <div className="pb-24 bg-slate-50 min-h-screen">
+          <div className="bg-red-950 text-white px-5 pt-5 pb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <button onClick={() => setHomeFarm(null)} className="text-white/70 text-sm">← All Farms</button>
+              <div className="flex-1" />
+              <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="h-8 rounded-lg" />
+            </div>
+            <div className="font-bold text-2xl tracking-tight">{homeFarm}</div>
+            <div className="text-white/50 text-xs mt-1">{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+          </div>
+
+          <div className="px-4 -mt-4 space-y-4">
+            {/* Paddocks summary */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                <span className="font-semibold text-slate-700">Paddocks</span>
+                <button onClick={() => { setShowPaddockList(true); }} className="text-xs text-red-900 font-semibold">View all paddocks</button>
+              </div>
+              <div className="grid grid-cols-2 divide-x divide-y divide-slate-100">
+                {[
+                  { icon: "▦", label: "PADDOCKS",    value: fPaddocks.length,          colour: "text-blue-600" },
+                  { icon: "🌾", label: "TOTAL HA",    value: totalHa.toFixed(0),        colour: "text-amber-600" },
+                  { icon: "🌿", label: "GRAZED HA",   value: grazedHa.toFixed(0),       colour: "text-green-600" },
+                  { icon: "🏗️", label: "OTHER HA",    value: arableHa.toFixed(0),       colour: "text-slate-500" },
+                ].map(({ icon, label, value, colour }) => (
+                  <div key={label} className="p-4">
+                    <div className={`text-2xl font-bold ${colour}`}>{value}</div>
+                    <div className="text-xs text-slate-400 font-semibold tracking-wide mt-0.5">{label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Mobs summary */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                <span className="font-semibold text-slate-700">Mobs</span>
+                <button onClick={() => setTab("livestock")} className="text-xs text-red-900 font-semibold">View all mobs</button>
+              </div>
+              <div className="grid grid-cols-2 divide-x divide-y divide-slate-100">
+                {[
+                  { icon: "🐄", label: "CATTLE",    value: fCattle.toLocaleString() },
+                  { icon: "🐑", label: "SHEEP",     value: fSheep.toLocaleString() },
+                  { icon: "🌿", label: "TOTAL DSE", value: fDSE.toLocaleString(undefined, { maximumFractionDigits: 0 }) },
+                  { icon: "📊", label: "AVG DSE/HA", value: avgDseHa },
+                ].map(({ icon, label, value }) => (
+                  <div key={label} className="p-4">
+                    <div className="text-2xl font-bold text-slate-800">{value}</div>
+                    <div className="text-xs text-slate-400 font-semibold tracking-wide mt-0.5">{label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Quick actions */}
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => setTab("map")} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm text-left">
+                <div className="text-2xl mb-1">🗺️</div>
+                <div className="font-semibold text-slate-700 text-sm">Map</div>
+                <div className="text-xs text-slate-400">Paddocks & livestock</div>
+              </button>
+              <button onClick={() => setTab("livestock")} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm text-left">
+                <div className="text-2xl mb-1">🐄</div>
+                <div className="font-semibold text-slate-700 text-sm">Livestock</div>
+                <div className="text-xs text-slate-400">Mobs & actions</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // All-farms overview (default home screen)
+    return (
     <div className="pb-24 bg-slate-50 min-h-screen">
       {/* Header */}
       <div className="bg-red-950 text-white px-5 pt-6 pb-8">
@@ -1341,7 +1549,7 @@ export default function App() {
           ].map(({ label, value, icon }) => (
             <div key={label} className="bg-white/10 rounded-2xl p-3 text-center">
               <div className="text-lg mb-0.5">{icon}</div>
-              <div className="text-xl font-extrabold text-white">{value}</div>
+              <div className="text-xl font-bold text-white">{value}</div>
               <div className="text-[10px] text-white/50 font-semibold tracking-wide">{label}</div>
             </div>
           ))}
@@ -1356,7 +1564,7 @@ export default function App() {
         >
           <div className="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center text-3xl flex-shrink-0">📋</div>
           <div className="text-left flex-1">
-            <div className="font-extrabold text-white text-lg leading-tight">Weekly Workflow</div>
+            <div className="font-bold text-white text-lg leading-tight tracking-tight">Weekly Workflow</div>
             <div className="text-white/80 text-sm mt-0.5">Tasks, staff & machinery planning</div>
             <div className="text-white/60 text-xs mt-1">Tap to open planner →</div>
           </div>
@@ -1364,43 +1572,31 @@ export default function App() {
 
         {/* ── Feeding Systems ── */}
         <div className="grid grid-cols-2 gap-3 mb-4">
-          <button
-            onClick={() => setTab("cattle_feeding")}
-            className="bg-gradient-to-br from-red-900 to-red-950 rounded-2xl p-4 text-left shadow-sm"
-          >
+          <button onClick={() => setTab("cattle_feeding")} className="bg-gradient-to-br from-red-900 to-red-950 rounded-2xl p-4 text-left shadow-sm">
             <div className="text-2xl mb-2">🐄</div>
-            <div className="font-bold text-white text-sm leading-tight">Cattle Feeding System</div>
+            <div className="font-bold text-white text-sm leading-tight">Cattle Feeding</div>
             <div className="text-white/60 text-xs mt-1">Pens · rations · weights</div>
           </button>
-          <button
-            onClick={() => setTab("sheep_feeding")}
-            className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-2xl p-4 text-left shadow-sm"
-          >
+          <button onClick={() => setTab("sheep_feeding")} className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-2xl p-4 text-left shadow-sm">
             <div className="text-2xl mb-2">🐑</div>
-            <div className="font-bold text-white text-sm leading-tight">Sheep Feeding System</div>
+            <div className="font-bold text-white text-sm leading-tight">Sheep Feeding</div>
             <div className="text-white/60 text-xs mt-1">Pens · rations · weights</div>
           </button>
         </div>
 
         {/* ── Farm tiles ── */}
         <div className="flex justify-between items-center mb-2 px-1">
-          <h2 className="font-bold text-slate-700">Farms</h2>
-          <span className="text-xs text-slate-400">Tap to enter</span>
+          <h2 className="font-semibold text-slate-700">Farms</h2>
+          <span className="text-xs text-slate-400">Tap for farm dashboard</span>
         </div>
         <div className="grid grid-cols-2 gap-3 mb-4">
           {farmSummaries.map(({ name, cattle, sheep, dse }) => (
             <button
               key={name}
-              onClick={() => {
-                setFarmName(name);
-                setFarmsMobs((prev) => ({ ...prev, [name]: [] }));
-                setFarmsPaddocks((prev) => ({ ...prev, [name]: [] }));
-                setFarmsLandmarks((prev) => ({ ...prev, [name]: [] }));
-                setTab("livestock");
-              }}
+              onClick={() => enterFarm(name)}
               className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 text-left"
             >
-              <div className="font-bold text-slate-800 mb-2">{name}</div>
+              <div className="font-semibold text-slate-800 mb-2">{name}</div>
               <div className="space-y-1">
                 {cattle > 0 && <div className="text-xs text-slate-500">🐄 {cattle.toLocaleString()} cattle</div>}
                 {sheep > 0 && <div className="text-xs text-slate-500">🐑 {sheep.toLocaleString()} sheep</div>}
@@ -1413,7 +1609,7 @@ export default function App() {
 
         {/* ── Rainfall strip ── */}
         <div className="flex justify-between items-center mb-2 px-1">
-          <h2 className="font-bold text-slate-700">Rainfall · {farmName}</h2>
+          <h2 className="font-semibold text-slate-700">Rainfall · {farmName}</h2>
           <button className="text-red-950 text-sm font-semibold" onClick={() => setShowRainfall(true)}>Records</button>
         </div>
         <div className="flex gap-3 mb-4">
@@ -1425,7 +1621,7 @@ export default function App() {
           </div>
           <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
             <div className="text-xs text-slate-400 font-semibold tracking-wide">365 DAYS</div>
-            <div className="text-2xl font-extrabold text-slate-800 mt-1">
+            <div className="text-2xl font-bold text-slate-800 mt-1">
               {(() => {
                 const cutoff = new Date();
                 cutoff.setDate(cutoff.getDate() - 365);
@@ -1436,9 +1632,6 @@ export default function App() {
           </div>
         </div>
       </div>
-    </div>
-  );
-
 
       {!isOnline && (
         <div className="mx-4 mt-4 bg-slate-700 text-white flex items-center justify-between px-4 py-3 rounded-2xl">
@@ -1457,7 +1650,9 @@ export default function App() {
           </button>
         </div>
       )}
-  // Drive map pins from the real mobs list (deterministic scatter so positions don't jump on re-render)
+    </div>
+    ); // end all-farms return
+  }; // end HomeScreen
   const PIN_DATA = mobs.map((m, i) => {
     const seed = (m.id * 37) % 100;
     const row = Math.floor(i / 4);
@@ -1521,7 +1716,7 @@ export default function App() {
             {googleMapsKey ? (
               <GooglePaddockMap
                 paddocks={paddocks}
-                center={landmarkPinPos ? [landmarkPinPos.lat, landmarkPinPos.lng] : (FARM_CENTERS[farmName] || FARM_CENTERS.Arundale)}
+                center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
                 onSelect={() => {}}
                 apiKey={googleMapsKey}
                 onError={() => {}}
@@ -3362,10 +3557,41 @@ export default function App() {
     return (
       <div className="fixed inset-0 bg-slate-50 z-30 flex flex-col max-w-md mx-auto">
         <div className="bg-white/80 backdrop-blur-md flex items-center justify-between px-4 py-4 border-b border-slate-100">
-          <button className="text-slate-400 text-sm font-semibold" onClick={() => setSelectedMobId(null)}>CLOSE</button>
+          <button className="text-slate-400 text-sm font-semibold" onClick={() => { setSelectedMobId(null); setDragMobId(null); }}>CLOSE</button>
           <h1 className="text-base font-bold text-slate-800">Mob Details</h1>
           <div className="w-12" />
         </div>
+        {/* Paddock picker — shows when tapping the Paddock tile in Summary */}
+        {dragMobId === selectedMob.id && (
+          <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 flex-shrink-0">
+            <div className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2">
+              Move {selectedMob.name} to paddock:
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[...paddocks].sort((a,b)=>a.name.localeCompare(b.name)).map(p => (
+                <button
+                  key={p.id}
+                  onClick={async () => {
+                    const mob = mobs.find(m => m.id === dragMobId);
+                    if (!mob || mob.paddock === p.name) { setDragMobId(null); return; }
+                    const detail = `Moved from ${mob.paddock} to ${p.name}`;
+                    setMobs(prev => prev.map(m => m.id === dragMobId ? { ...m, paddock: p.name, daysInPaddock: 0 } : m));
+                    setDragMobId(null);
+                    showToast(`${mob.name} → ${p.name}`);
+                    try {
+                      await api.updateMob(dragMobId, { paddock: p.name, daysInPaddock: 0 });
+                      await api.addMobHistory(dragMobId, { action: "Move", detail, date: todayStr() });
+                    } catch (err) { showToast(err.message || "Couldn't save move"); }
+                  }}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${selectedMob.paddock === p.name ? "bg-slate-200 text-slate-400 border-slate-200" : "bg-white border-amber-300 text-slate-700 active:bg-amber-100"}`}
+                >
+                  {selectedMob.paddock === p.name ? `${p.name} ✓` : p.name}
+                </button>
+              ))}
+              <button onClick={() => setDragMobId(null)} className="px-3 py-1.5 bg-slate-100 rounded-full text-sm text-slate-400">Cancel</button>
+            </div>
+          </div>
+        )}
         <div className="flex bg-white border-b border-slate-100">
           {["Summary", "History", "Notes"].map((t) => (
             <button key={t} onClick={() => setMobTab(t)} className={`flex-1 py-3 font-semibold text-sm ${mobTab === t ? "text-red-950 border-b-2 border-red-900" : "text-slate-400"}`}>
@@ -3408,10 +3634,16 @@ export default function App() {
                   <div className="text-xs text-slate-400 font-semibold">DAYS IN PADDOCK</div>
                   <div className="text-2xl font-extrabold text-slate-800 mt-1">{selectedMob.daysInPaddock ?? 13}</div>
                 </div>
-                <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
-                  <div className="text-xs text-slate-400 font-semibold">PADDOCK</div>
-                  <div className="text-2xl font-extrabold text-slate-800 mt-1">{selectedMob.paddock}</div>
-                </div>
+                <button
+                  onClick={() => { if (canEdit) setDragMobId(selectedMob.id); }}
+                  className={`bg-white rounded-2xl p-4 shadow-sm border text-left w-full ${canEdit ? "border-amber-200 active:bg-amber-50" : "border-slate-100"}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-slate-400 font-semibold">PADDOCK</div>
+                    {canEdit && <div className="text-xs text-amber-600 font-semibold">Tap to move ↕</div>}
+                  </div>
+                  <div className="text-2xl font-bold text-slate-800 mt-1">{selectedMob.paddock || "Unassigned"}</div>
+                </button>
               </div>
 
               <div className="text-sm font-bold text-slate-700 mt-6 mb-2">Weights</div>
@@ -3589,13 +3821,6 @@ export default function App() {
           <button onClick={handleSync} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-red-950"><RefreshCw size={16} className={syncing ? "animate-spin" : ""} /></div>
             <span className="font-semibold text-slate-700">Synchronise data</span>
-          </button>
-          <button onClick={() => setShowFarmSubmenu(true)} className="w-full flex items-center justify-between px-3 py-3.5 rounded-2xl active:bg-slate-50">
-            <span className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-red-950"><Home size={16} /></div>
-              <span className="font-semibold text-slate-700">Farm</span>
-            </span>
-            <ChevronRight size={16} className="text-slate-300" />
           </button>
           <button onClick={() => setShowInventory(true)} className="w-full flex items-center justify-between px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <span className="flex items-center gap-3">
