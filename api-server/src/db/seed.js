@@ -29,7 +29,7 @@ async function seed() {
 
   console.log("Seeding accounts...");
   const accountSeeds = [
-    { name: "Simon", email: "simon@kurrawirra.com.au", role: "Admin", password: "Sc731991" },
+    { name: "Simon Close", email: "simon@kurrawirra.com.au", role: "Admin", password: "Sc731991" },
     { name: "Jenny Smith", email: "jenny.manager@arundale.com", role: "Manager", password: "password" },
     { name: "Tom Wilson", email: "tom.worker@arundale.com", role: "Worker", password: "password" },
   ];

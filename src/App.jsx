@@ -851,6 +851,107 @@ function InventoryForm({ values, onChange, fields = TREATMENT_FIELDS }) {
 }
 
 
+function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit }) {
+  const [step, setStep] = React.useState("paddock"); // "paddock" | "action"
+  const [target, setTarget] = React.useState(null);
+  const [splitCount, setSplitCount] = React.useState("");
+
+  const remaining = splitCount && Number(splitCount) > 0 && Number(splitCount) < mob.count
+    ? mob.count - Number(splitCount) : null;
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[300]" onClick={onClose}>
+      <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
+
+        {step === "paddock" ? (
+          <>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+              <div>
+                <div className="font-semibold text-slate-800 tracking-tight">Move — select paddock</div>
+                <div className="text-xs text-slate-400 mt-0.5">{mob.name} · {mob.count} head · in {mob.paddock}</div>
+              </div>
+              <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
+            </div>
+            <div className="overflow-y-auto max-h-[60vh] pb-8">
+              {[...paddocks].sort((a,b) => a.name.localeCompare(b.name)).map(p => {
+                const isCurrent = mob.paddock === p.name;
+                return (
+                  <button key={p.id} onClick={() => { if (!isCurrent) { setTarget(p); setStep("action"); } }}
+                    className={`w-full flex items-center justify-between px-5 py-4 border-b border-slate-50 text-left ${isCurrent ? "opacity-40" : "active:bg-amber-50"}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
+                      <div>
+                        <div className={`font-medium ${isCurrent ? "text-stone-400" : "text-slate-800"}`}>{p.name}</div>
+                        <div className="text-xs text-slate-400">{p.ha ? `${Number(p.ha).toFixed(1)} ha` : ""}{p.landUse ? ` · ${p.landUse}` : ""}</div>
+                      </div>
+                    </div>
+                    {isCurrent ? <span className="text-xs text-stone-400">Current</span> : <span className="text-slate-300 text-lg">›</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+              <div>
+                <button onClick={() => { setStep("paddock"); setSplitCount(""); }} className="text-xs text-amber-700 font-semibold mb-0.5">← Change paddock</button>
+                <div className="font-semibold text-slate-800">{mob.name}</div>
+                <div className="text-xs text-slate-400">{mob.paddock} <span className="text-amber-600 font-semibold">→ {target?.name}</span></div>
+              </div>
+              <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
+            </div>
+            <div className="p-5 space-y-3 pb-10">
+
+              {/* Move all */}
+              <button onClick={() => onMoveAll(target)}
+                className="w-full bg-stone-800 text-white rounded-2xl p-4 text-left active:opacity-90">
+                <div className="font-semibold text-base">Move All</div>
+                <div className="text-sm text-white/70 mt-0.5">All {mob.count} head move to {target?.name}</div>
+              </button>
+
+              {/* Split */}
+              <div className="bg-white border border-stone-200 rounded-2xl p-4">
+                <div className="font-semibold text-slate-800 mb-0.5">Draft / Split</div>
+                <div className="text-xs text-slate-400 mb-3">Move some — the rest stay in {mob.paddock}</div>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="flex-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Head to move</label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={splitCount}
+                      onChange={e => setSplitCount(e.target.value)}
+                      placeholder={`1 – ${mob.count - 1}`}
+                      className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-2xl font-bold text-center bg-white focus:border-amber-400 outline-none"
+                    />
+                  </div>
+                  <div className="flex-1 bg-stone-50 rounded-xl p-3 text-center border border-stone-100">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remain</div>
+                    <div className="text-2xl font-bold text-slate-600 mt-0.5">{remaining ?? "—"}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    const n = Number(splitCount);
+                    if (!n || n <= 0 || n >= mob.count) return;
+                    onSplit(target, n);
+                  }}
+                  disabled={!remaining || remaining <= 0}
+                  className="w-full bg-amber-500 text-white rounded-2xl py-3 font-semibold disabled:opacity-30"
+                >
+                  Split — Move {splitCount || "?"} Head to {target?.name}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api }) {
   const [homeFarm, setHomeFarm] = React.useState(null);
   const [dashLoading, setDashLoading] = React.useState(false);
@@ -4068,50 +4169,45 @@ export default function App() {
       {/* ── Insight overlay picker (gear icon on Paddocks map) ── */}
       {/* ── Paddock picker bottom sheet (from Mob Details paddock tile) ── */}
       {showPaddockPicker && selectedMob && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[300]" onClick={() => setShowPaddockPicker(false)}>
-          <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-              <div>
-                <div className="font-semibold text-slate-800 tracking-tight">Move to paddock</div>
-                <div className="text-xs text-slate-400 mt-0.5">{selectedMob.name} · currently in {selectedMob.paddock}</div>
-              </div>
-              <button onClick={() => setShowPaddockPicker(false)} className="text-slate-400 text-sm font-medium">Cancel</button>
-            </div>
-            <div className="overflow-y-auto max-h-[60vh] pb-8">
-              {[...paddocks].sort((a,b) => a.name.localeCompare(b.name)).map(p => {
-                const isCurrent = selectedMob.paddock === p.name;
-                return (
-                  <button
-                    key={p.id}
-                    onClick={async () => {
-                      if (isCurrent) { setShowPaddockPicker(false); return; }
-                      const mobId = selectedMob.id;
-                      const detail = `Moved from ${selectedMob.paddock} to ${p.name}`;
-                      setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: p.name, daysInPaddock: 0 } : m));
-                      setShowPaddockPicker(false);
-                      showToast(`${selectedMob.name} → ${p.name}`);
-                      try {
-                        await api.updateMob(mobId, { paddock: p.name, daysInPaddock: 0 });
-                        await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
-                      } catch (err) { showToast(err.message || "Couldn't save move"); }
-                    }}
-                    className={`w-full flex items-center justify-between px-5 py-4 border-b border-slate-50 text-left ${isCurrent ? "bg-stone-50" : "active:bg-slate-50"}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
-                      <div>
-                        <div className={`font-medium ${isCurrent ? "text-stone-400" : "text-slate-800"}`}>{p.name}</div>
-                        <div className="text-xs text-slate-400">{p.ha ? `${Number(p.ha).toFixed(1)} ha` : ""}{p.landUse ? ` · ${p.landUse}` : ""}</div>
-                      </div>
-                    </div>
-                    {isCurrent && <span className="text-xs text-stone-400 font-medium">Current</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <PaddockMoveSheet
+          mob={selectedMob}
+          paddocks={paddocks}
+          farmName={farmName}
+          onClose={() => setShowPaddockPicker(false)}
+          onMoveAll={async (target) => {
+            const mobId = selectedMob.id;
+            const detail = `Moved from ${selectedMob.paddock} to ${target.name}`;
+            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: target.name, daysInPaddock: 0 } : m));
+            setShowPaddockPicker(false);
+            showToast(`${selectedMob.name} → ${target.name}`);
+            try {
+              await api.updateMob(mobId, { paddock: target.name, daysInPaddock: 0 });
+              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+            } catch (err) { showToast(err.message || "Couldn't save move"); }
+          }}
+          onSplit={async (target, moveCount) => {
+            const mobId = selectedMob.id;
+            const remaining = selectedMob.count - moveCount;
+            const detail = `Split: ${moveCount} head moved to ${target.name}, ${remaining} remain in ${selectedMob.paddock}`;
+            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, count: remaining } : m));
+            setShowPaddockPicker(false);
+            showToast(`${moveCount} head → ${target.name}, ${remaining} remain`);
+            try {
+              await api.updateMob(mobId, { count: remaining });
+              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+              const newMob = await api.createMob(farmName, {
+                name: `${selectedMob.name} (split)`,
+                desc: selectedMob.desc, count: moveCount,
+                paddock: target.name, dse: selectedMob.dse,
+                species: selectedMob.species, type: selectedMob.type,
+                breed: selectedMob.breed, ageClass: selectedMob.ageClass,
+                mgmtGroup: selectedMob.mgmtGroup, tag: selectedMob.tag, daysInPaddock: 0,
+              });
+              setMobs(prev => [...prev, newMob]);
+              await api.addMobHistory(newMob.id, { action: "Move", detail: `Split from ${selectedMob.name} in ${selectedMob.paddock}`, date: todayStr() });
+            } catch (err) { showToast(err.message || "Couldn't save split"); }
+          }}
+        />
       )}
 
       {showInsightPicker && (
