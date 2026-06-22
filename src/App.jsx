@@ -4812,7 +4812,7 @@ export default function App() {
       <DesktopSidebar />
       <div className="md:ml-56 flex-1">
     <div className="max-w-md md:max-w-none mx-auto bg-white min-h-screen font-sans relative">
-      {tab === "home" && HomeScreen()}
+      {tab === "home" && <HomeScreen />}
       {tab === "map" && MapScreen()}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
