@@ -403,8 +403,9 @@ function GooglePaddockMap({
   drawMode = false, drawPoints = [], onDrawPoint,
   userLocation = null,
   openGateIds = [],
-  // Landmark pin-placement mode: when true, show a draggable pin on the map
+  initialZoom = null, // if set, overrides fitBounds
   landmarkPinMode = false, landmarkPinPos = null, onLandmarkPinMoved,
+  onMapCentreChange = null, // callback(lat, lng) when user pans
 }) {
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -497,12 +498,19 @@ function GooglePaddockMap({
       }
       const map = new g.Map(mapDivRef.current, {
         center: { lat: center[0], lng: center[1] },
-        zoom: 13,
+        zoom: initialZoom || 13,
         mapTypeId: "satellite",
         streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
-        gestureHandling: "greedy", // single finger pan/zoom — no two-finger requirement
+        gestureHandling: "greedy",
         zoomControl: true,
       });
+      // Report centre changes so parent can track where user is looking
+      if (onMapCentreChange) {
+        map.addListener("center_changed", () => {
+          const c = map.getCenter();
+          onMapCentreChange(c.lat(), c.lng());
+        });
+      }
       const bounds = new g.LatLngBounds();
       const overlays = [];
       const centroids = {};
@@ -595,47 +603,44 @@ function GooglePaddockMap({
       }
 
       // ── Landmarks (paddocks mode) ──
-      if (mode === "paddocks") {
-        const currentZoom = map.getZoom();
-        const renderLandmarks = (zoom) => {
-          // Remove existing landmark overlays
-          overlays.filter(o => o._isLandmark).forEach(o => { o.setMap(null); });
-          landmarks.forEach((l) => {
-            if (l.lat == null || l.lng == null) return;
-            const pos = { lat: Number(l.lat), lng: Number(l.lng) };
-            const cat = Object.values(LANDMARK_CATEGORIES).flat().find((c) => c.type === l.type);
-            const isGate = l.type === "Gate";
-
-            // Gates: only show at zoom 13+, render as small ⊗ symbol on boundary
-            if (isGate) {
-              if (zoom < 13) return; // too zoomed out — skip
-              const m = new g.Marker({
-                position: pos, map,
-                label: { text: "⊗", fontSize: zoom >= 15 ? "14px" : "10px", color: "#dc2626", fontWeight: "bold" },
-                icon: { path: g.SymbolPath.CIRCLE, scale: 0, fillOpacity: 0, strokeOpacity: 0 },
-                zIndex: 10,
-              });
-              m._isLandmark = true;
-              m.addListener("click", () => onSelectLandmark?.(l));
-              overlays.push(m);
-            } else {
-              // Other landmarks: show at zoom 12+
-              if (zoom < 12) return;
-              const m = new g.Marker({
-                position: pos, map,
-                label: { text: cat?.icon || "📍", fontSize: zoom >= 14 ? "16px" : "12px" },
-                icon: { path: g.SymbolPath.CIRCLE, scale: zoom >= 14 ? 14 : 10, fillColor: LANDMARK_COLOUR_HEX[l.colour] || "#64748b", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
-                zIndex: 10,
-              });
-              m._isLandmark = true;
-              m.addListener("click", () => onSelectLandmark?.(l));
-              overlays.push(m);
-            }
-          });
-        };
-        renderLandmarks(currentZoom);
-        map.addListener("zoom_changed", () => renderLandmarks(map.getZoom()));
-      }
+      // Render gates on BOTH modes; other landmarks only in paddocks mode
+      const renderAllLandmarks = (zoom) => {
+        overlays.filter(o => o._isLandmark).forEach(o => { o.setMap(null); });
+        landmarks.forEach((l) => {
+          if (l.lat == null || l.lng == null) return;
+          const pos = { lat: Number(l.lat), lng: Number(l.lng) };
+          const cat = Object.values(LANDMARK_CATEGORIES).flat().find((c) => c.type === l.type);
+          const isGate = l.type === "Gate";
+          if (isGate) {
+            if (zoom < 13) return;
+            const isOpen = openGateIds.includes(String(l.id));
+            const gateSymbol = isOpen ? "○" : "⊗";
+            const gateColor = isOpen ? "#eab308" : "#dc2626";
+            const m = new g.Marker({
+              position: pos, map,
+              label: { text: gateSymbol, fontSize: zoom >= 15 ? "18px" : "13px", color: gateColor, fontWeight: "bold" },
+              icon: { path: g.SymbolPath.CIRCLE, scale: 0, fillOpacity: 0, strokeOpacity: 0 },
+              zIndex: 20,
+            });
+            m._isLandmark = true;
+            m.addListener("click", () => onSelectLandmark?.(l));
+            overlays.push(m);
+          } else if (mode === "paddocks") {
+            if (zoom < 12) return;
+            const m = new g.Marker({
+              position: pos, map,
+              label: { text: cat?.icon || "📍", fontSize: zoom >= 14 ? "16px" : "12px" },
+              icon: { path: g.SymbolPath.CIRCLE, scale: zoom >= 14 ? 14 : 10, fillColor: LANDMARK_COLOUR_HEX[l.colour] || "#64748b", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+              zIndex: 10,
+            });
+            m._isLandmark = true;
+            m.addListener("click", () => onSelectLandmark?.(l));
+            overlays.push(m);
+          }
+        });
+      };
+      renderAllLandmarks(map.getZoom());
+      map.addListener("zoom_changed", () => renderAllLandmarks(map.getZoom()));
 
       // ── Draggable landmark placement pin ──
       if (landmarkPinMode) {
@@ -1918,6 +1923,8 @@ export default function App() {
   };
   const [showAddLandmark, setShowAddLandmark] = useState(false);
   const [landmarkPinPos, setLandmarkPinPos] = useState(null);
+  const [landmarkPinStart, setLandmarkPinStart] = useState(null); // current map centre when pin placement opens
+  const [currentMapCentre, setCurrentMapCentre] = useState(null); // tracks where user is on the map
   const [landmarkPinMode, setLandmarkPinMode] = useState(false);
   const [landmarkPinPlacing, setLandmarkPinPlacing] = useState(false);
   const [showPaddockAddMenu, setShowPaddockAddMenu] = useState(false);
@@ -2443,7 +2450,13 @@ export default function App() {
             {googleMapsKey ? (
               <GooglePaddockMap
                 paddocks={paddocks}
-                center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
+                center={
+                  // Start where user was looking, not the farm centre
+                  landmarkPinPos ? [landmarkPinPos.lat, landmarkPinPos.lng]
+                  : currentMapCentre ? [currentMapCentre.lat, currentMapCentre.lng]
+                  : (FARM_CENTERS[farmName] || FARM_CENTERS.Arundale)
+                }
+                initialZoom={15}
                 onSelect={() => {}}
                 apiKey={googleMapsKey}
                 onError={() => {}}
@@ -2611,6 +2624,7 @@ export default function App() {
                 onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
                 userLocation={userLocation}
                 openGateIds={openGates}
+                onMapCentreChange={(lat, lng) => setCurrentMapCentre({ lat, lng })}
               />
             ) : (
               <PaddockMap
@@ -2920,7 +2934,21 @@ export default function App() {
 
               {/* Pin placement — full screen button */}
               <button
-                onClick={() => { setLandmarkPinPlacing(true); setShowAddLandmark(false); }}
+                onClick={() => {
+                  // Try to get the current map centre so pin appears where user is looking
+                  let startPos = null;
+                  try {
+                    const mapRef = document.querySelector('[data-map-instance]');
+                    const g = window.google?.maps;
+                    // Use the current paddocks map instance centre if available
+                    const centre = FARM_CENTERS[farmName] || FARM_CENTERS.Arundale;
+                    startPos = { lat: centre[0], lng: centre[1] };
+                  } catch {}
+                  setLandmarkPinStart(startPos);
+                  setLandmarkPinPos(null); // reset so pin starts fresh at current view
+                  setLandmarkPinPlacing(true);
+                  setShowAddLandmark(false);
+                }}
                 className={`w-full flex items-center gap-3 rounded-2xl px-4 py-3.5 mb-3 border-2 ${landmarkPinPos ? "border-amber-400 bg-amber-50 text-amber-700" : "border-dashed border-slate-300 bg-slate-50 text-slate-500"}`}
               >
                 <span className="text-2xl">📍</span>
@@ -3030,7 +3058,13 @@ export default function App() {
                     const isOpen = openGates.includes(gateKey);
                     const paddockAData = paddocks.find(p => p.name === landmarkDetail.paddockA);
                     const paddockBData = paddocks.find(p => p.name === landmarkDetail.paddockB);
-                    const combinedHa = (Number(paddockAData?.ha||0) + Number(paddockBData?.ha||0)).toFixed(1);
+                    // Only grazing ha counts for stocking rate
+                    const aIsGrazing = !NON_GRAZING_LAND_USES.has(paddockAData?.landUse);
+                    const bIsGrazing = !NON_GRAZING_LAND_USES.has(paddockBData?.landUse);
+                    const combinedHa = (
+                      (aIsGrazing ? Number(paddockAData?.ha||0) : 0) +
+                      (bIsGrazing ? Number(paddockBData?.ha||0) : 0)
+                    ).toFixed(1);
                     const mobsInA = mobs.filter(m => m.paddock === landmarkDetail.paddockA);
                     const mobsInB = mobs.filter(m => m.paddock === landmarkDetail.paddockB);
                     const combinedDSE = [...mobsInA, ...mobsInB].reduce((s,m) => s + m.count*(m.dse||0), 0);
@@ -3040,17 +3074,18 @@ export default function App() {
                         <button
                           onClick={() => {
                             setOpenGates(prev => isOpen ? prev.filter(g => g !== gateKey) : [...prev, gateKey]);
-                            showToast(isOpen ? `Gate closed — paddocks separated` : `Gate opened — ${landmarkDetail.paddockA} and ${landmarkDetail.paddockB} merged`);
+                            showToast(isOpen ? `Gate closed — paddocks separated` : `Gate opened — ${landmarkDetail.paddockA} ↔ ${landmarkDetail.paddockB} merged`);
                           }}
-                          className={`w-full rounded-2xl py-3 font-bold text-sm mb-2 ${isOpen ? "bg-yellow-400 text-yellow-900" : "bg-slate-100 text-slate-700"}`}
+                          className={`w-full rounded-2xl py-3.5 font-semibold text-sm mb-2 ${isOpen ? "bg-yellow-400 text-yellow-900 border-2 border-yellow-500" : "bg-slate-100 text-slate-700 border-2 border-slate-200"}`}
                         >
-                          {isOpen ? "🟡 Gate OPEN — tap to close" : "🔘 Gate CLOSED — tap to open"}
+                          {isOpen ? "○ Gate OPEN — tap to close" : "⊗ Gate CLOSED — tap to open"}
                         </button>
                         {isOpen && (
                           <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-3 text-sm">
-                            <div className="font-bold text-yellow-800 mb-1">Combined paddock stats</div>
-                            <div className="text-yellow-700">{landmarkDetail.paddockA} + {landmarkDetail.paddockB} · {combinedHa} ha combined</div>
-                            <div className="font-extrabold text-yellow-900 text-lg mt-1">{combinedDsePerHa} DSE/ha</div>
+                            <div className="font-semibold text-yellow-800 mb-1">Combined grazing stats</div>
+                            <div className="text-yellow-700">{landmarkDetail.paddockA} + {landmarkDetail.paddockB}</div>
+                            <div className="text-yellow-700">{combinedHa} ha grazing · {combinedDSE.toFixed(0)} DSE</div>
+                            <div className="font-bold text-yellow-900 text-lg mt-1">{combinedDsePerHa} DSE/ha</div>
                           </div>
                         )}
                       </div>
@@ -3058,21 +3093,20 @@ export default function App() {
                   })()}
                   <button onClick={() => setLandmarkEditMode(true)} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">Edit Details</button>
                   <button
-                    onClick={async () => {
+                    onClick={() => {
+                      const name = landmarkDetail.name || landmarkDetail.type;
+                      if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
                       const id = landmarkDetail.id;
                       setLandmarks((prev) => prev.filter((l) => l.id !== id));
                       setLandmarkDetail(null);
                       markChanged();
-                      try {
-                        await api.deleteLandmark(id);
-                        showToast("Landmark removed");
-                      } catch (err) {
-                        showToast(err.message || "Couldn't remove landmark on the server");
-                      }
+                      api.deleteLandmark(id)
+                        .then(() => showToast("Landmark removed"))
+                        .catch((err) => showToast(err.message || "Couldn't remove landmark"));
                     }}
-                    className="w-full bg-rose-50 text-rose-500 rounded-2xl py-3 font-bold text-sm"
+                    className="w-full bg-rose-50 text-rose-500 border border-rose-200 rounded-2xl py-3 font-semibold text-sm mt-1"
                   >
-                    Remove Landmark
+                    🗑 Delete Landmark
                   </button>
                 </div>
               )}
