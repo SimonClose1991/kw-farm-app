@@ -1663,22 +1663,7 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [setupToken, setSetupToken] = useState(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("setup") || null;
-  });
-  const [setupAccount, setSetupAccount] = useState(null); // { name, email } once token verified
-  const [setupPassword, setSetupPassword] = useState("");
-  const [setupError, setSetupError] = useState("");
-  const [setupDone, setSetupDone] = useState(false);
-
-  // If there's a setup token in the URL, verify it immediately
-  React.useEffect(() => {
-    if (!setupToken) return;
-    api.verifySetupToken(setupToken)
-      .then(setSetupAccount)
-      .catch((err) => { setSetupError(err.message || "This invite link is invalid or has expired."); setSetupToken(null); });
-  }, [setupToken]);
+  // (invite via default password — no setup token needed)
 
   const [apiWaking, setApiWaking] = useState(false);
 
@@ -4691,55 +4676,6 @@ export default function App() {
   }
 
   // ── Password setup screen (invite link from email) ───────────────────────
-  if (setupToken && setupAccount) {
-    return (
-      <div className="max-w-md mx-auto min-h-screen bg-stone-50 flex flex-col items-center justify-center px-6">
-        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6">
-          <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-24 mx-auto rounded-xl mb-4" />
-          <h1 className="text-xl font-bold text-slate-800 text-center mb-1">Welcome, {setupAccount.name}</h1>
-          <p className="text-sm text-slate-400 text-center mb-5">Set your password to get started</p>
-          <div className="text-xs text-slate-400 mb-1 font-semibold">EMAIL</div>
-          <div className="bg-slate-50 rounded-xl px-3 py-2.5 text-slate-600 text-sm mb-4 font-medium">{setupAccount.email}</div>
-          <div className="text-xs text-slate-400 mb-1 font-semibold">CHOOSE A PASSWORD</div>
-          <input
-            type="password"
-            value={setupPassword}
-            onChange={(e) => setSetupPassword(e.target.value)}
-            placeholder="At least 6 characters"
-            className="w-full border border-slate-200 rounded-xl px-3 py-3 mb-2 bg-white text-sm"
-            autoFocus
-          />
-          {setupError && <p className="text-rose-500 text-sm mb-2">{setupError}</p>}
-          <button
-            onClick={async (e) => {
-              const btn = e.currentTarget;
-              if (setupPassword.length < 6) { setSetupError("Password must be at least 6 characters."); return; }
-              setSetupError("");
-              btn.disabled = true;
-              btn.textContent = "Setting up…";
-              try {
-                const { token, account } = await api.completeSetup(setupToken, setupPassword);
-                setAuthToken(token);
-                setCurrentAccount(account);
-                setLoggedInEmail(account.email);
-                setSetupToken(null);
-                setSetupAccount(null);
-                // Clear the token from the URL
-                window.history.replaceState({}, "", window.location.pathname);
-              } catch (err) {
-                btn.disabled = false;
-                btn.textContent = "Set Password";
-                setSetupError(err.message || "Something went wrong. Please try again.");
-              }
-            }}
-            className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
-          >
-            Set Password
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   if (locked && loggedInEmail) {
     return (
@@ -5095,14 +5031,14 @@ export default function App() {
                       setNewAccountName("");
                       setNewAccountEmail("");
                       setNewAccountRole("Worker");
-                      showToast("Invite email sent ✓");
+                      showToast(`${newAccountName} added — password is "password"`);
                     } catch (err) {
                       showToast(err.message || "Couldn't send invite");
                     }
                   }}
                   className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold"
                 >
-                  Send Invite Email
+                  Add Staff Member
                 </button>
               </div>
               <p className="text-xs text-slate-400">
