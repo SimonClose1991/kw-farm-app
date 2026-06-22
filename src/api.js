@@ -102,6 +102,13 @@ export const api = {
   listBreeds: () => request("/breeds"),
   addBreed: (species, breed) => request("/breeds", { method: "POST", body: JSON.stringify({ species, breed }) }),
 
+  // --- Account setup (invite link) ---
+  verifySetupToken: (token) => request(`/accounts/setup/${token}`),
+  completeSetup: (token, password) => request(`/accounts/setup/${token}`, { method: "POST", body: JSON.stringify({ password }) }),
+
+  // --- Records ---
+  listAllMobHistory: (farm) => request(`/mobs/history?farm=${encodeURIComponent(farm)}`),
+
   // --- Workflow ---
   getWorkflow: () => request("/workflow"),
   saveWorkflow: (state) => request("/workflow", { method: "PUT", body: JSON.stringify(state) }),

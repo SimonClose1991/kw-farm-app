@@ -53,8 +53,19 @@ const MOB_ACTIONS = [
 const WORKER_ACTIONS = ["Treat", "Weigh", "Recount", "WEC", "Death", "Sale"];
 const ROLE_OPTIONS = ["Admin", "Manager", "Worker"];
 
-const BREEDS_DEFAULT = { Cattle: ["Angus", "Hereford", "Charolais", "Simmental", "Murray Grey", "Mixed"], Sheep: ["Merino", "Dorper", "Suffolk", "Poll Dorset", "Border Leicester", "Mixed"], Rams: ["Merino", "Dorper", "Suffolk", "Poll Dorset", "Mixed"], Other: [] };
-const AGE_CLASSES = { Cattle: ["Calves", "Weaners", "Yearlings", "Adult"], Sheep: ["Lambs", "Hoggets", "Adult"] };
+const BREEDS_DEFAULT = {
+  Cattle: ["Angus", "Hereford", "Charolais", "Simmental", "Murray Grey", "Mixed"],
+  Sheep:  ["Merino", "Dorper", "Suffolk", "Poll Dorset", "Border Leicester", "Mixed"],
+  Bulls:  ["Angus", "Hereford", "Charolais", "Simmental", "Murray Grey", "Mixed"],
+  Rams:   ["Merino", "Dorper", "Suffolk", "Poll Dorset", "Border Leicester", "Mixed"],
+  Other:  [],
+};
+const AGE_CLASSES = {
+  Cattle: ["Calves", "Weaners", "Yearlings", "Adult"],
+  Sheep:  ["Lambs", "Hoggets", "Adult"],
+  Bulls:  ["Yearling", "Adult"],
+  Rams:   ["Lambs", "Hoggets", "Adult"],
+};
 const TAG_COLOURS = ["Red", "Blue", "Green", "Yellow", "Orange", "Pink", "White", "Black"];
 const TAG_COLOUR_HEX = { Red: "#ef4444", Blue: "#3b82f6", Green: "#22c55e", Yellow: "#eab308", Orange: "#f97316", Pink: "#ec4899", White: "#f8fafc", Black: "#1e293b" };
 const SPECIES_ICON = { Cattle: "🐄", Sheep: "🐑" };
@@ -420,16 +431,16 @@ function GooglePaddockMap({
   const updateLabelForZoom = (g, map, centroid, p, labelMarkerRef, zoom) => {
     if (labelMarkerRef.setMap) labelMarkerRef.setMap(null);
     let text = "";
-    if (zoom >= 15) text = p.name;                       // full name
-    else if (zoom >= 13) text = abbrev(p.name);          // abbreviation
-    // zoom < 13: no label
+    if (zoom >= 14) text = p.name;           // full name when zoomed in
+    else if (zoom >= 11) text = abbrev(p.name); // abbreviation at medium zoom
+    // zoom < 11: no label — too crowded
     if (!text) return null;
     const stats = paddockStats[p.name] || {};
     let badge = `${Number(p.ha||0).toFixed(1)} ha`;
     if (insightMode === "stocking") badge = `${(stats.dsePerHa||0).toFixed(1)} DSE/ha`;
     else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "";
     else if (insightMode === "grazed") badge = stats.daysSinceGrazed != null ? `${stats.daysSinceGrazed}d ago` : "";
-    const labelText = zoom >= 15 ? `${text}\n${badge}` : text;
+    const labelText = zoom >= 14 ? `${text}\n${badge}` : text;
     const m = new g.Marker({
       position: centroid, map,
       label: { text: labelText, color: "#fff", fontWeight: "bold", fontSize: zoom >= 15 ? "12px" : "10px" },
@@ -452,6 +463,8 @@ function GooglePaddockMap({
         zoom: 13,
         mapTypeId: "satellite",
         streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
+        gestureHandling: "greedy", // single finger pan/zoom — no two-finger requirement
+        zoomControl: true,
       });
       const bounds = new g.LatLngBounds();
       const overlays = [];
@@ -483,25 +496,23 @@ function GooglePaddockMap({
         overlays.push(poly);
 
         // Initial label at current zoom (always show in paddocks mode)
-        const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, mode === "paddocks" ? map.getZoom() : 14);
+        const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, map.getZoom());
         if (lm) { labelMarkers[p.name] = lm; overlays.push(lm); }
       });
 
-      // Zoom-aware label update (paddocks mode)
-      if (mode === "paddocks") {
-        map.addListener("zoom_changed", () => {
-          const z = map.getZoom();
-          Object.entries(labelMarkers).forEach(([name, lm]) => {
-            if (lm) lm.setMap(null);
-          });
-          paddocks.forEach((p) => {
-            if (!centroids[p.name]) return;
-            const newLm = updateLabelForZoom(g, map, centroids[p.name], p, { setMap: () => {} }, z);
-            if (newLm) { labelMarkers[p.name] = newLm; overlays.push(newLm); }
-            else labelMarkers[p.name] = null;
-          });
+      // Zoom-aware label update — works in both paddocks AND livestock mode
+      map.addListener("zoom_changed", () => {
+        const z = map.getZoom();
+        Object.entries(labelMarkers).forEach(([name, lm]) => {
+          if (lm) lm.setMap(null);
         });
-      }
+        paddocks.forEach((p) => {
+          if (!centroids[p.name]) return;
+          const newLm = updateLabelForZoom(g, map, centroids[p.name], p, { setMap: () => {} }, z);
+          if (newLm) { labelMarkers[p.name] = newLm; overlays.push(newLm); }
+          else labelMarkers[p.name] = null;
+        });
+      });
 
       // ── Livestock pins (livestock mode) ──
       if (mode === "livestock") {
@@ -793,6 +804,22 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [setupToken, setSetupToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("setup") || null;
+  });
+  const [setupAccount, setSetupAccount] = useState(null); // { name, email } once token verified
+  const [setupPassword, setSetupPassword] = useState("");
+  const [setupError, setSetupError] = useState("");
+  const [setupDone, setSetupDone] = useState(false);
+
+  // If there's a setup token in the URL, verify it immediately
+  React.useEffect(() => {
+    if (!setupToken) return;
+    api.verifySetupToken(setupToken)
+      .then(setSetupAccount)
+      .catch((err) => { setSetupError(err.message || "This invite link is invalid or has expired."); setSetupToken(null); });
+  }, [setupToken]);
 
   const [apiWaking, setApiWaking] = useState(false);
 
@@ -861,19 +888,26 @@ export default function App() {
   const [farmName, setFarmName] = useState("Arundale");
   const [farmsPaddocks, setFarmsPaddocks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const paddocks = farmsPaddocks[farmName] || [];
-  const setPaddocks = (updater) => setFarmsPaddocks((prev) => ({
-    ...prev,
-    [farmName]: typeof updater === "function" ? updater(prev[farmName] || []) : updater,
-  }));
+  const setPaddocks = (updater) => {
+    const targetFarm = farmName;
+    setFarmsPaddocks((prev) => ({
+      ...prev,
+      [targetFarm]: typeof updater === "function" ? updater(prev[targetFarm] || []) : updater,
+    }));
+  };
   const [farmsLandmarks, setFarmsLandmarks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const landmarks = farmsLandmarks[farmName] || [];
-  const setLandmarks = (updater) => setFarmsLandmarks((prev) => ({
-    ...prev,
-    [farmName]: typeof updater === "function" ? updater(prev[farmName] || []) : updater,
-  }));
+  const setLandmarks = (updater) => {
+    const targetFarm = farmName;
+    setFarmsLandmarks((prev) => ({
+      ...prev,
+      [targetFarm]: typeof updater === "function" ? updater(prev[targetFarm] || []) : updater,
+    }));
+  };
   const [showAddLandmark, setShowAddLandmark] = useState(false);
   const [landmarkPinPos, setLandmarkPinPos] = useState(null);
   const [landmarkPinMode, setLandmarkPinMode] = useState(false);
+  const [landmarkPinPlacing, setLandmarkPinPlacing] = useState(false);
   const [showPaddockAddMenu, setShowPaddockAddMenu] = useState(false);
   const [landmarkCategoryPick, setLandmarkCategoryPick] = useState(null);
   const [newLandmarkForm, setNewLandmarkForm] = useState({});
@@ -905,11 +939,16 @@ export default function App() {
   const [mapLoadError, setMapLoadError] = useState(false);
   const [paddockEditMode, setPaddockEditMode] = useState(false);
   const [paddockEditForm, setPaddockEditForm] = useState({});
-  const mobs = farmsMobs[farmName];
-  const setMobs = (updater) => setFarmsMobs((prev) => ({
-    ...prev,
-    [farmName]: typeof updater === "function" ? updater(prev[farmName]) : updater,
-  }));
+  const mobs = farmsMobs[farmName] || [];
+  // setMobs captures farmName at the moment it's created — so async
+  // callbacks resolving after a farm switch still write to the right farm
+  const setMobs = (updater) => {
+    const targetFarm = farmName;
+    setFarmsMobs((prev) => ({
+      ...prev,
+      [targetFarm]: typeof updater === "function" ? updater(prev[targetFarm] || []) : updater,
+    }));
+  };
   const [editingMobId, setEditingMobId] = useState(null);
   const [customBreeds, setCustomBreeds] = useState({ Cattle: [], Sheep: [], Rams: [], Other: [] });
   const [showAllFarms, setShowAllFarms] = useState(false);
@@ -966,6 +1005,10 @@ export default function App() {
   const [inventoryForm, setInventoryForm] = useState({});
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showRecords, setShowRecords] = useState(false);
+  const [recordsType, setRecordsType] = useState("deaths"); // deaths | treatments | scans | spray | rainfall
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [allMobHistory, setAllMobHistory] = useState([]); // all mob history across all mobs
   const [showRainfall, setShowRainfall] = useState(false);
   const [rainfall, setRainfall] = useState([]);
   const [rainfallForm, setRainfallForm] = useState({});
@@ -1453,8 +1496,60 @@ export default function App() {
             </button>
           ))}
         </div>
-        <button onClick={() => setShowHelp(true)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"><HelpCircle size={16} /></button>
+        <button
+          onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowHelp(true)}
+          className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
+        >
+          {mapMode === "Paddocks" ? <Settings size={16} /> : <HelpCircle size={16} />}
+        </button>
       </div>
+
+      {/* ── Full-screen landmark pin placement overlay ── */}
+      {landmarkPinPlacing && (
+        <div className="fixed inset-0 z-50 flex flex-col">
+          <div className="bg-amber-500 text-white px-4 py-3 flex items-center gap-3 flex-shrink-0">
+            <button onClick={() => { setLandmarkPinPlacing(false); setShowAddLandmark(true); }} className="text-white/80 font-medium text-sm">← Back</button>
+            <div className="flex-1 text-center font-semibold">Drag 📍 to place landmark</div>
+            <button
+              onClick={() => { setLandmarkPinPlacing(false); setShowAddLandmark(true); }}
+              className="bg-white text-amber-700 font-bold text-sm px-4 py-1.5 rounded-full"
+            >
+              Confirm
+            </button>
+          </div>
+          <div className="flex-1 relative">
+            {googleMapsKey ? (
+              <GooglePaddockMap
+                paddocks={paddocks}
+                center={landmarkPinPos ? [landmarkPinPos.lat, landmarkPinPos.lng] : (FARM_CENTERS[farmName] || FARM_CENTERS.Arundale)}
+                onSelect={() => {}}
+                apiKey={googleMapsKey}
+                onError={() => {}}
+                mode="paddocks"
+                insightMode="outline"
+                paddockStats={{}}
+                landmarks={[]}
+                landmarkPinMode={true}
+                landmarkPinPos={landmarkPinPos}
+                onLandmarkPinMoved={(lat, lng) => setLandmarkPinPos({ lat, lng })}
+              />
+            ) : (
+              <div className="w-full h-full bg-slate-700 flex flex-col items-center justify-center text-white p-6 text-center gap-3">
+                <div className="text-4xl">📍</div>
+                <div className="font-bold">No Google Maps key</div>
+                <div className="text-sm opacity-70">Add your Maps API key in Settings to use the pin placement map. The landmark will be placed at the farm centre for now.</div>
+                <button onClick={() => { setLandmarkPinPos(FARM_CENTERS[farmName] ? { lat: FARM_CENTERS[farmName][0], lng: FARM_CENTERS[farmName][1] } : null); setLandmarkPinPlacing(false); setShowAddLandmark(true); }} className="bg-white text-slate-800 font-bold px-6 py-2.5 rounded-2xl mt-2">Use Farm Centre</button>
+              </div>
+            )}
+            {landmarkPinPos && (
+              <div className="absolute bottom-20 left-4 right-4 bg-white/90 backdrop-blur-sm rounded-2xl px-4 py-3 text-center shadow-lg">
+                <div className="text-xs text-slate-400 font-semibold">PIN LOCATION</div>
+                <div className="font-semibold text-slate-700 mt-0.5">{landmarkPinPos.lat.toFixed(5)}, {landmarkPinPos.lng.toFixed(5)}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {mapMode === "Livestock" && (
         <div className="h-[78vh] relative">
@@ -1520,7 +1615,7 @@ export default function App() {
           )}
           <div className="absolute right-4 bottom-6 flex flex-col gap-3 z-10">
             <button onClick={() => showToast("Recentering map...")} className="bg-white rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg">⌖</button>
-            <button onClick={() => showToast("Add new mob/pin")} className="bg-red-900 text-white rounded-2xl w-12 h-12 flex items-center justify-center text-2xl shadow-lg">+</button>
+            <button onClick={() => { setNewMobForm({ species: "Cattle", dobOption: "Year" }); setEditingMobId(null); setShowAddMob(true); }} className="bg-red-900 text-white rounded-2xl w-12 h-12 flex items-center justify-center text-2xl shadow-lg">+</button>
             <button onClick={locateMe} disabled={locating} className="bg-white rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg disabled:opacity-50">
               {locating ? "…" : "◎"}
             </button>
@@ -1865,41 +1960,17 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Pin placement map */}
-              <div className="mb-3">
-                <div className="text-sm font-bold text-slate-700 mb-1">Pin location on map</div>
-                <p className="text-xs text-slate-400 mb-2">Drag the 📍 pin to exactly where this landmark sits.</p>
-                <div className="rounded-2xl overflow-hidden border border-slate-200" style={{ height: "200px" }}>
-                  {googleMapsKey && !mapLoadError ? (
-                    <GooglePaddockMap
-                      paddocks={paddocks}
-                      center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-                      onSelect={() => {}}
-                      apiKey={googleMapsKey}
-                      onError={() => setMapLoadError(true)}
-                      mode="paddocks"
-                      insightMode="outline"
-                      paddockStats={{}}
-                      landmarks={[]}
-                      landmarkPinMode={true}
-                      landmarkPinPos={landmarkPinPos}
-                      onLandmarkPinMoved={(lat, lng) => setLandmarkPinPos({ lat, lng })}
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-slate-700 flex items-center justify-center text-white text-xs text-center p-2">
-                      {landmarkPinPos
-                        ? `📍 Pinned at ${landmarkPinPos.lat.toFixed(5)}, ${landmarkPinPos.lng.toFixed(5)}`
-                        : "Add a Google Maps key (Settings) to place the pin accurately. Will default to farm centre."}
-                    </div>
-                  )}
+              {/* Pin placement — full screen button */}
+              <button
+                onClick={() => { setLandmarkPinPlacing(true); setShowAddLandmark(false); }}
+                className={`w-full flex items-center gap-3 rounded-2xl px-4 py-3.5 mb-3 border-2 ${landmarkPinPos ? "border-amber-400 bg-amber-50 text-amber-700" : "border-dashed border-slate-300 bg-slate-50 text-slate-500"}`}
+              >
+                <span className="text-2xl">📍</span>
+                <div className="text-left">
+                  <div className="font-semibold text-sm">{landmarkPinPos ? "Pin placed — tap to move" : "Place on map"}</div>
+                  <div className="text-xs opacity-70">{landmarkPinPos ? `${landmarkPinPos.lat.toFixed(5)}, ${landmarkPinPos.lng.toFixed(5)}` : "Tap to drop a pin on the exact location"}</div>
                 </div>
-                {landmarkPinPos && (
-                  <div className="text-xs text-amber-600 font-semibold mt-1">
-                    📍 {landmarkPinPos.lat.toFixed(5)}, {landmarkPinPos.lng.toFixed(5)}
-                    <button onClick={() => setLandmarkPinPos(null)} className="ml-2 text-slate-400">Reset</button>
-                  </div>
-                )}
-              </div>
+              </button>
 
               <button
                 onClick={async () => {
@@ -3111,14 +3182,7 @@ export default function App() {
   const MobCard = (m) => (
     <div
       key={m.id}
-      draggable
-      onDragStart={(e) => {
-        setDragMobId(m.id);
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", String(m.id));
-      }}
-      onDragEnd={() => { setDragMobId(null); setDragOverPaddock(null); }}
-      className={`w-full flex items-center justify-between px-4 py-4 bg-white rounded-2xl shadow-sm border border-slate-100 text-left cursor-grab active:cursor-grabbing transition-all ${dragMobId === m.id ? "opacity-40 scale-95" : ""}`}
+      className="w-full flex items-center justify-between px-4 py-4 bg-white rounded-2xl shadow-sm border border-slate-100 text-left"
     >
       <button onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); }} className="flex-1 text-left min-w-0">
         <div className="flex items-center gap-2">
@@ -3131,9 +3195,18 @@ export default function App() {
         <div className="text-xs text-red-950 font-medium mt-1">{m.paddock} · {m.dse} DSE/hd</div>
         {m.whp > 0 && <div className="text-xs text-rose-500 font-medium mt-0.5">WHP {m.whp}d</div>}
       </button>
-      <div className="flex items-center gap-3 ml-2 flex-shrink-0">
+      <div className="flex items-center gap-2 ml-2 flex-shrink-0">
         <div className="text-xl font-bold text-slate-700">{m.count}</div>
-        <div className="text-slate-300 cursor-grab" title="Drag to move paddock">⠿</div>
+        {/* Move button — opens a paddock picker to move this mob */}
+        {canEdit && (
+          <button
+            onClick={() => setDragMobId(dragMobId === m.id ? null : m.id)}
+            className={`w-8 h-8 rounded-full flex items-center justify-center text-sm transition-colors ${dragMobId === m.id ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-400"}`}
+            title="Move to paddock"
+          >
+            ↕
+          </button>
+        )}
       </div>
     </div>
   );
@@ -3176,31 +3249,42 @@ export default function App() {
 
       <div className="px-4 space-y-4">
         {filteredMobs.length === 0 && <p className="text-center text-slate-400 text-sm p-6">No mobs match your filters.</p>}
+        {dragMobId && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 mb-3">
+            <div className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2">
+              Moving: {mobs.find(m => m.id === dragMobId)?.name} — tap a paddock below
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {paddocks.map(p => (
+                <button
+                  key={p.id}
+                  onClick={async () => {
+                    const mob = mobs.find(m => m.id === dragMobId);
+                    if (!mob || mob.paddock === p.name) { setDragMobId(null); return; }
+                    const dateStr = todayStr();
+                    const detail = `Moved from ${mob.paddock} to ${p.name}`;
+                    setMobs(prev => prev.map(m => m.id === dragMobId ? { ...m, paddock: p.name, daysInPaddock: 0 } : m));
+                    setDragMobId(null);
+                    showToast(`${mob.name} → ${p.name}`);
+                    try {
+                      await api.updateMob(dragMobId, { paddock: p.name, daysInPaddock: 0 });
+                      await api.addMobHistory(dragMobId, { action: "Move", detail, date: dateStr });
+                    } catch (err) { showToast(err.message || "Couldn't save move"); }
+                  }}
+                  className="px-3 py-1.5 bg-white border border-amber-300 rounded-full text-sm font-medium text-slate-700 hover:bg-amber-100 active:bg-amber-200"
+                >
+                  {p.name}
+                </button>
+              ))}
+              <button onClick={() => setDragMobId(null)} className="px-3 py-1.5 bg-slate-100 rounded-full text-sm text-slate-400">Cancel</button>
+            </div>
+          </div>
+        )}
         {groupedMobs.map((g, gi) => (
           <div key={gi}>
             {g.key && (
-              <div
-                onDragOver={(e) => { if (dragMobId) { e.preventDefault(); setDragOverPaddock(g.key); } }}
-                onDragLeave={() => setDragOverPaddock(null)}
-                onDrop={async (e) => {
-                  e.preventDefault();
-                  const mobId = Number(e.dataTransfer.getData("text/plain"));
-                  const mob = mobs.find(m => m.id === mobId);
-                  const targetPaddock = g.key;
-                  if (!mob || mob.paddock === targetPaddock) { setDragMobId(null); setDragOverPaddock(null); return; }
-                  const dateStr = todayStr();
-                  const detail = `Moved from ${mob.paddock} to ${targetPaddock}`;
-                  setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: targetPaddock, daysInPaddock: 0 } : m));
-                  setDragMobId(null); setDragOverPaddock(null);
-                  showToast(`${mob.name} → ${targetPaddock}`);
-                  try {
-                    await api.updateMob(mobId, { paddock: targetPaddock, daysInPaddock: 0 });
-                    await api.addMobHistory(mobId, { action: "Move", detail, date: dateStr });
-                  } catch (err) { showToast(err.message || "Couldn't save move"); }
-                }}
-                className={`text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 px-1 py-2 rounded-xl transition-colors ${dragOverPaddock === g.key ? "bg-amber-100 text-amber-700 border-2 border-dashed border-amber-400" : ""} ${dragMobId ? "cursor-copy" : ""}`}
-              >
-                {dragMobId ? `📍 Drop here → ${g.key}` : `${g.key} (${g.items.reduce((s, m) => s + m.count, 0)})`}
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 px-1 py-1">
+                {g.key} ({g.items.reduce((s, m) => s + m.count, 0)})
               </div>
             )}
             <div className="space-y-3">
@@ -3532,6 +3616,27 @@ export default function App() {
             </div>
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
+          <button onClick={async () => {
+            setRecordsType("deaths");
+            setShowRecords(true);
+            setShowMenu(false);
+            // Pre-load mob history
+            if (allMobHistory.length === 0) {
+              setRecordsLoading(true);
+              try {
+                const h = await api.listAllMobHistory(farmName);
+                setAllMobHistory(h);
+              } catch { /* silent */ }
+              setRecordsLoading(false);
+            }
+          }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+            <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 text-sm font-bold">📋</div>
+            <div className="text-left">
+              <div className="font-semibold text-slate-700">Records & Export</div>
+              <div className="text-xs text-slate-400">Deaths, treatments, scans, spray, rainfall — CSV / Excel / Print</div>
+            </div>
+            <ChevronRight size={16} className="text-slate-300 ml-auto" />
+          </button>
           <div className="h-px bg-slate-100 my-2" />
           <button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500"><Settings size={16} /></div>
@@ -3580,10 +3685,10 @@ export default function App() {
             {["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"].map((f) => (
               <button key={f} onClick={() => {
                 setFarmName(f);
-                // Clear the new farm's stale data immediately so nothing leaks in while the API re-fetches
                 setFarmsMobs((prev) => ({ ...prev, [f]: [] }));
                 setFarmsPaddocks((prev) => ({ ...prev, [f]: [] }));
                 setFarmsLandmarks((prev) => ({ ...prev, [f]: [] }));
+                setAllMobHistory([]); // reset so records reload for the new farm
                 setShowSwitchFarm(false);
                 setShowMenu(false);
                 showToast(`Switched to ${f}`);
@@ -3737,6 +3842,215 @@ export default function App() {
         </div>
       )}
 
+      {/* ── Records Screen ── */}
+      {showRecords && (() => {
+        const RECORD_TYPES = [
+          { id: "deaths",     label: "Deaths",          action: "Death"  },
+          { id: "treatments", label: "Treatments",      action: "Treat"  },
+          { id: "scans",      label: "Pregnancy Scans", action: "Scan"   },
+          { id: "weights",    label: "Weights",         action: "Weigh"  },
+          { id: "moves",      label: "Mob Moves",       action: "Move"   },
+          { id: "spray",      label: "Spray Records",   action: null     },
+          { id: "rainfall",   label: "Rainfall",        action: null     },
+        ];
+
+        const currentType = RECORD_TYPES.find(t => t.id === recordsType) || RECORD_TYPES[0];
+
+        // Build rows based on type
+        let rows = [];
+        let columns = [];
+
+        if (recordsType === "rainfall") {
+          rows = [...rainfall].sort((a, b) => (a.date < b.date ? 1 : -1));
+          columns = [
+            { key: "date",  label: "Date" },
+            { key: "mm",    label: "Rainfall (mm)" },
+          ];
+        } else if (recordsType === "spray") {
+          rows = [...sprayInventory].sort((a, b) => (a.treatmentDate < b.treatmentDate ? 1 : -1));
+          columns = [
+            { key: "treatmentDate",    label: "Date" },
+            { key: "title",            label: "Chemical" },
+            { key: "location",         label: "Paddock(s)" },
+            { key: "areaTreated",      label: "Area (ha)" },
+            { key: "quantity",         label: "Quantity" },
+            { key: "applicationRate",  label: "Rate" },
+            { key: "applicationMethod",label: "Method" },
+            { key: "whp",              label: "WHP (days)" },
+            { key: "batchNumber",      label: "Batch #" },
+          ];
+        } else {
+          // Mob history based record types
+          const actionFilter = currentType.action;
+          rows = allMobHistory.filter(h => h.action === actionFilter);
+          if (recordsType === "deaths") {
+            columns = [
+              { key: "date",    label: "Date" },
+              { key: "mobName", label: "Mob" },
+              { key: "species", label: "Species" },
+              { key: "breed",   label: "Breed" },
+              { key: "ageClass",label: "Age Class" },
+              { key: "paddock", label: "Paddock" },
+              { key: "detail",  label: "Detail" },
+            ];
+          } else if (recordsType === "treatments") {
+            columns = [
+              { key: "date",    label: "Date" },
+              { key: "mobName", label: "Mob" },
+              { key: "species", label: "Species" },
+              { key: "breed",   label: "Breed" },
+              { key: "paddock", label: "Paddock" },
+              { key: "detail",  label: "Treatment detail" },
+            ];
+          } else {
+            columns = [
+              { key: "date",    label: "Date" },
+              { key: "mobName", label: "Mob" },
+              { key: "species", label: "Species" },
+              { key: "paddock", label: "Paddock" },
+              { key: "detail",  label: "Detail" },
+            ];
+          }
+        }
+
+        // Export helpers
+        const toCSV = () => {
+          const header = columns.map(c => c.label).join(",");
+          const body = rows.map(r =>
+            columns.map(c => {
+              const v = String(r[c.key] || "").replace(/"/g, '""');
+              return v.includes(",") ? `"${v}"` : v;
+            }).join(",")
+          ).join("\n");
+          const csv = `${header}\n${body}`;
+          const blob = new Blob([csv], { type: "text/csv" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `${farmName}-${currentType.label}-${todayStr()}.csv`;
+          a.click();
+        };
+
+        const toExcel = () => {
+          // Simple TSV that Excel opens correctly
+          const header = columns.map(c => c.label).join("\t");
+          const body = rows.map(r => columns.map(c => r[c.key] || "").join("\t")).join("\n");
+          const tsv = `${header}\n${body}`;
+          const blob = new Blob([tsv], { type: "application/vnd.ms-excel" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `${farmName}-${currentType.label}-${todayStr()}.xls`;
+          a.click();
+        };
+
+        const toPrint = () => {
+          const tableRows = rows.map(r =>
+            `<tr>${columns.map(c => `<td>${r[c.key] || ""}</td>`).join("")}</tr>`
+          ).join("");
+          const html = `
+            <html><head><title>${farmName} — ${currentType.label}</title>
+            <style>
+              body { font-family: system-ui, sans-serif; font-size: 12px; }
+              h2 { color: #450a0a; margin-bottom: 4px; }
+              p { color: #666; margin-bottom: 12px; }
+              table { width: 100%; border-collapse: collapse; }
+              th { background: #450a0a; color: white; padding: 6px 8px; text-align: left; font-size: 11px; }
+              td { border-bottom: 1px solid #e2e8f0; padding: 5px 8px; }
+              tr:nth-child(even) td { background: #f8fafc; }
+            </style></head>
+            <body>
+              <h2>${farmName} — ${currentType.label}</h2>
+              <p>Exported ${todayStr()} · ${rows.length} records</p>
+              <table>
+                <thead><tr>${columns.map(c => `<th>${c.label}</th>`).join("")}</tr></thead>
+                <tbody>${tableRows}</tbody>
+              </table>
+            </body></html>`;
+          const win = window.open("", "_blank");
+          win.document.write(html);
+          win.document.close();
+          win.focus();
+          setTimeout(() => win.print(), 500);
+        };
+
+        return (
+          <div className="fixed inset-0 bg-white z-50 flex flex-col max-w-full">
+            {/* Header */}
+            <div className="bg-red-950 text-white px-5 py-4 flex items-center gap-3 flex-shrink-0">
+              <button onClick={() => setShowRecords(false)} className="text-white/70 font-medium text-sm">← Menu</button>
+              <div className="flex-1">
+                <div className="font-semibold tracking-tight">Records</div>
+                <div className="text-xs text-white/60">{farmName}</div>
+              </div>
+              {recordsLoading && <div className="text-xs text-white/60">Loading…</div>}
+            </div>
+
+            {/* Type tabs */}
+            <div className="flex overflow-x-auto gap-1 px-4 py-3 bg-white border-b border-slate-100 flex-shrink-0">
+              {RECORD_TYPES.map(t => (
+                <button
+                  key={t.id}
+                  onClick={async () => {
+                    setRecordsType(t.id);
+                    // Load mob history if needed
+                    if (t.action !== null && allMobHistory.length === 0) {
+                      setRecordsLoading(true);
+                      try {
+                        const h = await api.listAllMobHistory(farmName);
+                        setAllMobHistory(h);
+                      } catch { /* silent */ }
+                      setRecordsLoading(false);
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition-colors ${recordsType === t.id ? "bg-red-950 text-white" : "bg-slate-100 text-slate-600"}`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Export buttons */}
+            <div className="flex gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex-shrink-0">
+              <div className="text-xs text-slate-400 font-semibold self-center mr-1">Export:</div>
+              <button onClick={toCSV} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">CSV</button>
+              <button onClick={toExcel} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">Excel</button>
+              <button onClick={toPrint} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">Print / PDF</button>
+              <div className="ml-auto text-xs text-slate-400 self-center">{rows.length} records</div>
+            </div>
+
+            {/* Table */}
+            <div className="flex-1 overflow-auto">
+              {recordsLoading ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading records…</div>
+              ) : rows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2">
+                  <div className="text-3xl">📋</div>
+                  <div>No {currentType.label.toLowerCase()} recorded yet for {farmName}</div>
+                </div>
+              ) : (
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      {columns.map(c => (
+                        <th key={c.key} className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{c.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
+                        {columns.map(c => (
+                          <td key={c.key} className="px-4 py-3 text-slate-700 whitespace-nowrap">{r[c.key] || "—"}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Paddock List modal (accessible from Menu) ── */}
       {showPaddockList && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 max-w-md mx-auto flex flex-col">
@@ -3882,9 +4196,9 @@ export default function App() {
         desc: `${newMobForm.breed || species} ${(newMobForm.ageClass || "").toLowerCase()}${newMobForm.dob ? " · " + newMobForm.dob : ""}`.trim(),
         count: Number(newMobForm.size),
         paddock: newMobForm.paddock,
-        dse: newMobForm.dse ? Number(newMobForm.dse) : (species === "Sheep" ? 1.5 : 6),
+        dse: newMobForm.dse ? Number(newMobForm.dse) : (species === "Sheep" || species === "Rams" ? 1.5 : 8),
         species,
-        type: ageOptions?.includes(newMobForm.ageClass) ? newMobForm.ageClass : (species === "Sheep" ? "Ewes" : "Cows"),
+        type: ageOptions?.includes(newMobForm.ageClass) ? newMobForm.ageClass : (species === "Sheep" || species === "Rams" ? "Ewes" : species === "Bulls" ? "Bulls" : "Cows"),
         breed: newMobForm.breed || "Mixed",
         ageClass: newMobForm.ageClass || "Adult",
         mgmtGroup: newMobForm.mgmtGroup || "Unassigned",
@@ -3929,15 +4243,20 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
           <div>
             <label className="text-sm font-bold text-slate-700 block mb-2">Species *</label>
-            <div className="flex gap-3">
-              {["Cattle", "Sheep"].map((s) => (
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { id: "Cattle", emoji: "🐄" },
+                { id: "Sheep",  emoji: "🐑" },
+                { id: "Bulls",  emoji: "🐂" },
+                { id: "Rams",   emoji: "🐏" },
+              ].map((s) => (
                 <button
-                  key={s}
-                  onClick={() => updateNewMob("species", s)}
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl border font-semibold ${species === s ? "border-red-900 bg-amber-200 text-red-950" : "border-slate-200 bg-white text-slate-600"}`}
+                  key={s.id}
+                  onClick={() => updateNewMob("species", s.id)}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-2xl border font-semibold ${species === s.id ? "border-red-900 bg-amber-200 text-red-950" : "border-slate-200 bg-white text-slate-600"}`}
                 >
-                  <span className={`w-4 h-4 rounded-full border-2 ${species === s ? "border-red-900 bg-red-900" : "border-slate-300"}`} />
-                  {s}
+                  <span className={`w-4 h-4 rounded-full border-2 ${species === s.id ? "border-red-900 bg-red-900" : "border-slate-300"}`} />
+                  <span>{s.emoji} {s.id}</span>
                 </button>
               ))}
             </div>
@@ -4042,7 +4361,7 @@ export default function App() {
             <p className="text-xs text-slate-400 mb-2">Assign animals to a paddock.</p>
             <select value={newMobForm.paddock || ""} onChange={(e) => updateNewMob("paddock", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
               <option value="">Make a selection</option>
-              {paddocks.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+              {[...paddocks].sort((a, b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
             </select>
           </div>
 
@@ -4074,6 +4393,57 @@ export default function App() {
             <p className="text-white/60 text-sm font-medium">Server waking up — this takes about 15 seconds on first load…</p>
           </div>
         )}
+      </div>
+    );
+  }
+
+  // ── Password setup screen (invite link from email) ───────────────────────
+  if (setupToken && setupAccount) {
+    return (
+      <div className="max-w-md mx-auto min-h-screen bg-gradient-to-br from-red-950 to-amber-600 flex flex-col items-center justify-center px-6">
+        <div className="bg-white rounded-3xl shadow-2xl w-full p-6">
+          <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-24 mx-auto rounded-xl mb-4" />
+          <h1 className="text-xl font-bold text-slate-800 text-center mb-1">Welcome, {setupAccount.name}</h1>
+          <p className="text-sm text-slate-400 text-center mb-5">Set your password to get started</p>
+          <div className="text-xs text-slate-400 mb-1 font-semibold">EMAIL</div>
+          <div className="bg-slate-50 rounded-xl px-3 py-2.5 text-slate-600 text-sm mb-4 font-medium">{setupAccount.email}</div>
+          <div className="text-xs text-slate-400 mb-1 font-semibold">CHOOSE A PASSWORD</div>
+          <input
+            type="password"
+            value={setupPassword}
+            onChange={(e) => setSetupPassword(e.target.value)}
+            placeholder="At least 6 characters"
+            className="w-full border border-slate-200 rounded-xl px-3 py-3 mb-2 bg-white text-sm"
+            autoFocus
+          />
+          {setupError && <p className="text-rose-500 text-sm mb-2">{setupError}</p>}
+          <button
+            onClick={async (e) => {
+              const btn = e.currentTarget;
+              if (setupPassword.length < 6) { setSetupError("Password must be at least 6 characters."); return; }
+              setSetupError("");
+              btn.disabled = true;
+              btn.textContent = "Setting up…";
+              try {
+                const { token, account } = await api.completeSetup(setupToken, setupPassword);
+                setAuthToken(token);
+                setCurrentAccount(account);
+                setLoggedInEmail(account.email);
+                setSetupToken(null);
+                setSetupAccount(null);
+                // Clear the token from the URL
+                window.history.replaceState({}, "", window.location.pathname);
+              } catch (err) {
+                btn.disabled = false;
+                btn.textContent = "Set Password";
+                setSetupError(err.message || "Something went wrong. Please try again.");
+              }
+            }}
+            className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
+          >
+            Set Password
+          </button>
+        </div>
       </div>
     );
   }
@@ -4423,14 +4793,14 @@ export default function App() {
                       setNewAccountName("");
                       setNewAccountEmail("");
                       setNewAccountRole("Worker");
-                      showToast("Invite sent — default password is \"password\"");
+                      showToast("Invite email sent ✓");
                     } catch (err) {
                       showToast(err.message || "Couldn't send invite");
                     }
                   }}
-                  className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold"
+                  className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-semibold"
                 >
-                  Send Invite
+                  Send Invite Email
                 </button>
               </div>
               <p className="text-xs text-slate-400">

@@ -268,3 +268,12 @@ export const cattleFeedHistory = pgTable("cattle_feed_history", {
   totalKg: numeric("total_kg"),
   events: jsonb("events").default([]),
 });
+
+// ── Password setup / reset tokens ────────────────────────────────────────────
+export const passwordTokens = pgTable("password_tokens", {
+  id: serial("id").primaryKey(),
+  accountId: integer("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").notNull().default(false),
+});

@@ -125,3 +125,23 @@ router.delete("/:id/notes/:noteId", requireAuth, async (req, res) => {
 });
 
 export default router;
+
+// GET /api/mobs/history?farm=Arundale — all mob history for a farm (for records export)
+router.get("/history", requireAuth, async (req, res) => {
+  const farmName = req.query.farm;
+  if (!farmName) return res.status(400).json({ error: "farm query param is required" });
+  const farmId = await farmIdByName(farmName);
+  if (!farmId) return res.json([]);
+  // Join mob history with mob name/species for display
+  const farmMobs = await db.select().from(mobs).where(eq(mobs.farmId, farmId));
+  const mobMap = {};
+  farmMobs.forEach(m => { mobMap[m.id] = m; });
+  const allHistory = [];
+  for (const mob of farmMobs) {
+    const history = await db.select().from(mobHistory).where(eq(mobHistory.mobId, mob.id));
+    history.forEach(h => allHistory.push({ ...h, mobName: mob.name, species: mob.species, breed: mob.breed, ageClass: mob.ageClass, tag: mob.tag, paddock: mob.paddock }));
+  }
+  // Sort by date descending
+  allHistory.sort((a, b) => (a.date < b.date ? 1 : -1));
+  res.json(allHistory);
+});
