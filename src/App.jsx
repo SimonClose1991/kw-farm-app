@@ -708,7 +708,14 @@ function GooglePaddockMap({
       if (!alreadyFitted && (paddocks.length || landmarks.length) && !drawMode && !initialZoom) {
         try { map.fitBounds(bounds, 40); } catch {}
       }
-      mapInstanceRef.current = { map, overlays, polygons, labelMarkers, fittedBounds: alreadyFitted || (!drawMode && !initialZoom), landmarks, renderLandmarks: renderAllLandmarks };
+      mapInstanceRef.current = {
+        map, overlays, polygons, labelMarkers,
+        fittedBounds: alreadyFitted || (!drawMode && !initialZoom),
+        landmarks, renderLandmarks: renderAllLandmarks,
+        centroids, center, bounds,
+        // Store mob rendering function so it can be called from separate effect
+        renderMobs: null, // populated after initial render
+      };
     };
 
     if (window.google?.maps) {
@@ -733,7 +740,7 @@ function GooglePaddockMap({
         mapInstanceRef.current = null;
       }
     };
-  }, [paddocks, center, apiKey, mode, mobs, drawMode, userLocation, landmarkPinMode]); // landmarks, openGateIds, insightMode, drawPoints handled by separate effects
+  }, [paddocks, center, apiKey, mode, drawMode, userLocation, landmarkPinMode]); // mobs, landmarks, openGateIds, insightMode, drawPoints handled by separate effects
 
   // Separate effect: update gate open/close without rebuilding map
   // Just updates polygon stroke colour and gate marker symbols
@@ -754,6 +761,49 @@ function GooglePaddockMap({
       });
     });
   }, [openGateIds, paddocks]);
+
+  // Separate effect: update mob markers when mobs change — no map rebuild, no fitBounds
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.map || !window.google?.maps || mode !== "livestock") return;
+    const g = window.google.maps;
+    const { map, centroids, center } = ref;
+    // Remove existing mob markers
+    if (ref.mobOverlays) ref.mobOverlays.forEach(m => { try { m.setMap(null); } catch {} });
+    ref.mobOverlays = [];
+    // Re-render mob pins in-place
+    const groups = {};
+    mobs.forEach(m => {
+      const key = `${m.paddock || "_nopad"}::${m.species || "Other"}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(m);
+    });
+    let gi = 0;
+    Object.entries(groups).forEach(([key, groupMobs]) => {
+      const [paddockName, species] = key.split("::");
+      let base = centroids?.[paddockName];
+      if (!base) {
+        const angle = (gi / Math.max(Object.keys(groups).length, 1)) * 2 * Math.PI;
+        base = { lat: center[0] + Math.cos(angle) * 0.012, lng: center[1] + Math.sin(angle) * 0.012 };
+      }
+      gi++;
+      const speciesOffset = species === "Cattle" || species === "Bulls" ? 0 : (species === "Sheep" ? 0.0008 : 0.0004);
+      const pos = { lat: base.lat + speciesOffset, lng: base.lng + speciesOffset * 0.5 };
+      const totalCount = groupMobs.reduce((s, m) => s + m.count, 0);
+      const emoji = species === "Cattle" ? "🐄" : species === "Sheep" ? "🐑" : species === "Rams" ? "🐏" : species === "Bulls" ? "🐂" : "🐾";
+      const marker = new g.Marker({
+        position: pos, map,
+        label: { text: `${emoji} ${totalCount}`, color: "#1e293b", fontWeight: "bold", fontSize: "12px" },
+        icon: {
+          path: g.SymbolPath.CIRCLE, scale: 22,
+          fillColor: "#fff", fillOpacity: 0.95,
+          strokeColor: "#cbd5e1", strokeWeight: 2,
+        },
+        zIndex: 50,
+      });
+      ref.mobOverlays.push(marker);
+    });
+  }, [mobs, mode]);
 
   // Separate effect: re-render landmarks when they change (without full map rebuild)
   React.useEffect(() => {
@@ -983,15 +1033,25 @@ function MyScheduleWidget({ currentUser, api, setTab }) {
   function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
   function fmtShort(d) { return new Date(d).toLocaleDateString("en-AU", {day:"numeric", month:"short"}); }
 
-  // Match user's name against workflow staff assignments
-  // Checks first name, full name, and partial matches
+  // Match user's account name against workflow task assignedStaff
+  // Handles: "Simon Close" account → "Simon" workflow staff, or vice versa
   function matchesUser(assignedStaff, userName) {
     if (!assignedStaff?.length || !userName) return false;
     const lname = userName.toLowerCase().trim();
     const firstName = lname.split(" ")[0];
+    const lastName = lname.split(" ").slice(1).join(" ");
     return assignedStaff.some(s => {
       const ls = s.toLowerCase().trim();
-      return ls === lname || ls.startsWith(firstName) || firstName.startsWith(ls);
+      const sFirst = ls.split(" ")[0];
+      // Exact match
+      if (ls === lname) return true;
+      // First name matches (e.g. "Simon" matches "Simon Close")
+      if (sFirst === firstName) return true;
+      // Account first name matches staff full name
+      if (firstName === ls) return true;
+      // Partial: staff name is a substring of account name
+      if (lname.includes(ls) || ls.includes(firstName)) return true;
+      return false;
     });
   }
 
@@ -1731,6 +1791,8 @@ function WorkflowScreen({ setTab, currentAccount }) {
         apiBase: API_BASE_URL,
         token: getStoredToken() || "",
         role: currentAccount?.role || "Worker",
+        userName: currentAccount?.name || "",
+        userEmail: currentAccount?.email || "",
       }, "*");
     } catch (e) { /* cross-origin */ }
   }, []);
@@ -4517,7 +4579,7 @@ export default function App() {
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-sky-500"><Droplet size={16} /></div>
             <span className="font-semibold text-slate-700">Rainfall records</span>
           </button>
-          <button onClick={() => { setShowPaddockList(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => { setTab("home"); setShowPaddockList(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center text-green-600">▦</div>
             <div className="text-left">
               <div className="font-semibold text-slate-700">Paddock list</div>
@@ -4526,9 +4588,9 @@ export default function App() {
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
           <button onClick={() => {
+            setTab("home");
             setShowRecords(true);
             setShowMenu(false);
-            // Load mob history in background — screen shows immediately
             if (allMobHistory.length === 0) {
               setRecordsLoading(true);
               api.listAllMobHistory(farmName)

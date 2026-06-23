@@ -301,7 +301,33 @@ window.addEventListener("message", e=>{
     if(logoSrc){
       document.querySelectorAll(".header-logo, #splash img").forEach(img=>{ img.src=logoSrc; img.style.display="block"; });
     }
-    loadState().then(()=>render());
+    loadState().then(async ()=>{
+      // Auto-sync accounts into staff list so logins link to workflow tasks
+      if(KW_AUTH_TOKEN){
+        try{
+          const res = await kwFetch("/api/accounts");
+          if(res.ok){
+            const accs = await res.json();
+            accs.forEach(a=>{
+              if(!a.name) return;
+              const fullN = a.name.trim();
+              const parts = fullN.split(" ");
+              const first = parts[0], last = parts.slice(1).join(" ");
+              // Add account to staff list if not already present
+              const exists = staff.some(s=>s.toLowerCase()===fullN.toLowerCase()||s.split(" ")[0].toLowerCase()===first.toLowerCase());
+              if(!exists) staff.push(fullN);
+              // Update staffDetails with linked account info (first/last/email)
+              const key = staff.find(s=>s.toLowerCase()===fullN.toLowerCase())||fullN;
+              if(!staffDetails[key]) staffDetails[key]={};
+              staffDetails[key].first = first;
+              if(last) staffDetails[key].last = last;
+              staffDetails[key].email = a.email;
+            });
+          }
+        }catch(_){}
+      }
+      render();
+    });
   }
 });
 window.addEventListener("load", ()=>{ try{ window.parent.postMessage({type:"KW_WORKFLOW_READY"},"*"); }catch(_){} });
