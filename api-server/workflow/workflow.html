@@ -80,6 +80,9 @@ body.hide-staff .task-card .tc-staff{display:none}
 .task-card .tc-notes-toggle{background:none;border:none;padding:2px 0;margin-top:3px;font-size:10px;color:#d97706;cursor:pointer;font-weight:600}
 .task-card .tc-notes-full{background:rgba(0,0,0,.03);border-radius:7px;padding:6px 8px;margin-top:4px;font-style:normal;font-size:10px;color:#57534e}
 .task-card .tc-actions{display:flex;gap:0;margin-top:5px;padding-top:4px;border-top:1px solid rgba(0,0,0,.06);align-items:center}
+.tc-drag-handle{display:none;padding:4px 8px 4px 4px;cursor:grab;color:#c4b5a5;font-size:18px;line-height:1;touch-action:none;user-select:none;-webkit-user-select:none;flex-shrink:0}
+.tc-drag-handle:active{cursor:grabbing;color:#a8a29e}
+@media(max-width:600px){ .tc-drag-handle{display:flex;align-items:center} }
 .tc-btn{background:none;border:none;padding:3px 6px;border-radius:5px;font-size:11px;cursor:pointer;line-height:1;color:#a8a29e;transition:all .1s}
 .tc-btn:hover{background:rgba(0,0,0,.06);color:#57534e}
 .task-card.done{opacity:.65}
@@ -568,6 +571,7 @@ function buildCard(t){
       <button class="tc-btn" data-action="edit" data-id="${t.id}" title="Edit" style="color:#3b82f6">✎</button>
       <button class="tc-btn" data-action="dup"  data-id="${t.id}" title="Duplicate" style="color:#7c3aed">⧉</button>
       <button class="tc-btn" data-action="del"  data-id="${t.id}" title="Delete" style="color:#ef4444">✕</button>
+      <span class="tc-drag-handle" data-drag="${t.id}" title="Drag to move">⠿</span>
     </div>`;
   }
   div.innerHTML=inner;
@@ -987,27 +991,26 @@ function applyFilters(){ farmFilter=document.getElementById("farm-filter").value
 
 /* ── Touch drag & drop (mobile admin) ── */
 function bindTouchDrag(card, id, farm, day){
-  let touchTimer=null, isDragging=false;
-  card.addEventListener("touchstart", e=>{
-    if(!isAdmin) return;
-    touchTimer=setTimeout(()=>{
-      touchTimer=null; isDragging=true;
-      startTouchDrag(e.touches[0], card, id, farm, day);
-    }, 450);
-  },{passive:true});
-  card.addEventListener("touchmove", e=>{
-    if(touchTimer){ clearTimeout(touchTimer); touchTimer=null; }
-    if(!isDragging||touchDragId!==id) return;
+  // Use the drag handle (⠿) instead of long-press to avoid iOS text selection popup
+  // The handle is only visible on mobile via CSS
+  const handle = card.querySelector("[data-drag]");
+  if(!handle) return;
+  let dragging=false;
+  handle.addEventListener("touchstart", e=>{
+    e.preventDefault(); // prevent scroll/selection
+    dragging=true;
+    startTouchDrag(e.touches[0], card, id, farm, day);
+  },{passive:false});
+  handle.addEventListener("touchmove", e=>{
+    if(!dragging||touchDragId!==id) return;
     e.preventDefault();
     moveTouchDrag(e.touches[0]);
   },{passive:false});
-  card.addEventListener("touchend", e=>{
-    if(touchTimer){ clearTimeout(touchTimer); touchTimer=null; }
-    if(isDragging&&touchDragId===id){ isDragging=false; endTouchDrag(); }
+  handle.addEventListener("touchend", e=>{
+    if(dragging&&touchDragId===id){ dragging=false; endTouchDrag(); }
   },{passive:true});
-  card.addEventListener("touchcancel",()=>{
-    if(touchTimer){ clearTimeout(touchTimer); touchTimer=null; }
-    if(isDragging){ isDragging=false; cancelTouchDrag(); }
+  handle.addEventListener("touchcancel",()=>{
+    if(dragging){ dragging=false; cancelTouchDrag(); }
   },{passive:true});
 }
 function startTouchDrag(touch, card, id, farm, day){

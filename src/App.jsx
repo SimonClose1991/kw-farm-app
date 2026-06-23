@@ -2383,6 +2383,7 @@ export default function App() {
   const [newLandmarkForm, setNewLandmarkForm] = useState({});
   const [landmarkDetail, setLandmarkDetail] = useState(null);
   const [landmarkEditMode, setLandmarkEditMode] = useState(false);
+  const [confirmLmDel, setConfirmLmDel] = useState(false); // two-step landmark delete
   const [mapDrawMode, setMapDrawMode] = useState(false); // true while drawing a new paddock shape
   const [drawPoints, setDrawPoints] = useState([]); // array of {x,y} in SVG space while drawing
   const [insightMode, setInsightMode] = useState("usage");
@@ -2409,6 +2410,7 @@ export default function App() {
   const [mapLoadError, setMapLoadError] = useState(false);
   const [paddockEditMode, setPaddockEditMode] = useState(false);
   const [paddockEditForm, setPaddockEditForm] = useState({});
+  const [confirmPaddockDel, setConfirmPaddockDel] = useState(false); // two-step paddock delete
   const mobs = farmsMobs[farmName] || [];
   // setMobs captures farmName at the moment it's created — so async
   // callbacks resolving after a farm switch still write to the right farm
@@ -3487,7 +3489,7 @@ export default function App() {
       )}
 
       {landmarkDetail && (
-        <Modal title={landmarkEditMode ? "Edit Landmark" : (landmarkDetail.name || landmarkDetail.type)} onClose={() => { setLandmarkDetail(null); setLandmarkEditMode(false); }}>
+        <Modal title={landmarkEditMode ? "Edit Landmark" : (landmarkDetail.name || landmarkDetail.type)} onClose={() => { setLandmarkDetail(null); setLandmarkEditMode(false); setConfirmLmDel(false); }}>
           {landmarkEditMode ? (
             <div>
               <div className="space-y-3 mb-4">
@@ -3527,29 +3529,26 @@ export default function App() {
                 Save Changes
               </button>
               {/* Delete only accessible from within edit — requires confirmation */}
-              {canEdit && (() => {
-                const [confirmLmDel, setConfirmLmDel] = React.useState(false);
-                return confirmLmDel ? (
-                  <div className="mt-3 bg-rose-50 border border-rose-200 rounded-2xl p-4">
-                    <p className="text-sm font-bold text-rose-700 text-center mb-1">Delete "{landmarkDetail.name || landmarkDetail.type}"?</p>
-                    <p className="text-xs text-rose-500 text-center mb-3">This landmark will be permanently removed.</p>
-                    <div className="flex gap-2">
-                      <button onClick={() => setConfirmLmDel(false)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold text-slate-500">Cancel</button>
-                      <button onClick={() => {
-                        const id = landmarkDetail.id;
-                        setLandmarks(prev => prev.filter(l => l.id !== id));
-                        setLandmarkDetail(null); setLandmarkEditMode(false);
-                        markChanged();
-                        api.deleteLandmark(id).then(() => showToast("Landmark deleted")).catch(err => showToast(err.message || "Couldn't delete"));
-                      }} className="flex-1 bg-rose-500 text-white rounded-xl py-2.5 text-sm font-bold">Yes, delete</button>
-                    </div>
+              {canEdit && (confirmLmDel ? (
+                <div className="mt-3 bg-rose-50 border border-rose-200 rounded-2xl p-4">
+                  <p className="text-sm font-bold text-rose-700 text-center mb-1">Delete "{landmarkDetail?.name || landmarkDetail?.type}"?</p>
+                  <p className="text-xs text-rose-500 text-center mb-3">This landmark will be permanently removed.</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setConfirmLmDel(false)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold text-slate-500">Cancel</button>
+                    <button onClick={() => {
+                      const id = landmarkDetail.id;
+                      setLandmarks(prev => prev.filter(l => l.id !== id));
+                      setLandmarkDetail(null); setLandmarkEditMode(false); setConfirmLmDel(false);
+                      markChanged();
+                      api.deleteLandmark(id).then(() => showToast("Landmark deleted")).catch(err => showToast(err.message || "Couldn't delete"));
+                    }} className="flex-1 bg-rose-500 text-white rounded-xl py-2.5 text-sm font-bold">Yes, delete</button>
                   </div>
-                ) : (
-                  <button onClick={() => setConfirmLmDel(true)} className="w-full mt-3 text-rose-400 text-xs font-semibold py-2 hover:text-rose-600">
-                    🗑 Delete this landmark
-                  </button>
-                );
-              })()}
+                </div>
+              ) : (
+                <button onClick={() => setConfirmLmDel(true)} className="w-full mt-3 text-rose-400 text-xs font-semibold py-2 hover:text-rose-600">
+                  🗑 Delete this landmark
+                </button>
+              ))}
             </div>
           ) : (
             <div>
@@ -3633,7 +3632,7 @@ export default function App() {
         const isGrazingPaddock = !NON_GRAZING_LAND_USES.has(paddockDetail.landUse);
         const dsePerHa = (isGrazingPaddock && paddockDetail.ha) ? dseTotal / paddockDetail.ha : 0;
         return (
-          <Modal title={paddockEditMode ? "Edit Paddock" : paddockDetail.name} onClose={() => { setPaddockDetail(null); setPaddockEditMode(false); }}>
+          <Modal title={paddockEditMode ? "Edit Paddock" : paddockDetail.name} onClose={() => { setPaddockDetail(null); setPaddockEditMode(false); setConfirmPaddockDel(false); }}>
             {paddockEditMode ? (
               <div className="space-y-3 mb-4">
                 <div>
@@ -3691,29 +3690,26 @@ export default function App() {
                   </button>
                 </div>
                 {/* Delete is only accessible from within the edit form */}
-                {canEdit && (() => {
-                  const [confirmDel, setConfirmDel] = React.useState(false);
-                  return confirmDel ? (
-                    <div className="mt-3 bg-rose-50 border border-rose-200 rounded-2xl p-4">
-                      <p className="text-sm font-bold text-rose-700 text-center mb-1">Delete "{paddockDetail.name}"?</p>
-                      <p className="text-xs text-rose-500 text-center mb-3">All paddock data will be permanently removed.</p>
-                      <div className="flex gap-2">
-                        <button onClick={() => setConfirmDel(false)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold text-slate-500">Cancel</button>
-                        <button onClick={() => {
-                          const id = paddockDetail.id;
-                          setPaddocks(prev => prev.filter(p => p.id !== id));
-                          setPaddockDetail(null); setPaddockEditMode(false);
-                          markChanged();
-                          api.deletePaddock(id).then(() => showToast("Paddock deleted")).catch(err => showToast(err.message || "Couldn't delete"));
-                        }} className="flex-1 bg-rose-500 text-white rounded-xl py-2.5 text-sm font-bold">Yes, delete</button>
-                      </div>
+                {canEdit && (confirmPaddockDel ? (
+                  <div className="mt-3 bg-rose-50 border border-rose-200 rounded-2xl p-4">
+                    <p className="text-sm font-bold text-rose-700 text-center mb-1">Delete "{paddockDetail?.name}"?</p>
+                    <p className="text-xs text-rose-500 text-center mb-3">All paddock data will be permanently removed.</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setConfirmPaddockDel(false)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold text-slate-500">Cancel</button>
+                      <button onClick={() => {
+                        const id = paddockDetail.id;
+                        setPaddocks(prev => prev.filter(p => p.id !== id));
+                        setPaddockDetail(null); setPaddockEditMode(false); setConfirmPaddockDel(false);
+                        markChanged();
+                        api.deletePaddock(id).then(() => showToast("Paddock deleted")).catch(err => showToast(err.message || "Couldn't delete"));
+                      }} className="flex-1 bg-rose-500 text-white rounded-xl py-2.5 text-sm font-bold">Yes, delete</button>
                     </div>
-                  ) : (
-                    <button onClick={() => setConfirmDel(true)} className="w-full mt-3 text-rose-400 text-xs font-semibold py-2 hover:text-rose-600">
-                      🗑 Delete this paddock
-                    </button>
-                  );
-                })()}
+                  </div>
+                ) : (
+                  <button onClick={() => setConfirmPaddockDel(true)} className="w-full mt-3 text-rose-400 text-xs font-semibold py-2 hover:text-rose-600">
+                    🗑 Delete this paddock
+                  </button>
+                ))}
               </div>
             ) : (
             <>
