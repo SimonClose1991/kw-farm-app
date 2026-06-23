@@ -583,14 +583,19 @@ function bindCardEvents(div, id){
       if(e.target.closest(".tc-drag-handle")) return;
       openEditTask(id);
     });
-    // Desktop drag — card is draggable, but only initiated from the handle
+    // Desktop drag — use a flag set by mousedown on the handle
+    let dragFromHandle = false;
+    const handle = div.querySelector(".tc-drag-handle");
+    if(handle){
+      handle.addEventListener("mousedown", ()=>{ dragFromHandle=true; });
+    }
     div.draggable=true;
     div.addEventListener("dragstart", e=>{
-      // Only allow drag if it started on the handle
-      if(!e.target.closest(".tc-drag-handle")){ e.preventDefault(); return; }
+      if(!dragFromHandle){ e.preventDefault(); return; }
       dragId=id; setTimeout(()=>div.classList.add("dragging"),0); e.dataTransfer.effectAllowed="move";
     });
     div.addEventListener("dragend", ()=>{
+      dragFromHandle=false;
       div.classList.remove("dragging"); dragId=null; dragOverId=null;
       document.querySelectorAll(".cell-drop-active,.drag-over-card").forEach(el=>el.classList.remove("cell-drop-active","drag-over-card"));
     });
@@ -602,6 +607,8 @@ function bindCardEvents(div, id){
     div.addEventListener("dragleave", e=>{
       if(!div.contains(e.relatedTarget)){ div.classList.remove("drag-over-card"); if(dragOverId===id) dragOverId=null; }
     });
+    // Reset flag if mouseup without drag
+    div.addEventListener("mouseup", ()=>{ dragFromHandle=false; });
   }
 }
 
@@ -1015,16 +1022,16 @@ function initTouchDrag(){
   document.addEventListener("touchmove", e=>{
     if(touchDragId===null) return;
     e.preventDefault();
-    moveTouchDrag(e.touches[0]);
+    if(e.touches.length > 0) moveTouchDrag(e.touches[0]);
   },{passive:false});
   document.addEventListener("touchend", e=>{
     if(touchDragId===null) return;
     endTouchDrag();
-  },{passive:true});
+  },{passive:false});
   document.addEventListener("touchcancel", e=>{
     if(touchDragId===null) return;
     cancelTouchDrag();
-  },{passive:true});
+  },{passive:false});
 }
 function startTouchDrag(touch, card, id, farm, day){
   touchDragId=id; touchDragSource=card;
