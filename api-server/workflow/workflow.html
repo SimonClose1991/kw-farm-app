@@ -583,25 +583,25 @@ function bindCardEvents(div, id){
       if(e.target.closest(".tc-drag-handle")) return;
       openEditTask(id);
     });
-    // Desktop drag — only starts when dragging from the handle
-    const handle = div.querySelector(".tc-drag-handle");
-    if(handle){
-      div.draggable=false; // disabled by default
-      handle.addEventListener("mousedown", ()=>{ div.draggable=true; });
-      div.addEventListener("dragstart", e=>{ dragId=id; setTimeout(()=>div.classList.add("dragging"),0); e.dataTransfer.effectAllowed="move"; });
-      div.addEventListener("dragend", ()=>{
-        div.draggable=false; div.classList.remove("dragging"); dragId=null; dragOverId=null;
-        document.querySelectorAll(".cell-drop-active,.drag-over-card").forEach(el=>el.classList.remove("cell-drop-active","drag-over-card"));
-      });
-      div.addEventListener("dragover", e=>{
-        e.preventDefault(); e.stopPropagation(); dragOverId=id;
-        document.querySelectorAll(".drag-over-card").forEach(el=>el.classList.remove("drag-over-card"));
-        div.classList.add("drag-over-card");
-      });
-      div.addEventListener("dragleave", e=>{
-        if(!div.contains(e.relatedTarget)){ div.classList.remove("drag-over-card"); if(dragOverId===id) dragOverId=null; }
-      });
-    }
+    // Desktop drag — card is draggable, but only initiated from the handle
+    div.draggable=true;
+    div.addEventListener("dragstart", e=>{
+      // Only allow drag if it started on the handle
+      if(!e.target.closest(".tc-drag-handle")){ e.preventDefault(); return; }
+      dragId=id; setTimeout(()=>div.classList.add("dragging"),0); e.dataTransfer.effectAllowed="move";
+    });
+    div.addEventListener("dragend", ()=>{
+      div.classList.remove("dragging"); dragId=null; dragOverId=null;
+      document.querySelectorAll(".cell-drop-active,.drag-over-card").forEach(el=>el.classList.remove("cell-drop-active","drag-over-card"));
+    });
+    div.addEventListener("dragover", e=>{
+      e.preventDefault(); e.stopPropagation(); dragOverId=id;
+      document.querySelectorAll(".drag-over-card").forEach(el=>el.classList.remove("drag-over-card"));
+      div.classList.add("drag-over-card");
+    });
+    div.addEventListener("dragleave", e=>{
+      if(!div.contains(e.relatedTarget)){ div.classList.remove("drag-over-card"); if(dragOverId===id) dragOverId=null; }
+    });
   }
 }
 
@@ -1003,26 +1003,27 @@ function applyFilters(){ farmFilter=document.getElementById("farm-filter").value
 
 /* ── Touch drag & drop (mobile admin) ── */
 function bindTouchDrag(card, id, farm, day){
-  // Use the drag handle (⠿) instead of long-press to avoid iOS text selection popup
-  // The handle is only visible on mobile via CSS
-  const handle = card.querySelector("[data-drag]");
+  const handle = card.querySelector(".tc-drag-handle");
   if(!handle) return;
-  let dragging=false;
   handle.addEventListener("touchstart", e=>{
-    e.preventDefault(); // prevent scroll/selection
-    dragging=true;
+    e.preventDefault(); e.stopPropagation();
     startTouchDrag(e.touches[0], card, id, farm, day);
   },{passive:false});
-  handle.addEventListener("touchmove", e=>{
-    if(!dragging||touchDragId!==id) return;
+  // touchmove and touchend are registered on document in initTouchDrag()
+}
+function initTouchDrag(){
+  document.addEventListener("touchmove", e=>{
+    if(touchDragId===null) return;
     e.preventDefault();
     moveTouchDrag(e.touches[0]);
   },{passive:false});
-  handle.addEventListener("touchend", e=>{
-    if(dragging&&touchDragId===id){ dragging=false; endTouchDrag(); }
+  document.addEventListener("touchend", e=>{
+    if(touchDragId===null) return;
+    endTouchDrag();
   },{passive:true});
-  handle.addEventListener("touchcancel",()=>{
-    if(dragging){ dragging=false; cancelTouchDrag(); }
+  document.addEventListener("touchcancel", e=>{
+    if(touchDragId===null) return;
+    cancelTouchDrag();
   },{passive:true});
 }
 function startTouchDrag(touch, card, id, farm, day){
@@ -1128,7 +1129,7 @@ function touchMoveToDay(day){
 /* ── Boot ────────────────────────────────────────────────── */
 loadState().then(()=>{
   document.getElementById("app").style.visibility="visible";
-  render(); initPinchZoom();
+  render(); initPinchZoom(); initTouchDrag();
   const splash=document.getElementById("splash");
   if(splash){ splash.style.opacity="0"; setTimeout(()=>splash.remove(),500); }
   startAutoRefresh();
