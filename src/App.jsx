@@ -397,7 +397,7 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
 function GooglePaddockMap({
   paddocks, center, onSelect, apiKey, onError,
   mode = "paddocks",
-  mobs = [], onSelectPin, onLongPressPin,
+  mobs = [], onSelectPin,
   landmarks = [], onSelectLandmark,
   insightMode = "usage", paddockStats = {},
   drawMode = false, drawPoints = [], onDrawPoint,
@@ -411,9 +411,7 @@ function GooglePaddockMap({
   const mapInstanceRef = useRef(null);
   // Store callbacks on refs so effects always use current values without stale closures
   const onSelectPinRef = useRef(onSelectPin);
-  const onLongPressPinRef = useRef(onLongPressPin);
   React.useEffect(() => { onSelectPinRef.current = onSelectPin; }, [onSelectPin]);
-  React.useEffect(() => { onLongPressPinRef.current = onLongPressPin; }, [onLongPressPin]);
 
   const colourForPaddock = (p) => {
     if (insightMode === "outline") return null;
@@ -622,11 +620,7 @@ function GooglePaddockMap({
           });
           marker.addListener("click", () => onSelectPin?.({ l: totalCount, mob: groupMobs[0], mobs: groupMobs }));
           // Long-press to trigger move sheet
-          let pressTimer = null;
-          marker.addListener("mousedown", () => { pressTimer = setTimeout(() => { pressTimer = null; onLongPressPin?.({ mob: groupMobs[0], mobs: groupMobs }); }, 700); });
-          marker.addListener("mouseup", () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
-          marker.addListener("touchstart", () => { pressTimer = setTimeout(() => { pressTimer = null; onLongPressPin?.({ mob: groupMobs[0], mobs: groupMobs }); }, 700); }, { passive: true });
-          marker.addListener("touchend", () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
+
           overlays.push(marker);
           gi++;
         });
@@ -837,12 +831,6 @@ function GooglePaddockMap({
       });
       // Click — open mob detail sheet
       marker.addListener("click", () => onSelectPinRef.current?.({ l: totalCount, mob: groupMobs[0], mobs: groupMobs }));
-      // Long-press (700ms) — open move/split sheet
-      let pressTimer = null;
-      marker.addListener("mousedown", () => { pressTimer = setTimeout(() => { pressTimer = null; onLongPressPinRef.current?.({ mob: groupMobs[0], mobs: groupMobs }); }, 700); });
-      marker.addListener("mouseup",   () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
-      marker.addListener("touchstart", () => { pressTimer = setTimeout(() => { pressTimer = null; onLongPressPinRef.current?.({ mob: groupMobs[0], mobs: groupMobs }); }, 700); }, { passive: true });
-      marker.addListener("touchend",   () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
       ref.mobOverlays.push(marker);
     });
   }, [mobs, mode]);
@@ -2565,7 +2553,6 @@ export default function App() {
   }, [loggedInEmail]);
   const [showMobSummaryDetail, setShowMobSummaryDetail] = useState(false);
   const [pinSelected, setPinSelected] = useState(null);
-  const [mobMoveSheet, setMobMoveSheet] = useState(null); // { mob, mobs } — long-press to move
   const [userLocation, setUserLocation] = useState(null); // { lat, lng } once located
   const [locating, setLocating] = useState(false);
   const locateMe = () => {
@@ -3016,10 +3003,7 @@ export default function App() {
 
       {mapMode === "Livestock" && (
         <div className="h-[78vh] relative">
-          {/* Long-press hint */}
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 bg-black/50 text-white text-[11px] font-medium px-3 py-1.5 rounded-full pointer-events-none">
-            Hold a mob to move it
-          </div>
+
           {googleMapsKey && !mapLoadError ? (
             <GooglePaddockMap
               paddocks={paddocks}
@@ -3028,7 +3012,6 @@ export default function App() {
               center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
               onSelect={() => {}}
               onSelectPin={setPinSelected}
-              onLongPressPin={(data) => setMobMoveSheet(data)}
               apiKey={googleMapsKey}
               onError={() => setMapLoadError(true)}
               userLocation={userLocation}
@@ -3248,38 +3231,6 @@ export default function App() {
         );
       })()}
 
-      {/* ── Mob long-press move sheet (livestock map) ── */}
-      {mobMoveSheet && (
-        <MobMapMoveSheet
-          data={mobMoveSheet}
-          paddocks={paddocks}
-          onClose={() => setMobMoveSheet(null)}
-          onMoveAll={async (target) => {
-            const movedMobs = mobMoveSheet.mobs || [mobMoveSheet.mob];
-            movedMobs.forEach(m => {
-              const detail = `Moved from ${m.paddock} to ${target.name} (via map)`;
-              setMobs(prev => prev.map(x => x.id === m.id ? { ...x, paddock: target.name, daysInPaddock: 0 } : x));
-              api.updateMob(m.id, { paddock: target.name, daysInPaddock: 0 });
-              api.addMobHistory(m.id, { action: "Move", detail, date: todayStr() });
-            });
-            setMobMoveSheet(null);
-            showToast(`Moved ${movedMobs.length > 1 ? movedMobs.length + " mobs" : movedMobs[0].name} → ${target.name}`);
-          }}
-          onSplit={async (target, moveCount) => {
-            const mob = mobMoveSheet.mob;
-            const remaining = mob.count - moveCount;
-            setMobs(prev => prev.map(m => m.id === mob.id ? { ...m, count: remaining } : m));
-            setMobMoveSheet(null);
-            showToast(`${moveCount} head → ${target.name}, ${remaining} remain`);
-            try {
-              await api.updateMob(mob.id, { count: remaining });
-              await api.addMobHistory(mob.id, { action: "Move", detail: `Split: ${moveCount} head moved to ${target.name}, ${remaining} remain in ${mob.paddock}`, date: todayStr() });
-              const newMob = await api.createMob(farmName, { name: `${mob.name} (split)`, desc: mob.desc, count: moveCount, paddock: target.name, dse: mob.dse, species: mob.species, type: mob.type, breed: mob.breed, ageClass: mob.ageClass, daysInPaddock: 0 });
-              setMobs(prev => [...prev, newMob]);
-            } catch (err) { showToast(err.message || "Couldn't save split"); }
-          }}
-        />
-      )}
 
       {pinSelected && (
         <Modal title={pinSelected.mob ? pinSelected.mob.name : `Group of ${pinSelected.l}`} onClose={() => setPinSelected(null)}>
