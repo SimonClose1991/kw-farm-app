@@ -445,21 +445,23 @@ function GooglePaddockMap({
 
   // Helper: build paddock label — single canvas-rendered marker with name + ha on separate lines
   // This guarantees pixel-perfect stacking regardless of zoom or screen size
-  const updateLabelForZoom = (g, map, centroid, p, labelMarkerRef, zoom) => {
+  // Accept currentInsightMode and currentPaddockStats as params to avoid stale closures
+  const updateLabelForZoom = (g, map, centroid, p, labelMarkerRef, zoom, currentInsightMode, currentPaddockStats) => {
     if (labelMarkerRef.setMap) labelMarkerRef.setMap(null);
     if (zoom < 11) return null;
 
-    const stats = paddockStats[p.name] || {};
+    const mode_ = currentInsightMode || insightMode;
+    const stats_ = (currentPaddockStats || paddockStats)[p.name] || {};
     let badge = "";
     if (zoom >= 14) {
       badge = `${Number(p.ha||0).toFixed(1)} ha`;
-      if (insightMode === "stocking") badge = `${(stats.dsePerHa||0).toFixed(1)} DSE/ha`;
-      else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "";
-      else if (insightMode === "grazed") badge = stats.daysSinceGrazed != null ? `${stats.daysSinceGrazed}d ago` : "";
+      if (mode_ === "stocking") badge = `${(stats_.dsePerHa||0).toFixed(1)} DSE/ha`;
+      else if (mode_ === "feed") badge = stats_.lastFoo ? `${stats_.lastFoo} kgDM/ha` : "";
+      else if (mode_ === "grazed") badge = stats_.daysSinceGrazed != null ? `${stats_.daysSinceGrazed}d ago` : "";
     }
 
     const nameLine = zoom >= 14 ? p.name : abbrev(p.name);
-    const lines = [nameLine, ...(zoom >= 15 && badge ? [badge] : [])];
+    const lines = [nameLine, ...(zoom >= 14 && badge ? [badge] : [])];
     const fontSize = zoom >= 14 ? 13 : 11;
     const lineH = fontSize + 4;
     const dpr = window.devicePixelRatio || 1;
@@ -561,15 +563,17 @@ function GooglePaddockMap({
         if (lm) { labelMarkers[p.name] = lm; overlays.push(lm); }
       });
 
-      // Zoom-aware label update — works in both paddocks AND livestock mode
+      // Zoom-aware label update — reads fresh insightMode/paddockStats from ref to avoid stale closure
       map.addListener("zoom_changed", () => {
         const z = map.getZoom();
+        const freshInsightMode = mapInstanceRef.current?.currentInsightMode || insightMode;
+        const freshPaddockStats = mapInstanceRef.current?.currentPaddockStats || paddockStats;
         Object.entries(labelMarkers).forEach(([name, lm]) => {
           if (lm) lm.setMap(null);
         });
         paddocks.forEach((p) => {
           if (!centroids[p.name]) return;
-          const newLm = updateLabelForZoom(g, map, centroids[p.name], p, { setMap: () => {} }, z);
+          const newLm = updateLabelForZoom(g, map, centroids[p.name], p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
           if (newLm) { labelMarkers[p.name] = newLm; overlays.push(newLm); }
           else labelMarkers[p.name] = null;
         });
@@ -736,8 +740,10 @@ function GooglePaddockMap({
         fittedBounds: alreadyFitted || (!drawMode && !initialZoom),
         landmarks, renderLandmarks: renderAllLandmarks,
         centroids, center, bounds,
-        // Store mob rendering function so it can be called from separate effect
-        renderMobs: null, // populated after initial render
+        renderMobs: null,
+        currentInsightMode: insightMode,
+        currentPaddockStats: paddockStats,
+        currentOpenGateIds: openGateIds,
       };
     };
 
@@ -838,20 +844,32 @@ function GooglePaddockMap({
     if (ref.renderLandmarks) ref.renderLandmarks(ref.map.getZoom(), openGateIds);
   }, [landmarks, openGateIds]);
 
-  // Separate effect: update polygon fill colors when insight mode changes — no map rebuild
+  // Separate effect: update polygon fill colors AND labels when insight mode changes
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
     if (!ref?.polygons || !window.google?.maps) return;
+    // Keep ref up to date so zoom_changed listener gets fresh values
+    ref.currentInsightMode = insightMode;
+    ref.currentPaddockStats = paddockStats;
+    // Update polygon colours
     paddocks.forEach((p) => {
       const poly = ref.polygons[p.name];
       if (!poly) return;
       const fill = colourForPaddock(p);
       if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
     });
-    if (ref.labelMarkers) {
+    // Redraw all labels with fresh insightMode so badge shows correct data
+    if (ref.labelMarkers && ref.map) {
+      const z = ref.map.getZoom();
+      const g = window.google.maps;
       Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
+      paddocks.forEach((p) => {
+        if (!ref.centroids?.[p.name]) return;
+        const newLm = updateLabelForZoom(g, ref.map, ref.centroids[p.name], p, { setMap: () => {} }, z, insightMode, paddockStats);
+        ref.labelMarkers[p.name] = newLm || null;
+      });
     }
-  }, [insightMode]);
+  }, [insightMode, paddockStats]);
 
   // Separate effect: update draw polygon without rebuilding map
   React.useEffect(() => {
@@ -3024,7 +3042,7 @@ export default function App() {
         <h1 className="text-base font-bold text-slate-800 tracking-tight">{title}</h1>
         <div className="text-xs text-slate-400 font-medium">{farmName}</div>
       </div>
-      <button onClick={() => requestAnimationFrame(() => setShowHelp(true))} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+      <button onClick={() => setShowHelp(true)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
         {right || <HelpCircle size={16} />}
       </button>
     </div>
@@ -3096,7 +3114,7 @@ export default function App() {
     <div className="pb-24 relative">
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
-          onClick={() => requestAnimationFrame(() => setShowSettings(true))}
+          onClick={() => setShowSettings(true)}
           className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
           title="Settings"
         >
@@ -3114,11 +3132,11 @@ export default function App() {
           ))}
         </div>
         <button
-          onClick={() => mapMode === "Paddocks" ? requestAnimationFrame(() => setShowInsightPicker(true)) : setShowHelp(true)}
-          className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${mapMode === "Paddocks" ? "bg-amber-100 text-amber-700 font-bold" : "bg-slate-100 text-slate-500"}`}
-          title={mapMode === "Paddocks" ? "Map overlay" : "Help"}
+          onClick={() => setShowHelp(true)}
+          className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
+          title="Help"
         >
-          {mapMode === "Paddocks" ? "🗺" : <HelpCircle size={16} />}
+          <HelpCircle size={16} />
         </button>
       </div>
 
@@ -3274,7 +3292,7 @@ export default function App() {
             </div>
           )}
           {!googleMapsKey && isAdmin && (
-            <button onClick={() => requestAnimationFrame(() => setShowSettings(true))} className="absolute top-2 right-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full z-10">
+            <button onClick={() => setShowSettings(true)} className="absolute top-2 right-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full z-10">
               Maps key status
             </button>
           )}
@@ -3382,7 +3400,7 @@ export default function App() {
             )}
             {!googleMapsKey && isAdmin && !mapDrawMode && (
               <div className="absolute top-2 left-2 bg-black/60 text-white text-xs font-medium px-3 py-1.5 rounded-full">
-                No Maps key — <button onClick={() => requestAnimationFrame(() => setShowSettings(true))} className="underline">Settings</button>
+                No Maps key — <button onClick={() => setShowSettings(true)} className="underline">Settings</button>
               </div>
             )}
             {mapLoadError && (
@@ -4834,11 +4852,11 @@ export default function App() {
             </span>
             <ChevronRight size={16} className="text-slate-300" />
           </button>
-          <button onClick={() => { setShowMenu(false); requestAnimationFrame(() => setShowRainfall(true)); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => { setShowMenu(false); setShowRainfall(true); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-sky-500"><Droplet size={16} /></div>
             <span className="font-semibold text-slate-700">Rainfall records</span>
           </button>
-          <button onClick={() => { setShowMenu(false); requestAnimationFrame(() => setShowPaddockList(true)); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => { setShowMenu(false); setShowPaddockList(true); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center text-green-600">▦</div>
             <div className="text-left">
               <div className="font-semibold text-slate-700">Paddock list</div>
@@ -4848,15 +4866,13 @@ export default function App() {
           </button>
           <button onClick={() => {
             setShowMenu(false);
-            requestAnimationFrame(() => {
-              setShowRecords(true);
-              if (allMobHistory.length === 0) {
-                setRecordsLoading(true);
-                api.listAllMobHistory(farmName)
-                  .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
-                  .catch(() => setRecordsLoading(false));
-              }
-            });
+            setShowRecords(true);
+            if (allMobHistory.length === 0) {
+              setRecordsLoading(true);
+              api.listAllMobHistory(farmName)
+                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+                .catch(() => setRecordsLoading(false));
+            }
           }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 text-sm font-bold">📋</div>
             <div className="text-left">
@@ -5088,6 +5104,17 @@ export default function App() {
             } catch (err) { showToast(err.message || "Couldn't save split"); }
           }}
         />
+      )}
+
+      {/* Map overlay button — rendered at App level so clicks don't go through MapScreen's closure */}
+      {tab === "map" && mapMode === "Paddocks" && !showInsightPicker && (
+        <button
+          onClick={() => setShowInsightPicker(true)}
+          className="fixed top-[60px] right-2 z-[50] w-9 h-9 rounded-full bg-amber-100 text-amber-700 font-bold flex items-center justify-center text-base shadow-sm border border-amber-200"
+          title="Map overlay"
+        >
+          🗺
+        </button>
       )}
 
       {showInsightPicker && (
