@@ -2601,6 +2601,26 @@ export default function App() {
 
   const [tab, setTab] = useState("home");
   const [showMenu, setShowMenu] = useState(false);
+  const pendingMenuAction = React.useRef(null); // tracks which modal to open after menu closes
+
+  // When menu closes, open the pending modal — this runs AFTER the menu unmounts
+  React.useEffect(() => {
+    if (showMenu) return; // menu just opened, not closed
+    const action = pendingMenuAction.current;
+    if (!action) return;
+    pendingMenuAction.current = null;
+    if (action === "rainfall") setShowRainfall(true);
+    if (action === "paddocklist") setShowPaddockList(true);
+    if (action === "records") {
+      setShowRecords(true);
+      if (allMobHistory.length === 0) {
+        setRecordsLoading(true);
+        api.listAllMobHistory(farmName)
+          .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+          .catch(() => setRecordsLoading(false));
+      }
+    }
+  }, [showMenu]);
   const [showPaddockList, setShowPaddockList] = useState(false);
   const [homeFarm, setHomeFarm] = useState(null); // which farm dashboard is open on home screen
   const [dragMobId, setDragMobId] = useState(null);
@@ -4852,11 +4872,11 @@ export default function App() {
             </span>
             <ChevronRight size={16} className="text-slate-300" />
           </button>
-          <button onClick={() => { setShowMenu(false); setShowRainfall(true); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button data-action="rainfall" onClick={() => { pendingMenuAction.current = "rainfall"; setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-sky-500"><Droplet size={16} /></div>
             <span className="font-semibold text-slate-700">Rainfall records</span>
           </button>
-          <button onClick={() => { setShowMenu(false); setShowPaddockList(true); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button data-action="paddocklist" onClick={() => { pendingMenuAction.current = "paddocklist"; setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center text-green-600">▦</div>
             <div className="text-left">
               <div className="font-semibold text-slate-700">Paddock list</div>
@@ -4864,16 +4884,7 @@ export default function App() {
             </div>
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
-          <button onClick={() => {
-            setShowMenu(false);
-            setShowRecords(true);
-            if (allMobHistory.length === 0) {
-              setRecordsLoading(true);
-              api.listAllMobHistory(farmName)
-                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
-                .catch(() => setRecordsLoading(false));
-            }
-          }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button data-action="records" onClick={() => { pendingMenuAction.current = "records"; setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 text-sm font-bold">📋</div>
             <div className="text-left">
               <div className="font-semibold text-slate-700">Records & Export</div>
