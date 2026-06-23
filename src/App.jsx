@@ -3526,6 +3526,30 @@ export default function App() {
               >
                 Save Changes
               </button>
+              {/* Delete only accessible from within edit — requires confirmation */}
+              {canEdit && (() => {
+                const [confirmLmDel, setConfirmLmDel] = React.useState(false);
+                return confirmLmDel ? (
+                  <div className="mt-3 bg-rose-50 border border-rose-200 rounded-2xl p-4">
+                    <p className="text-sm font-bold text-rose-700 text-center mb-1">Delete "{landmarkDetail.name || landmarkDetail.type}"?</p>
+                    <p className="text-xs text-rose-500 text-center mb-3">This landmark will be permanently removed.</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setConfirmLmDel(false)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold text-slate-500">Cancel</button>
+                      <button onClick={() => {
+                        const id = landmarkDetail.id;
+                        setLandmarks(prev => prev.filter(l => l.id !== id));
+                        setLandmarkDetail(null); setLandmarkEditMode(false);
+                        markChanged();
+                        api.deleteLandmark(id).then(() => showToast("Landmark deleted")).catch(err => showToast(err.message || "Couldn't delete"));
+                      }} className="flex-1 bg-rose-500 text-white rounded-xl py-2.5 text-sm font-bold">Yes, delete</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setConfirmLmDel(true)} className="w-full mt-3 text-rose-400 text-xs font-semibold py-2 hover:text-rose-600">
+                    🗑 Delete this landmark
+                  </button>
+                );
+              })()}
             </div>
           ) : (
             <div>
@@ -3595,22 +3619,6 @@ export default function App() {
               {canEdit && (
                 <div className="space-y-2">
                   <button onClick={() => setLandmarkEditMode(true)} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">Edit Details</button>
-                  <button
-                    onClick={() => {
-                      const name = landmarkDetail.name || landmarkDetail.type;
-                      if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
-                      const id = landmarkDetail.id;
-                      setLandmarks((prev) => prev.filter((l) => l.id !== id));
-                      setLandmarkDetail(null);
-                      markChanged();
-                      api.deleteLandmark(id)
-                        .then(() => showToast("Landmark removed"))
-                        .catch((err) => showToast(err.message || "Couldn't remove landmark"));
-                    }}
-                    className="w-full bg-rose-50 text-rose-500 border border-rose-200 rounded-2xl py-3 font-semibold text-sm mt-1"
-                  >
-                    🗑 Delete Landmark
-                  </button>
                 </div>
               )}
             </div>
@@ -3682,6 +3690,30 @@ export default function App() {
                     Save
                   </button>
                 </div>
+                {/* Delete is only accessible from within the edit form */}
+                {canEdit && (() => {
+                  const [confirmDel, setConfirmDel] = React.useState(false);
+                  return confirmDel ? (
+                    <div className="mt-3 bg-rose-50 border border-rose-200 rounded-2xl p-4">
+                      <p className="text-sm font-bold text-rose-700 text-center mb-1">Delete "{paddockDetail.name}"?</p>
+                      <p className="text-xs text-rose-500 text-center mb-3">All paddock data will be permanently removed.</p>
+                      <div className="flex gap-2">
+                        <button onClick={() => setConfirmDel(false)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold text-slate-500">Cancel</button>
+                        <button onClick={() => {
+                          const id = paddockDetail.id;
+                          setPaddocks(prev => prev.filter(p => p.id !== id));
+                          setPaddockDetail(null); setPaddockEditMode(false);
+                          markChanged();
+                          api.deletePaddock(id).then(() => showToast("Paddock deleted")).catch(err => showToast(err.message || "Couldn't delete"));
+                        }} className="flex-1 bg-rose-500 text-white rounded-xl py-2.5 text-sm font-bold">Yes, delete</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={() => setConfirmDel(true)} className="w-full mt-3 text-rose-400 text-xs font-semibold py-2 hover:text-rose-600">
+                      🗑 Delete this paddock
+                    </button>
+                  );
+                })()}
               </div>
             ) : (
             <>
@@ -3764,23 +3796,7 @@ export default function App() {
                     <div className="text-xs font-normal opacity-80">Chemical, rate, method, WHP/ESI, batch — single or multiple paddocks</div>
                   </div>
                 </button>
-                {canEdit && (
-                  <button
-                    onClick={() => {
-                      if (!window.confirm(`Are you sure you want to permanently delete "${paddockDetail.name}"? This cannot be undone.`)) return;
-                      const id = paddockDetail.id;
-                      setPaddocks((prev) => prev.filter((p) => p.id !== id));
-                      setPaddockDetail(null);
-                      markChanged();
-                      api.deletePaddock(id)
-                        .then(() => showToast("Paddock removed"))
-                        .catch((err) => showToast(err.message || "Couldn't remove paddock"));
-                    }}
-                    className="w-full bg-rose-50 text-rose-500 border border-rose-200 rounded-2xl py-3 font-semibold text-sm mt-2"
-                  >
-                    🗑 Delete Paddock
-                  </button>
-                )}
+
               </div>
             </div>
             </>
@@ -4538,7 +4554,13 @@ export default function App() {
         {actionForm && (
           <Modal title={actionForm} onClose={() => setActionForm(null)}>
             {actionForm === "Delete" ? (
-              <p className="text-sm text-slate-600 mb-4">Are you sure you want to delete "{selectedMob.name}"? This cannot be undone.</p>
+              <div className="mb-4">
+                <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-3"><span className="text-2xl">🗑️</span></div>
+                <p className="text-center font-bold text-slate-800 mb-1">Delete "{selectedMob?.name}"?</p>
+                <p className="text-center text-sm text-slate-500 mb-4">This will permanently remove the mob and all its history. This cannot be undone.</p>
+                <p className="text-center text-xs font-semibold text-rose-500 bg-rose-50 rounded-xl py-2 px-3">Type the mob name to confirm deletion</p>
+                <input className="w-full border-2 border-rose-200 rounded-xl px-3 py-2.5 mt-3 text-center font-semibold focus:border-rose-400 outline-none" placeholder={selectedMob?.name} id="mob-delete-confirm-input" autoFocus />
+              </div>
             ) : (
               <div className="space-y-3 mb-4">
                 {ACTION_FIELDS[actionForm]?.map((f) => (
@@ -4549,9 +4571,17 @@ export default function App() {
                 ))}
               </div>
             )}
-            <button onClick={submitAction} className={`w-full rounded-2xl py-3.5 font-bold text-white ${actionForm === "Delete" ? "bg-rose-500" : "bg-red-900"}`}>
-              {actionForm === "Delete" ? "Delete Mob" : "Save"}
-            </button>
+            {actionForm === "Delete" ? (
+              <button onClick={() => {
+                const typed = document.getElementById("mob-delete-confirm-input")?.value?.trim();
+                if (typed !== selectedMob?.name) { showToast("Name doesn't match — mob not deleted"); return; }
+                submitAction();
+              }} className="w-full rounded-2xl py-3.5 font-bold text-white bg-rose-500">
+                Yes, permanently delete mob
+              </button>
+            ) : (
+              <button onClick={submitAction} className="w-full rounded-2xl py-3.5 font-bold text-white bg-red-900">Save</button>
+            )}
           </Modal>
         )}
       </div>
