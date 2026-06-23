@@ -1300,7 +1300,7 @@ function WeatherWidget({ farmName, farmCenters }) {
   function processWeather(d) {
     const daily = d.daily;
     const hourly = d.hourly;
-    const days = daily.time.map((date, i) => {
+    return daily.time.map((date, i) => {
       const rain = daily.precipitation_sum[i] || 0;
       const maxTemp = daily.temperature_2m_max[i];
       const minTemp = daily.temperature_2m_min[i];
@@ -1310,9 +1310,9 @@ function WeatherWidget({ farmName, farmCenters }) {
       const wCode = daily.weathercode[i];
       const frostRisk = minTemp <= 2 ? "HIGH" : minTemp <= 5 ? "MOD" : null;
 
-      // Spray window: hours today where wind < 15 km/h and no rain
+      // Spray window: calculate for ALL 7 days from hourly data
       const sprayHours = [];
-      if (i === 0 && hourly) {
+      if (hourly) {
         hourly.time.forEach((t, hi) => {
           if (!t.startsWith(date)) return;
           const hour = parseInt(t.split("T")[1]);
@@ -1325,31 +1325,35 @@ function WeatherWidget({ farmName, farmCenters }) {
         });
       }
 
+      // Need at least 2 contiguous hours for a viable spray window
+      let sprayOk = false;
       let sprayWindow = null;
-      if (sprayHours.length > 0) {
-        const start = Math.min(...sprayHours);
-        const end = Math.max(...sprayHours) + 1;
-        sprayWindow = `${start}:00–${end}:00`;
+      if (sprayHours.length >= 2) {
+        sprayOk = true;
+        // For today show the actual time window
+        if (i === 0) {
+          const start = Math.min(...sprayHours);
+          const end = Math.max(...sprayHours) + 1;
+          sprayWindow = `${start}:00\u2013${end}:00`;
+        }
       }
 
       const dirLabels = ["N","NE","E","SE","S","SW","W","NW"];
       const windDirLabel = dirLabels[Math.round(windDir / 45) % 8] || "";
-
-      return { date, rain, maxTemp, minTemp, windMax, windDirLabel, rainProb, frostRisk, sprayWindow, wCode };
+      return { date, rain, maxTemp, minTemp, windMax, windDirLabel, rainProb, frostRisk, sprayWindow, sprayOk, wCode };
     });
-    return days;
   }
 
   function weatherIcon(code) {
-    if (code === 0) return "☀️";
-    if (code <= 2) return "⛅";
-    if (code <= 3) return "☁️";
-    if (code <= 49) return "🌫️";
-    if (code <= 67) return "🌧️";
-    if (code <= 77) return "❄️";
-    if (code <= 82) return "🌦️";
-    if (code <= 99) return "⛈️";
-    return "🌤️";
+    if (code === 0) return "\u2600\uFE0F";
+    if (code <= 2) return "\u26C5";
+    if (code <= 3) return "\u2601\uFE0F";
+    if (code <= 49) return "\uD83C\uDF2B\uFE0F";
+    if (code <= 67) return "\uD83C\uDF27\uFE0F";
+    if (code <= 77) return "\u2744\uFE0F";
+    if (code <= 82) return "\uD83C\uDF26\uFE0F";
+    if (code <= 99) return "\u26C8\uFE0F";
+    return "\uD83C\uDF24\uFE0F";
   }
 
   function dayLabel(dateStr, i) {
@@ -1361,82 +1365,93 @@ function WeatherWidget({ farmName, farmCenters }) {
   if (loading) return (
     <div className="bg-white border border-stone-200/80 rounded-2xl px-4 py-3 flex items-center gap-3 text-stone-400 text-sm">
       <div className="w-4 h-4 border-2 border-stone-200 border-t-stone-400 rounded-full animate-spin flex-shrink-0" />
-      Loading weather for {farmName}…
+      Loading weather for {farmName}\u2026
     </div>
   );
 
   if (!weather || weather.length === 0) return null;
 
   const today = weather[0];
+  const sprayDaysAhead = weather.slice(1).filter(d => d.sprayOk).length;
 
   return (
     <div className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden">
-      {/* Today strip — compact, always visible */}
       <button onClick={() => setExpanded(e => !e)} className="w-full text-left px-4 py-3">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <span className="text-lg">{weatherIcon(today.wCode)}</span>
             <span className="text-xs font-semibold text-stone-500 uppercase tracking-widest">{farmName} Weather</span>
           </div>
-          <span className="text-xs text-stone-400">{expanded ? "▲ Less" : "7 days ▾"}</span>
+          <div className="flex items-center gap-2">
+            {!expanded && sprayDaysAhead > 0 && (
+              <span className="text-[10px] font-semibold bg-green-50 text-green-700 px-2 py-0.5 rounded-full">
+                \uD83C\uDF3F {sprayDaysAhead} spray day{sprayDaysAhead > 1 ? "s" : ""} ahead
+              </span>
+            )}
+            <span className="text-xs text-stone-400">{expanded ? "\u25B2 Less" : "7 days \u25BE"}</span>
+          </div>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-baseline gap-0.5">
-            <span className="text-xl font-bold text-stone-800">{Math.round(today.maxTemp)}°</span>
-            <span className="text-sm text-stone-400">/{Math.round(today.minTemp)}°</span>
+            <span className="text-xl font-bold text-stone-800">{Math.round(today.maxTemp)}\xB0</span>
+            <span className="text-sm text-stone-400">/{Math.round(today.minTemp)}\xB0</span>
           </div>
-          {today.rain > 0 && (
-            <div className="flex items-center gap-1 text-sm text-blue-600 font-semibold">
-              💧{today.rain.toFixed(1)}mm
-            </div>
-          )}
-          {today.rain === 0 && today.rainProb > 20 && (
-            <div className="text-sm text-blue-400">{today.rainProb}% rain</div>
-          )}
-          <div className="text-sm text-stone-500">{today.windMax}km/h {today.windDirLabel}</div>
+          {today.rain > 0 && <span className="text-sm text-blue-600 font-semibold">\uD83D\uDCA7{today.rain.toFixed(1)}mm</span>}
+          {today.rain === 0 && today.rainProb > 20 && <span className="text-sm text-blue-400">{today.rainProb}% rain</span>}
+          <span className="text-sm text-stone-500">{today.windMax}km/h {today.windDirLabel}</span>
           {today.frostRisk && (
-            <div className={`text-xs font-bold px-2 py-0.5 rounded-full ${today.frostRisk === "HIGH" ? "bg-blue-100 text-blue-700" : "bg-blue-50 text-blue-500"}`}>
-              ❄️ Frost {today.frostRisk}
-            </div>
+            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${today.frostRisk === "HIGH" ? "bg-blue-100 text-blue-700" : "bg-blue-50 text-blue-500"}`}>
+              \u2744\uFE0F Frost {today.frostRisk}
+            </span>
           )}
           {today.sprayWindow && (
-            <div className="text-xs font-semibold bg-green-50 text-green-700 px-2 py-0.5 rounded-full">
-              🌿 Spray {today.sprayWindow}
-            </div>
+            <span className="text-xs font-semibold bg-green-50 text-green-700 px-2 py-0.5 rounded-full">
+              \uD83C\uDF3F Spray {today.sprayWindow}
+            </span>
           )}
-          {!today.sprayWindow && today.rain === 0 && (
-            <div className="text-xs text-stone-300">No spray window</div>
-          )}
+          {!today.sprayOk && <span className="text-xs text-stone-300">No spray window</span>}
         </div>
       </button>
 
-      {/* 7-day forecast — expands on tap */}
       {expanded && (
         <div className="border-t border-stone-100">
           {weather.map((day, i) => (
-            <div key={day.date} className={`flex items-center px-4 py-2.5 gap-3 ${i < weather.length - 1 ? "border-b border-stone-50" : ""} ${i === 0 ? "bg-stone-50/60" : ""}`}>
-              <div className="w-16 text-xs font-semibold text-stone-600 flex-shrink-0">{dayLabel(day.date, i)}</div>
-              <span className="text-base flex-shrink-0">{weatherIcon(day.wCode)}</span>
-              <div className="flex items-baseline gap-0.5 w-14 flex-shrink-0">
-                <span className="text-sm font-bold text-stone-700">{Math.round(day.maxTemp)}°</span>
-                <span className="text-xs text-stone-400">/{Math.round(day.minTemp)}°</span>
-              </div>
-              <div className="flex-1 flex items-center gap-2 flex-wrap">
-                {day.rain > 0 ? (
-                  <span className="text-xs text-blue-600 font-semibold">💧{day.rain.toFixed(1)}mm</span>
-                ) : day.rainProb > 20 ? (
-                  <span className="text-xs text-blue-400">{day.rainProb}%</span>
-                ) : (
-                  <span className="text-xs text-stone-300">No rain</span>
-                )}
-                <span className="text-xs text-stone-400">{day.windMax}km/h {day.windDirLabel}</span>
-                {day.frostRisk && <span className="text-xs text-blue-600 font-semibold">❄️ {day.frostRisk}</span>}
-                {i > 0 && day.sprayWindow && <span className="text-xs text-green-600 font-semibold">🌿 {day.sprayWindow}</span>}
+            <div key={day.date}
+              className={`px-4 py-2.5 border-b border-stone-50 last:border-0 ${i === 0 ? "bg-stone-50/60" : ""} ${day.sprayOk && i > 0 ? "bg-green-50/40" : ""}`}
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-14 text-xs font-bold text-stone-600 flex-shrink-0">{dayLabel(day.date, i)}</div>
+                <span className="flex-shrink-0">{weatherIcon(day.wCode)}</span>
+                <div className="flex items-baseline gap-0.5 flex-shrink-0">
+                  <span className="text-sm font-bold text-stone-700">{Math.round(day.maxTemp)}\xB0</span>
+                  <span className="text-xs text-stone-400">/{Math.round(day.minTemp)}\xB0</span>
+                </div>
+                <div className="flex-1 flex items-center gap-1.5 text-xs flex-wrap">
+                  {day.rain > 0
+                    ? <span className="text-blue-600 font-semibold">\uD83D\uDCA7{day.rain.toFixed(1)}mm</span>
+                    : day.rainProb > 20
+                      ? <span className="text-blue-400">{day.rainProb}%</span>
+                      : null}
+                  <span className="text-stone-400">{day.windMax}km/h</span>
+                  {day.frostRisk && <span className="text-blue-600 font-semibold">\u2744\uFE0F</span>}
+                </div>
+                {/* Spray status — right edge, colour-coded */}
+                <div className="flex-shrink-0">
+                  {day.sprayOk ? (
+                    <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-1 rounded-full whitespace-nowrap">
+                      \uD83C\uDF3F {i === 0 && day.sprayWindow ? day.sprayWindow : "Spray OK"}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-stone-300 px-2 py-1 rounded-full border border-stone-100 whitespace-nowrap">
+                      \u2715 No spray
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           ))}
           <div className="px-4 py-2 text-center">
-            <span className="text-[10px] text-stone-300">Open-Meteo · BOM data · updates every 30 min</span>
+            <span className="text-[10px] text-stone-300">BOM via Open-Meteo \u00B7 Spray: wind &lt;15km/h, rain &lt;20%, RH &lt;90%, 7am\u20136pm</span>
           </div>
         </div>
       )}
@@ -1444,278 +1459,6 @@ function WeatherWidget({ farmName, farmCenters }) {
   );
 }
 
-// ── MobMapMoveSheet ───────────────────────────────────────────────────────────
-// Shows when user long-presses a mob pin on the livestock map.
-// Lets them move all stock or split to a different paddock.
-function MobMapMoveSheet({ data, paddocks, onClose, onMoveAll, onSplit }) {
-  const { mob, mobs: groupMobs } = data;
-  const [step, setStep] = React.useState("action"); // "action" | "pickPaddock"
-  const [splitCount, setSplitCount] = React.useState("");
-  const [splitMode, setSplitMode] = React.useState(false);
-  const totalCount = (groupMobs || [mob]).reduce((s, m) => s + m.count, 0);
-  const currentPaddock = mob?.paddock || "Unassigned";
-
-  if (step === "pickPaddock") {
-    return (
-      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[300]" onClick={onClose}>
-        <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-          <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
-          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-            <div>
-              <button onClick={() => setStep("action")} className="text-xs text-amber-700 font-semibold mb-0.5">← Back</button>
-              <div className="font-semibold text-slate-800">{splitMode ? `Split — move ${splitCount || "?"} head` : "Move All"}</div>
-              <div className="text-xs text-slate-400">from {currentPaddock} → select destination</div>
-            </div>
-            <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
-          </div>
-          <div className="overflow-y-auto max-h-[60vh] pb-8">
-            {[...paddocks].sort((a,b) => a.name.localeCompare(b.name)).map(p => {
-              const isCurrent = p.name === currentPaddock;
-              return (
-                <button key={p.id} onClick={() => {
-                  if (isCurrent) return;
-                  if (splitMode) onSplit(p, Number(splitCount));
-                  else onMoveAll(p);
-                }}
-                  className={`w-full flex items-center justify-between px-5 py-4 border-b border-slate-50 text-left ${isCurrent ? "opacity-40" : "active:bg-amber-50"}`}>
-                  <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
-                    <div>
-                      <div className={`font-medium ${isCurrent ? "text-stone-400" : "text-slate-800"}`}>{p.name}</div>
-                      <div className="text-xs text-slate-400">{p.ha ? `${Number(p.ha).toFixed(1)} ha` : ""}{p.landUse ? ` · ${p.landUse}` : ""}</div>
-                    </div>
-                  </div>
-                  {isCurrent ? <span className="text-xs text-stone-400">Current</span> : <span className="text-slate-300">›</span>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[300]" onClick={onClose}>
-      <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-          <div>
-            <div className="font-semibold text-slate-800">{mob?.name || "Mob"}</div>
-            <div className="text-xs text-slate-400">{totalCount} head · {currentPaddock}</div>
-          </div>
-          <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
-        </div>
-        <div className="p-5 space-y-3 pb-10">
-          {/* Move all */}
-          <button onClick={() => { setSplitMode(false); setStep("pickPaddock"); }}
-            className="w-full bg-stone-800 text-white rounded-2xl p-4 text-left active:opacity-90">
-            <div className="font-semibold">Move All</div>
-            <div className="text-sm text-white/70 mt-0.5">All {totalCount} head move to a new paddock</div>
-          </button>
-          {/* Split */}
-          <div className="bg-white border border-stone-200 rounded-2xl p-4">
-            <div className="font-semibold text-slate-800 mb-0.5">Draft / Split</div>
-            <div className="text-xs text-slate-400 mb-3">Move some — the rest stay in {currentPaddock}</div>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="flex-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Head to move</label>
-                <input type="number" inputMode="numeric" value={splitCount}
-                  onChange={e => setSplitCount(e.target.value)}
-                  placeholder={`1 – ${totalCount - 1}`}
-                  className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-2xl font-bold text-center bg-white focus:border-amber-400 outline-none" />
-              </div>
-              <div className="flex-1 bg-stone-50 rounded-xl p-3 text-center border border-stone-100">
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remain</div>
-                <div className="text-2xl font-bold text-slate-600 mt-0.5">
-                  {splitCount && Number(splitCount) > 0 && Number(splitCount) < totalCount ? totalCount - Number(splitCount) : "—"}
-                </div>
-              </div>
-            </div>
-            <button onClick={() => {
-              const n = Number(splitCount);
-              if (!n || n <= 0 || n >= totalCount) return;
-              setSplitMode(true); setStep("pickPaddock");
-            }}
-              disabled={!splitCount || Number(splitCount) <= 0 || Number(splitCount) >= totalCount}
-              className="w-full bg-amber-500 text-white rounded-2xl py-3 font-semibold disabled:opacity-30">
-              Split — choose destination
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit, startAtAction = false }) {
-  const [step, setStep] = React.useState(startAtAction ? "action" : "paddock");
-  const [target, setTarget] = React.useState(null);
-  const [splitCount, setSplitCount] = React.useState("");
-  const [splitMode, setSplitMode] = React.useState(false);
-
-  const remaining = splitCount && Number(splitCount) > 0 && Number(splitCount) < mob.count
-    ? mob.count - Number(splitCount) : null;
-
-  return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[300]" onClick={onClose}>
-      <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
-
-        {/* Paddock picker step */}
-        {step === "paddock" && (
-          <>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-              <div>
-                <div className="font-semibold text-slate-800 tracking-tight">Select paddock</div>
-                <div className="text-xs text-slate-400 mt-0.5">{mob.name} · {mob.count} head · in {mob.paddock}</div>
-              </div>
-              <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
-            </div>
-            <div className="overflow-y-auto max-h-[60vh] pb-8">
-              {[...paddocks].sort((a,b) => a.name.localeCompare(b.name)).map(p => {
-                const isCurrent = mob.paddock === p.name;
-                return (
-                  <button key={p.id} onClick={() => { if (!isCurrent) { setTarget(p); setStep("action"); } }}
-                    className={`w-full flex items-center justify-between px-5 py-4 border-b border-slate-50 text-left ${isCurrent ? "opacity-40" : "active:bg-amber-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
-                      <div>
-                        <div className={`font-medium ${isCurrent ? "text-stone-400" : "text-slate-800"}`}>{p.name}</div>
-                        <div className="text-xs text-slate-400">{p.ha ? `${Number(p.ha).toFixed(1)} ha` : ""}{p.landUse ? ` · ${p.landUse}` : ""}</div>
-                      </div>
-                    </div>
-                    {isCurrent ? <span className="text-xs text-stone-400">Current</span> : <span className="text-slate-300 text-lg">›</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {/* Action step — Move All or Split, then pick paddock if startAtAction */}
-        {step === "action" && (
-          <>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-              <div>
-                {!startAtAction && <button onClick={() => { setStep("paddock"); setSplitCount(""); setSplitMode(false); }} className="text-xs text-amber-700 font-semibold mb-0.5">← Change paddock</button>}
-                <div className="font-semibold text-slate-800">{mob.name} · {mob.count} head</div>
-                <div className="text-xs text-slate-400">
-                  {mob.paddock}
-                  {target && <span className="text-amber-600 font-semibold"> → {target.name}</span>}
-                  {!target && startAtAction && <span className="text-stone-400"> · select destination below</span>}
-                </div>
-              </div>
-              <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
-            </div>
-            <div className="p-5 space-y-3 pb-10">
-              {/* Move All */}
-              {startAtAction && !target ? (
-                // startAtAction mode: show Move All button that opens paddock picker
-                <>
-                  <button onClick={() => { setSplitMode(false); setStep("pickPaddock"); }}
-                    className="w-full bg-stone-800 text-white rounded-2xl p-4 text-left active:opacity-90">
-                    <div className="font-semibold text-base">Move All</div>
-                    <div className="text-sm text-white/70 mt-0.5">All {mob.count} head — choose destination paddock</div>
-                  </button>
-                  <div className="bg-white border border-stone-200 rounded-2xl p-4">
-                    <div className="font-semibold text-slate-800 mb-0.5">Draft / Split</div>
-                    <div className="text-xs text-slate-400 mb-3">Move some head — choose how many, then pick paddock</div>
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="flex-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Head to move</label>
-                        <input type="number" inputMode="numeric" value={splitCount}
-                          onChange={e => setSplitCount(e.target.value)}
-                          placeholder={`1 – ${mob.count - 1}`}
-                          className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-2xl font-bold text-center bg-white focus:border-amber-400 outline-none" />
-                      </div>
-                      <div className="flex-1 bg-stone-50 rounded-xl p-3 text-center border border-stone-100">
-                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remain</div>
-                        <div className="text-2xl font-bold text-slate-600 mt-0.5">{remaining ?? "—"}</div>
-                      </div>
-                    </div>
-                    <button onClick={() => { const n=Number(splitCount); if(!n||n<=0||n>=mob.count)return; setSplitMode(true); setStep("pickPaddock"); }}
-                      disabled={!remaining||remaining<=0}
-                      className="w-full bg-amber-500 text-white rounded-2xl py-3 font-semibold disabled:opacity-30">
-                      Split {splitCount||"?"} Head — choose paddock →
-                    </button>
-                  </div>
-                </>
-              ) : (
-                // Normal mode: paddock already selected
-                <>
-                  <button onClick={() => onMoveAll(target)}
-                    className="w-full bg-stone-800 text-white rounded-2xl p-4 text-left active:opacity-90">
-                    <div className="font-semibold text-base">Move All</div>
-                    <div className="text-sm text-white/70 mt-0.5">All {mob.count} head → {target?.name}</div>
-                  </button>
-                  <div className="bg-white border border-stone-200 rounded-2xl p-4">
-                    <div className="font-semibold text-slate-800 mb-0.5">Draft / Split</div>
-                    <div className="text-xs text-slate-400 mb-3">Move some — the rest stay in {mob.paddock}</div>
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="flex-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Head to move</label>
-                        <input type="number" inputMode="numeric" value={splitCount}
-                          onChange={e => setSplitCount(e.target.value)}
-                          placeholder={`1 – ${mob.count - 1}`}
-                          className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-2xl font-bold text-center bg-white focus:border-amber-400 outline-none" />
-                      </div>
-                      <div className="flex-1 bg-stone-50 rounded-xl p-3 text-center border border-stone-100">
-                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remain</div>
-                        <div className="text-2xl font-bold text-slate-600 mt-0.5">{remaining ?? "—"}</div>
-                      </div>
-                    </div>
-                    <button onClick={() => { const n=Number(splitCount); if(!n||n<=0||n>=mob.count)return; onSplit(target,n); }}
-                      disabled={!remaining||remaining<=0}
-                      className="w-full bg-amber-500 text-white rounded-2xl py-3 font-semibold disabled:opacity-30">
-                      Split — Move {splitCount||"?"} Head to {target?.name}
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </>
-        )}
-
-        {/* Pick paddock step (only used in startAtAction mode) */}
-        {step === "pickPaddock" && (
-          <>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-              <div>
-                <button onClick={() => setStep("action")} className="text-xs text-amber-700 font-semibold mb-0.5">← Back</button>
-                <div className="font-semibold text-slate-800">{splitMode ? `Split ${splitCount} head` : "Move All"} — select destination</div>
-                <div className="text-xs text-slate-400">from {mob.paddock}</div>
-              </div>
-              <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
-            </div>
-            <div className="overflow-y-auto max-h-[60vh] pb-8">
-              {[...paddocks].sort((a,b) => a.name.localeCompare(b.name)).map(p => {
-                const isCurrent = mob.paddock === p.name;
-                return (
-                  <button key={p.id} onClick={() => {
-                    if (isCurrent) return;
-                    if (splitMode) onSplit(p, Number(splitCount));
-                    else onMoveAll(p);
-                  }}
-                    className={`w-full flex items-center justify-between px-5 py-4 border-b border-slate-50 text-left ${isCurrent ? "opacity-40" : "active:bg-amber-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
-                      <div>
-                        <div className={`font-medium ${isCurrent ? "text-stone-400" : "text-slate-800"}`}>{p.name}</div>
-                        <div className="text-xs text-slate-400">{p.ha ? `${Number(p.ha).toFixed(1)} ha` : ""}{p.landUse ? ` · ${p.landUse}` : ""}</div>
-                      </div>
-                    </div>
-                    {isCurrent ? <span className="text-xs text-stone-400">Current</span> : <span className="text-slate-300 text-lg">›</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api, farmCenters, currentUser, homeFarm, setHomeFarm }) {
   const [dashLoading, setDashLoading] = React.useState(false);
@@ -2602,25 +2345,6 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [showMenu, setShowMenu] = useState(false);
   const pendingMenuAction = React.useRef(null); // tracks which modal to open after menu closes
-
-  // When menu closes, open the pending modal — this runs AFTER the menu unmounts
-  React.useEffect(() => {
-    if (showMenu) return; // menu just opened, not closed
-    const action = pendingMenuAction.current;
-    if (!action) return;
-    pendingMenuAction.current = null;
-    if (action === "rainfall") setShowRainfall(true);
-    if (action === "paddocklist") setShowPaddockList(true);
-    if (action === "records") {
-      setShowRecords(true);
-      if (allMobHistory.length === 0) {
-        setRecordsLoading(true);
-        api.listAllMobHistory(farmName)
-          .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
-          .catch(() => setRecordsLoading(false));
-      }
-    }
-  }, [showMenu]);
   const [showPaddockList, setShowPaddockList] = useState(false);
   const [homeFarm, setHomeFarm] = useState(null); // which farm dashboard is open on home screen
   const [dragMobId, setDragMobId] = useState(null);
@@ -3053,6 +2777,29 @@ export default function App() {
     showToast(`${name} recorded`);
   };
 
+  // ── Menu pending action effect ──────────────────────────────────────────────
+  // Fires AFTER menu closes. Uses a ref so no stale closure issues.
+  const menuEffectInitialized = React.useRef(false);
+  React.useEffect(() => {
+    // Skip the initial mount (showMenu starts false, pendingMenuAction is null)
+    if (!menuEffectInitialized.current) { menuEffectInitialized.current = true; return; }
+    if (showMenu) return; // menu just opened
+    const action = pendingMenuAction.current;
+    if (!action) return;
+    pendingMenuAction.current = null;
+    if (action === "rainfall") setShowRainfall(true);
+    if (action === "paddocklist") setShowPaddockList(true);
+    if (action === "records") {
+      setShowRecords(true);
+      if (allMobHistory.length === 0) {
+        setRecordsLoading(true);
+        api.listAllMobHistory(farmName)
+          .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+          .catch(() => setRecordsLoading(false));
+      }
+    }
+  }, [showMenu]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const Header = ({ title, right }) => (
     <div className="bg-white/80 backdrop-blur-md flex items-center justify-between px-5 py-4 sticky top-0 z-10 border-b border-slate-100">
       <button onClick={() => setTab("home")} className="flex items-center gap-1 text-red-900">
@@ -3152,11 +2899,11 @@ export default function App() {
           ))}
         </div>
         <button
-          onClick={() => setShowHelp(true)}
-          className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
-          title="Help"
+          onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowHelp(true)}
+          className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0 ${mapMode === "Paddocks" ? "bg-amber-100 text-amber-700 font-bold" : "bg-slate-100 text-slate-500"}`}
+          title={mapMode === "Paddocks" ? "Map overlay" : "Help"}
         >
-          <HelpCircle size={16} />
+          {mapMode === "Paddocks" ? "🗺" : <HelpCircle size={16} />}
         </button>
       </div>
 
@@ -3853,11 +3600,14 @@ export default function App() {
                       </div>
                     )}
                     <button
-                      onClick={() => {
-                        setOpenGates(prev => isOpen ? prev.filter(g => g !== gateKey) : [...prev, gateKey]);
-                        showToast(isOpen
-                          ? `Gate closed`
-                          : `Gate opened${landmarkDetail.paddockA ? ` — ${landmarkDetail.paddockA} ↔ ${landmarkDetail.paddockB}` : ""}`
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const key = `${landmarkDetail.id}`;
+                        const opening = !openGates.includes(key);
+                        setOpenGates(prev => opening ? [...prev, key] : prev.filter(g => g !== key));
+                        showToast(opening
+                          ? `Gate opened${landmarkDetail.paddockA ? ` — ${landmarkDetail.paddockA} ↔ ${landmarkDetail.paddockB}` : ""}`
+                          : `Gate closed`
                         );
                       }}
                       className={`w-full rounded-2xl py-4 font-bold text-base mb-2 transition-colors ${isOpen
@@ -5115,17 +4865,6 @@ export default function App() {
             } catch (err) { showToast(err.message || "Couldn't save split"); }
           }}
         />
-      )}
-
-      {/* Map overlay button — rendered at App level so clicks don't go through MapScreen's closure */}
-      {tab === "map" && mapMode === "Paddocks" && !showInsightPicker && (
-        <button
-          onClick={() => setShowInsightPicker(true)}
-          className="fixed top-[60px] right-2 z-[50] w-9 h-9 rounded-full bg-amber-100 text-amber-700 font-bold flex items-center justify-center text-base shadow-sm border border-amber-200"
-          title="Map overlay"
-        >
-          🗺
-        </button>
       )}
 
       {showInsightPicker && (
