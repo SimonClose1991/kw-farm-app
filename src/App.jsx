@@ -1530,10 +1530,11 @@ function MobMapMoveSheet({ data, paddocks, onClose, onMoveAll, onSplit }) {
   );
 }
 
-function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit }) {
-  const [step, setStep] = React.useState("paddock"); // "paddock" | "action"
+function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit, startAtAction = false }) {
+  const [step, setStep] = React.useState(startAtAction ? "action" : "paddock");
   const [target, setTarget] = React.useState(null);
   const [splitCount, setSplitCount] = React.useState("");
+  const [splitMode, setSplitMode] = React.useState(false);
 
   const remaining = splitCount && Number(splitCount) > 0 && Number(splitCount) < mob.count
     ? mob.count - Number(splitCount) : null;
@@ -1543,11 +1544,12 @@ function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit }) {
       <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
 
-        {step === "paddock" ? (
+        {/* Paddock picker step */}
+        {step === "paddock" && (
           <>
             <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
               <div>
-                <div className="font-semibold text-slate-800 tracking-tight">Move — select paddock</div>
+                <div className="font-semibold text-slate-800 tracking-tight">Select paddock</div>
                 <div className="text-xs text-slate-400 mt-0.5">{mob.name} · {mob.count} head · in {mob.paddock}</div>
               </div>
               <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
@@ -1571,58 +1573,124 @@ function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit }) {
               })}
             </div>
           </>
-        ) : (
+        )}
+
+        {/* Action step — Move All or Split, then pick paddock if startAtAction */}
+        {step === "action" && (
           <>
             <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
               <div>
-                <button onClick={() => { setStep("paddock"); setSplitCount(""); }} className="text-xs text-amber-700 font-semibold mb-0.5">← Change paddock</button>
-                <div className="font-semibold text-slate-800">{mob.name}</div>
-                <div className="text-xs text-slate-400">{mob.paddock} <span className="text-amber-600 font-semibold">→ {target?.name}</span></div>
+                {!startAtAction && <button onClick={() => { setStep("paddock"); setSplitCount(""); setSplitMode(false); }} className="text-xs text-amber-700 font-semibold mb-0.5">← Change paddock</button>}
+                <div className="font-semibold text-slate-800">{mob.name} · {mob.count} head</div>
+                <div className="text-xs text-slate-400">
+                  {mob.paddock}
+                  {target && <span className="text-amber-600 font-semibold"> → {target.name}</span>}
+                  {!target && startAtAction && <span className="text-stone-400"> · select destination below</span>}
+                </div>
               </div>
               <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
             </div>
             <div className="p-5 space-y-3 pb-10">
-
-              {/* Move all */}
-              <button onClick={() => onMoveAll(target)}
-                className="w-full bg-stone-800 text-white rounded-2xl p-4 text-left active:opacity-90">
-                <div className="font-semibold text-base">Move All</div>
-                <div className="text-sm text-white/70 mt-0.5">All {mob.count} head move to {target?.name}</div>
-              </button>
-
-              {/* Split */}
-              <div className="bg-white border border-stone-200 rounded-2xl p-4">
-                <div className="font-semibold text-slate-800 mb-0.5">Draft / Split</div>
-                <div className="text-xs text-slate-400 mb-3">Move some — the rest stay in {mob.paddock}</div>
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="flex-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Head to move</label>
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      value={splitCount}
-                      onChange={e => setSplitCount(e.target.value)}
-                      placeholder={`1 – ${mob.count - 1}`}
-                      className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-2xl font-bold text-center bg-white focus:border-amber-400 outline-none"
-                    />
+              {/* Move All */}
+              {startAtAction && !target ? (
+                // startAtAction mode: show Move All button that opens paddock picker
+                <>
+                  <button onClick={() => { setSplitMode(false); setStep("pickPaddock"); }}
+                    className="w-full bg-stone-800 text-white rounded-2xl p-4 text-left active:opacity-90">
+                    <div className="font-semibold text-base">Move All</div>
+                    <div className="text-sm text-white/70 mt-0.5">All {mob.count} head — choose destination paddock</div>
+                  </button>
+                  <div className="bg-white border border-stone-200 rounded-2xl p-4">
+                    <div className="font-semibold text-slate-800 mb-0.5">Draft / Split</div>
+                    <div className="text-xs text-slate-400 mb-3">Move some head — choose how many, then pick paddock</div>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Head to move</label>
+                        <input type="number" inputMode="numeric" value={splitCount}
+                          onChange={e => setSplitCount(e.target.value)}
+                          placeholder={`1 – ${mob.count - 1}`}
+                          className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-2xl font-bold text-center bg-white focus:border-amber-400 outline-none" />
+                      </div>
+                      <div className="flex-1 bg-stone-50 rounded-xl p-3 text-center border border-stone-100">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remain</div>
+                        <div className="text-2xl font-bold text-slate-600 mt-0.5">{remaining ?? "—"}</div>
+                      </div>
+                    </div>
+                    <button onClick={() => { const n=Number(splitCount); if(!n||n<=0||n>=mob.count)return; setSplitMode(true); setStep("pickPaddock"); }}
+                      disabled={!remaining||remaining<=0}
+                      className="w-full bg-amber-500 text-white rounded-2xl py-3 font-semibold disabled:opacity-30">
+                      Split {splitCount||"?"} Head — choose paddock →
+                    </button>
                   </div>
-                  <div className="flex-1 bg-stone-50 rounded-xl p-3 text-center border border-stone-100">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remain</div>
-                    <div className="text-2xl font-bold text-slate-600 mt-0.5">{remaining ?? "—"}</div>
+                </>
+              ) : (
+                // Normal mode: paddock already selected
+                <>
+                  <button onClick={() => onMoveAll(target)}
+                    className="w-full bg-stone-800 text-white rounded-2xl p-4 text-left active:opacity-90">
+                    <div className="font-semibold text-base">Move All</div>
+                    <div className="text-sm text-white/70 mt-0.5">All {mob.count} head → {target?.name}</div>
+                  </button>
+                  <div className="bg-white border border-stone-200 rounded-2xl p-4">
+                    <div className="font-semibold text-slate-800 mb-0.5">Draft / Split</div>
+                    <div className="text-xs text-slate-400 mb-3">Move some — the rest stay in {mob.paddock}</div>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Head to move</label>
+                        <input type="number" inputMode="numeric" value={splitCount}
+                          onChange={e => setSplitCount(e.target.value)}
+                          placeholder={`1 – ${mob.count - 1}`}
+                          className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-2xl font-bold text-center bg-white focus:border-amber-400 outline-none" />
+                      </div>
+                      <div className="flex-1 bg-stone-50 rounded-xl p-3 text-center border border-stone-100">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remain</div>
+                        <div className="text-2xl font-bold text-slate-600 mt-0.5">{remaining ?? "—"}</div>
+                      </div>
+                    </div>
+                    <button onClick={() => { const n=Number(splitCount); if(!n||n<=0||n>=mob.count)return; onSplit(target,n); }}
+                      disabled={!remaining||remaining<=0}
+                      className="w-full bg-amber-500 text-white rounded-2xl py-3 font-semibold disabled:opacity-30">
+                      Split — Move {splitCount||"?"} Head to {target?.name}
+                    </button>
                   </div>
-                </div>
-                <button
-                  onClick={() => {
-                    const n = Number(splitCount);
-                    if (!n || n <= 0 || n >= mob.count) return;
-                    onSplit(target, n);
-                  }}
-                  disabled={!remaining || remaining <= 0}
-                  className="w-full bg-amber-500 text-white rounded-2xl py-3 font-semibold disabled:opacity-30"
-                >
-                  Split — Move {splitCount || "?"} Head to {target?.name}
-                </button>
+                </>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Pick paddock step (only used in startAtAction mode) */}
+        {step === "pickPaddock" && (
+          <>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+              <div>
+                <button onClick={() => setStep("action")} className="text-xs text-amber-700 font-semibold mb-0.5">← Back</button>
+                <div className="font-semibold text-slate-800">{splitMode ? `Split ${splitCount} head` : "Move All"} — select destination</div>
+                <div className="text-xs text-slate-400">from {mob.paddock}</div>
               </div>
+              <button onClick={onClose} className="text-slate-400 text-sm font-medium">Cancel</button>
+            </div>
+            <div className="overflow-y-auto max-h-[60vh] pb-8">
+              {[...paddocks].sort((a,b) => a.name.localeCompare(b.name)).map(p => {
+                const isCurrent = mob.paddock === p.name;
+                return (
+                  <button key={p.id} onClick={() => {
+                    if (isCurrent) return;
+                    if (splitMode) onSplit(p, Number(splitCount));
+                    else onMoveAll(p);
+                  }}
+                    className={`w-full flex items-center justify-between px-5 py-4 border-b border-slate-50 text-left ${isCurrent ? "opacity-40" : "active:bg-amber-50"}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
+                      <div>
+                        <div className={`font-medium ${isCurrent ? "text-stone-400" : "text-slate-800"}`}>{p.name}</div>
+                        <div className="text-xs text-slate-400">{p.ha ? `${Number(p.ha).toFixed(1)} ha` : ""}{p.landUse ? ` · ${p.landUse}` : ""}</div>
+                      </div>
+                    </div>
+                    {isCurrent ? <span className="text-xs text-stone-400">Current</span> : <span className="text-slate-300 text-lg">›</span>}
+                  </button>
+                );
+              })}
             </div>
           </>
         )}
@@ -1707,7 +1775,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
           <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100">
               <span className="font-semibold text-stone-700 text-sm uppercase tracking-wide">Paddocks</span>
-              <button onClick={() => { setShowPaddockList(true); }} className="text-xs text-amber-700 font-semibold hover:text-amber-900">View all →</button>
+              <button onClick={() => setShowPaddockList(true)} className="text-xs text-amber-700 font-semibold hover:text-amber-900">View all →</button>
             </div>
             <div className="grid grid-cols-2 divide-x divide-y divide-stone-100">
               {[
@@ -2956,7 +3024,7 @@ export default function App() {
         <h1 className="text-base font-bold text-slate-800 tracking-tight">{title}</h1>
         <div className="text-xs text-slate-400 font-medium">{farmName}</div>
       </div>
-      <button onClick={() => setShowHelp(true)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+      <button onClick={() => requestAnimationFrame(() => setShowHelp(true))} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
         {right || <HelpCircle size={16} />}
       </button>
     </div>
@@ -3028,7 +3096,7 @@ export default function App() {
     <div className="pb-24 relative">
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
-          onClick={() => setShowSettings(true)}
+          onClick={() => requestAnimationFrame(() => setShowSettings(true))}
           className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"
           title="Settings"
         >
@@ -3046,7 +3114,7 @@ export default function App() {
           ))}
         </div>
         <button
-          onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowHelp(true)}
+          onClick={() => mapMode === "Paddocks" ? requestAnimationFrame(() => setShowInsightPicker(true)) : setShowHelp(true)}
           className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${mapMode === "Paddocks" ? "bg-amber-100 text-amber-700 font-bold" : "bg-slate-100 text-slate-500"}`}
           title={mapMode === "Paddocks" ? "Map overlay" : "Help"}
         >
@@ -3206,7 +3274,7 @@ export default function App() {
             </div>
           )}
           {!googleMapsKey && isAdmin && (
-            <button onClick={() => setShowSettings(true)} className="absolute top-2 right-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full z-10">
+            <button onClick={() => requestAnimationFrame(() => setShowSettings(true))} className="absolute top-2 right-2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full z-10">
               Maps key status
             </button>
           )}
@@ -3314,7 +3382,7 @@ export default function App() {
             )}
             {!googleMapsKey && isAdmin && !mapDrawMode && (
               <div className="absolute top-2 left-2 bg-black/60 text-white text-xs font-medium px-3 py-1.5 rounded-full">
-                No Maps key — <button onClick={() => setShowSettings(true)} className="underline">Settings</button>
+                No Maps key — <button onClick={() => requestAnimationFrame(() => setShowSettings(true))} className="underline">Settings</button>
               </div>
             )}
             {mapLoadError && (
@@ -3722,46 +3790,58 @@ export default function App() {
                 </div>
               </div>
               {landmarkDetail.notes && <p className="text-sm text-slate-600 mb-4">{landmarkDetail.notes}</p>}
+
+              {/* Gate open/close — shown to ALL users, not just admins */}
+              {landmarkDetail.type === "Gate" && (() => {
+                const gateKey = `${landmarkDetail.id}`;
+                const isOpen = openGates.includes(gateKey);
+                const paddockAData = paddocks.find(p => p.name === landmarkDetail.paddockA);
+                const paddockBData = paddocks.find(p => p.name === landmarkDetail.paddockB);
+                const aIsGrazing = !NON_GRAZING_LAND_USES.has(paddockAData?.landUse);
+                const bIsGrazing = !NON_GRAZING_LAND_USES.has(paddockBData?.landUse);
+                const combinedHa = (
+                  (aIsGrazing ? Number(paddockAData?.ha||0) : 0) +
+                  (bIsGrazing ? Number(paddockBData?.ha||0) : 0)
+                ).toFixed(1);
+                const mobsInA = mobs.filter(m => m.paddock === landmarkDetail.paddockA);
+                const mobsInB = mobs.filter(m => m.paddock === landmarkDetail.paddockB);
+                const combinedDSE = [...mobsInA, ...mobsInB].reduce((s,m) => s + m.count*(m.dse||0), 0);
+                const combinedDsePerHa = Number(combinedHa) > 0 ? (combinedDSE / Number(combinedHa)).toFixed(2) : "0.00";
+                return (
+                  <div className="mb-3">
+                    {landmarkDetail.paddockA && landmarkDetail.paddockB && (
+                      <div className="text-xs text-slate-400 mb-2 text-center font-medium">
+                        {landmarkDetail.paddockA} ↔ {landmarkDetail.paddockB}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => {
+                        setOpenGates(prev => isOpen ? prev.filter(g => g !== gateKey) : [...prev, gateKey]);
+                        showToast(isOpen
+                          ? `Gate closed`
+                          : `Gate opened${landmarkDetail.paddockA ? ` — ${landmarkDetail.paddockA} ↔ ${landmarkDetail.paddockB}` : ""}`
+                        );
+                      }}
+                      className={`w-full rounded-2xl py-4 font-bold text-base mb-2 transition-colors ${isOpen
+                        ? "bg-yellow-400 text-yellow-900 border-2 border-yellow-500"
+                        : "bg-slate-100 text-slate-700 border-2 border-slate-200 active:bg-slate-200"}`}
+                    >
+                      {isOpen ? "○  Gate OPEN — tap to close" : "⊗  Gate CLOSED — tap to open"}
+                    </button>
+                    {isOpen && landmarkDetail.paddockA && landmarkDetail.paddockB && (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-3 text-sm">
+                        <div className="font-semibold text-yellow-800 mb-1">Combined grazing stats</div>
+                        <div className="text-yellow-700">{landmarkDetail.paddockA} + {landmarkDetail.paddockB}</div>
+                        <div className="text-yellow-700">{combinedHa} ha grazing · {combinedDSE.toFixed(0)} DSE</div>
+                        <div className="font-bold text-yellow-900 text-lg mt-1">{combinedDsePerHa} DSE/ha</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {canEdit && (
                 <div className="space-y-2">
-                  {landmarkDetail.type === "Gate" && landmarkDetail.paddockA && landmarkDetail.paddockB && (() => {
-                    const gateKey = `${landmarkDetail.id}`;
-                    const isOpen = openGates.includes(gateKey);
-                    const paddockAData = paddocks.find(p => p.name === landmarkDetail.paddockA);
-                    const paddockBData = paddocks.find(p => p.name === landmarkDetail.paddockB);
-                    // Only grazing ha counts for stocking rate
-                    const aIsGrazing = !NON_GRAZING_LAND_USES.has(paddockAData?.landUse);
-                    const bIsGrazing = !NON_GRAZING_LAND_USES.has(paddockBData?.landUse);
-                    const combinedHa = (
-                      (aIsGrazing ? Number(paddockAData?.ha||0) : 0) +
-                      (bIsGrazing ? Number(paddockBData?.ha||0) : 0)
-                    ).toFixed(1);
-                    const mobsInA = mobs.filter(m => m.paddock === landmarkDetail.paddockA);
-                    const mobsInB = mobs.filter(m => m.paddock === landmarkDetail.paddockB);
-                    const combinedDSE = [...mobsInA, ...mobsInB].reduce((s,m) => s + m.count*(m.dse||0), 0);
-                    const combinedDsePerHa = Number(combinedHa) > 0 ? (combinedDSE / Number(combinedHa)).toFixed(2) : "0.00";
-                    return (
-                      <div className="mb-3">
-                        <button
-                          onClick={() => {
-                            setOpenGates(prev => isOpen ? prev.filter(g => g !== gateKey) : [...prev, gateKey]);
-                            showToast(isOpen ? `Gate closed — paddocks separated` : `Gate opened — ${landmarkDetail.paddockA} ↔ ${landmarkDetail.paddockB} merged`);
-                          }}
-                          className={`w-full rounded-2xl py-3.5 font-semibold text-sm mb-2 ${isOpen ? "bg-yellow-400 text-yellow-900 border-2 border-yellow-500" : "bg-slate-100 text-slate-700 border-2 border-slate-200"}`}
-                        >
-                          {isOpen ? "○ Gate OPEN — tap to close" : "⊗ Gate CLOSED — tap to open"}
-                        </button>
-                        {isOpen && (
-                          <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-3 text-sm">
-                            <div className="font-semibold text-yellow-800 mb-1">Combined grazing stats</div>
-                            <div className="text-yellow-700">{landmarkDetail.paddockA} + {landmarkDetail.paddockB}</div>
-                            <div className="text-yellow-700">{combinedHa} ha grazing · {combinedDSE.toFixed(0)} DSE</div>
-                            <div className="font-bold text-yellow-900 text-lg mt-1">{combinedDsePerHa} DSE/ha</div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
                   <button onClick={() => setLandmarkEditMode(true)} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">Edit Details</button>
                   <button
                     onClick={() => {
@@ -4754,11 +4834,11 @@ export default function App() {
             </span>
             <ChevronRight size={16} className="text-slate-300" />
           </button>
-          <button onClick={() => { setShowRainfall(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => { setShowMenu(false); requestAnimationFrame(() => setShowRainfall(true)); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-sky-500"><Droplet size={16} /></div>
             <span className="font-semibold text-slate-700">Rainfall records</span>
           </button>
-          <button onClick={() => { setShowPaddockList(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => { setShowMenu(false); requestAnimationFrame(() => setShowPaddockList(true)); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center text-green-600">▦</div>
             <div className="text-left">
               <div className="font-semibold text-slate-700">Paddock list</div>
@@ -4767,14 +4847,16 @@ export default function App() {
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
           <button onClick={() => {
-            setShowRecords(true);
             setShowMenu(false);
-            if (allMobHistory.length === 0) {
-              setRecordsLoading(true);
-              api.listAllMobHistory(farmName)
-                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
-                .catch(() => setRecordsLoading(false));
-            }
+            requestAnimationFrame(() => {
+              setShowRecords(true);
+              if (allMobHistory.length === 0) {
+                setRecordsLoading(true);
+                api.listAllMobHistory(farmName)
+                  .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+                  .catch(() => setRecordsLoading(false));
+              }
+            });
           }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 text-sm font-bold">📋</div>
             <div className="text-left">
@@ -4970,6 +5052,7 @@ export default function App() {
           mob={selectedMob}
           paddocks={paddocks}
           farmName={farmName}
+          startAtAction={true}
           onClose={() => setShowPaddockPicker(false)}
           onMoveAll={async (target) => {
             const mobId = selectedMob.id;
