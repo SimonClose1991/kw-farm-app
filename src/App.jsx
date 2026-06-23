@@ -409,6 +409,11 @@ function GooglePaddockMap({
 }) {
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  // Store callbacks on refs so effects always use current values without stale closures
+  const onSelectPinRef = useRef(onSelectPin);
+  const onLongPressPinRef = useRef(onLongPressPin);
+  React.useEffect(() => { onSelectPinRef.current = onSelectPin; }, [onSelectPin]);
+  React.useEffect(() => { onLongPressPinRef.current = onLongPressPin; }, [onLongPressPin]);
 
   const colourForPaddock = (p) => {
     if (insightMode === "outline") return null;
@@ -830,6 +835,14 @@ function GooglePaddockMap({
         },
         zIndex: 50,
       });
+      // Click — open mob detail sheet
+      marker.addListener("click", () => onSelectPinRef.current?.({ l: totalCount, mob: groupMobs[0], mobs: groupMobs }));
+      // Long-press (700ms) — open move/split sheet
+      let pressTimer = null;
+      marker.addListener("mousedown", () => { pressTimer = setTimeout(() => { pressTimer = null; onLongPressPinRef.current?.({ mob: groupMobs[0], mobs: groupMobs }); }, 700); });
+      marker.addListener("mouseup",   () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
+      marker.addListener("touchstart", () => { pressTimer = setTimeout(() => { pressTimer = null; onLongPressPinRef.current?.({ mob: groupMobs[0], mobs: groupMobs }); }, 700); }, { passive: true });
+      marker.addListener("touchend",   () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
       ref.mobOverlays.push(marker);
     });
   }, [mobs, mode]);
@@ -1334,7 +1347,7 @@ function WeatherWidget({ farmName, farmCenters }) {
         if (i === 0) {
           const start = Math.min(...sprayHours);
           const end = Math.max(...sprayHours) + 1;
-          sprayWindow = `${start}:00\u2013${end}:00`;
+          sprayWindow = `${start}:00–${end}:00`;
         }
       }
 
@@ -1345,15 +1358,15 @@ function WeatherWidget({ farmName, farmCenters }) {
   }
 
   function weatherIcon(code) {
-    if (code === 0) return "\u2600\uFE0F";
-    if (code <= 2) return "\u26C5";
-    if (code <= 3) return "\u2601\uFE0F";
-    if (code <= 49) return "\uD83C\uDF2B\uFE0F";
-    if (code <= 67) return "\uD83C\uDF27\uFE0F";
-    if (code <= 77) return "\u2744\uFE0F";
-    if (code <= 82) return "\uD83C\uDF26\uFE0F";
-    if (code <= 99) return "\u26C8\uFE0F";
-    return "\uD83C\uDF24\uFE0F";
+    if (code === 0) return "☀️";
+    if (code <= 2) return "⛅";
+    if (code <= 3) return "☁️";
+    if (code <= 49) return "🌫️";
+    if (code <= 67) return "🌧️";
+    if (code <= 77) return "❄️";
+    if (code <= 82) return "🌦️";
+    if (code <= 99) return "⛈️";
+    return "🌤️";
   }
 
   function dayLabel(dateStr, i) {
@@ -1365,7 +1378,7 @@ function WeatherWidget({ farmName, farmCenters }) {
   if (loading) return (
     <div className="bg-white border border-stone-200/80 rounded-2xl px-4 py-3 flex items-center gap-3 text-stone-400 text-sm">
       <div className="w-4 h-4 border-2 border-stone-200 border-t-stone-400 rounded-full animate-spin flex-shrink-0" />
-      Loading weather for {farmName}\u2026
+      Loading weather for {farmName}…
     </div>
   );
 
@@ -1385,28 +1398,28 @@ function WeatherWidget({ farmName, farmCenters }) {
           <div className="flex items-center gap-2">
             {!expanded && sprayDaysAhead > 0 && (
               <span className="text-[10px] font-semibold bg-green-50 text-green-700 px-2 py-0.5 rounded-full">
-                \uD83C\uDF3F {sprayDaysAhead} spray day{sprayDaysAhead > 1 ? "s" : ""} ahead
+                🌿 {sprayDaysAhead} spray day{sprayDaysAhead > 1 ? "s" : ""} ahead
               </span>
             )}
-            <span className="text-xs text-stone-400">{expanded ? "\u25B2 Less" : "7 days \u25BE"}</span>
+            <span className="text-xs text-stone-400">{expanded ? "▲ Less" : "7 days ▾"}</span>
           </div>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-baseline gap-0.5">
-            <span className="text-xl font-bold text-stone-800">{Math.round(today.maxTemp)}\xB0</span>
-            <span className="text-sm text-stone-400">/{Math.round(today.minTemp)}\xB0</span>
+            <span className="text-xl font-bold text-stone-800">{Math.round(today.maxTemp)}°</span>
+            <span className="text-sm text-stone-400">/{Math.round(today.minTemp)}°</span>
           </div>
-          {today.rain > 0 && <span className="text-sm text-blue-600 font-semibold">\uD83D\uDCA7{today.rain.toFixed(1)}mm</span>}
+          {today.rain > 0 && <span className="text-sm text-blue-600 font-semibold">💧{today.rain.toFixed(1)}mm</span>}
           {today.rain === 0 && today.rainProb > 20 && <span className="text-sm text-blue-400">{today.rainProb}% rain</span>}
           <span className="text-sm text-stone-500">{today.windMax}km/h {today.windDirLabel}</span>
           {today.frostRisk && (
             <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${today.frostRisk === "HIGH" ? "bg-blue-100 text-blue-700" : "bg-blue-50 text-blue-500"}`}>
-              \u2744\uFE0F Frost {today.frostRisk}
+              ❄️ Frost {today.frostRisk}
             </span>
           )}
           {today.sprayWindow && (
             <span className="text-xs font-semibold bg-green-50 text-green-700 px-2 py-0.5 rounded-full">
-              \uD83C\uDF3F Spray {today.sprayWindow}
+              🌿 Spray {today.sprayWindow}
             </span>
           )}
           {!today.sprayOk && <span className="text-xs text-stone-300">No spray window</span>}
@@ -1423,27 +1436,27 @@ function WeatherWidget({ farmName, farmCenters }) {
                 <div className="w-14 text-xs font-bold text-stone-600 flex-shrink-0">{dayLabel(day.date, i)}</div>
                 <span className="flex-shrink-0">{weatherIcon(day.wCode)}</span>
                 <div className="flex items-baseline gap-0.5 flex-shrink-0">
-                  <span className="text-sm font-bold text-stone-700">{Math.round(day.maxTemp)}\xB0</span>
-                  <span className="text-xs text-stone-400">/{Math.round(day.minTemp)}\xB0</span>
+                  <span className="text-sm font-bold text-stone-700">{Math.round(day.maxTemp)}°</span>
+                  <span className="text-xs text-stone-400">/{Math.round(day.minTemp)}°</span>
                 </div>
                 <div className="flex-1 flex items-center gap-1.5 text-xs flex-wrap">
                   {day.rain > 0
-                    ? <span className="text-blue-600 font-semibold">\uD83D\uDCA7{day.rain.toFixed(1)}mm</span>
+                    ? <span className="text-blue-600 font-semibold">💧{day.rain.toFixed(1)}mm</span>
                     : day.rainProb > 20
                       ? <span className="text-blue-400">{day.rainProb}%</span>
                       : null}
                   <span className="text-stone-400">{day.windMax}km/h</span>
-                  {day.frostRisk && <span className="text-blue-600 font-semibold">\u2744\uFE0F</span>}
+                  {day.frostRisk && <span className="text-blue-600 font-semibold">❄️</span>}
                 </div>
                 {/* Spray status — right edge, colour-coded */}
                 <div className="flex-shrink-0">
                   {day.sprayOk ? (
                     <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-1 rounded-full whitespace-nowrap">
-                      \uD83C\uDF3F {i === 0 && day.sprayWindow ? day.sprayWindow : "Spray OK"}
+                      🌿 {i === 0 && day.sprayWindow ? day.sprayWindow : "Spray OK"}
                     </span>
                   ) : (
                     <span className="text-xs text-stone-300 px-2 py-1 rounded-full border border-stone-100 whitespace-nowrap">
-                      \u2715 No spray
+                      ✕ No spray
                     </span>
                   )}
                 </div>
@@ -1451,7 +1464,7 @@ function WeatherWidget({ farmName, farmCenters }) {
             </div>
           ))}
           <div className="px-4 py-2 text-center">
-            <span className="text-[10px] text-stone-300">BOM via Open-Meteo \u00B7 Spray: wind &lt;15km/h, rain &lt;20%, RH &lt;90%, 7am\u20136pm</span>
+            <span className="text-[10px] text-stone-300">BOM via Open-Meteo · Spray: wind &lt;15km/h, rain &lt;20%, RH &lt;90%, 7am–6pm</span>
           </div>
         </div>
       )}
