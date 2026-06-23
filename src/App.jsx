@@ -954,6 +954,215 @@ function InventoryForm({ values, onChange, fields = TREATMENT_FIELDS }) {
 }
 
 
+// ── My Schedule Widget ────────────────────────────────────────────────────────
+// Shows today's (or tomorrow's if after 5pm) workflow tasks for the logged-in user.
+// Expands to a 7-day week view on tap. Pulls from the published workflow snapshot.
+function MyScheduleWidget({ currentUser, api, setTab }) {
+  const [schedule, setSchedule] = React.useState(null); // { tasks, staffName, week }
+  const [expanded, setExpanded] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+
+  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+
+  // After 5pm show tomorrow's tasks, otherwise today's
+  const now = new Date();
+  const showTomorrow = now.getHours() >= 17;
+  const targetDate = new Date(now);
+  if (showTomorrow) targetDate.setDate(targetDate.getDate() + 1);
+
+  // Get Monday of the week containing targetDate
+  function getMonday(d) {
+    const r = new Date(d); r.setHours(0,0,0,0);
+    const dy = r.getDay(); r.setDate(r.getDate() + (dy === 0 ? -6 : 1 - dy));
+    return r;
+  }
+  function toISO(d) {
+    const x = new Date(d);
+    return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`;
+  }
+  function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
+  function fmtShort(d) { return new Date(d).toLocaleDateString("en-AU", {day:"numeric", month:"short"}); }
+
+  // Match user's name against workflow staff assignments
+  // Checks first name, full name, and partial matches
+  function matchesUser(assignedStaff, userName) {
+    if (!assignedStaff?.length || !userName) return false;
+    const lname = userName.toLowerCase().trim();
+    const firstName = lname.split(" ")[0];
+    return assignedStaff.some(s => {
+      const ls = s.toLowerCase().trim();
+      return ls === lname || ls.startsWith(firstName) || firstName.startsWith(ls);
+    });
+  }
+
+  React.useEffect(() => {
+    setLoading(true);
+    api.getWorkflow()
+      .then(data => {
+        const published = data?.published || data?.tasks || [];
+        const weekStart = getMonday(targetDate);
+        const weekEnd = addDays(weekStart, 6);
+
+        // Build 7-day schedule for this user
+        const weekTasks = published.filter(t => {
+          const td = new Date(t.date);
+          return td >= weekStart && td <= weekEnd && matchesUser(t.assignedStaff, currentUser?.name);
+        });
+
+        // Group by day
+        const byDay = {};
+        DAYS.forEach((d, i) => {
+          const dayDate = toISO(addDays(weekStart, i));
+          byDay[d] = { tasks: weekTasks.filter(t => t.day === d), date: dayDate, idx: i };
+        });
+
+        const targetDay = DAYS[targetDate.getDay() === 0 ? 6 : targetDate.getDay() - 1];
+
+        setSchedule({ byDay, weekStart, targetDay, userName: currentUser?.name || "You" });
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [currentUser?.name]);
+
+  const COLOUR_MAP = {
+    default: { bg: "#f5f5f4", bd: "#a8a29e", tx: "#44403c" },
+    blue:    { bg: "#dbeafe", bd: "#3b82f6", tx: "#1e40af" },
+    green:   { bg: "#dcfce7", bd: "#16a34a", tx: "#15803d" },
+    red:     { bg: "#fee2e2", bd: "#ef4444", tx: "#b91c1c" },
+    amber:   { bg: "#fef3c7", bd: "#d97706", tx: "#92400e" },
+    yellow:  { bg: "#fef3c7", bd: "#d97706", tx: "#92400e" },
+    purple:  { bg: "#f3e8ff", bd: "#a855f7", tx: "#6b21a8" },
+  };
+  const colFor = (v) => COLOUR_MAP[v] || COLOUR_MAP.default;
+
+  if (loading) return (
+    <div className="bg-white border border-stone-200/80 rounded-2xl px-4 py-3 flex items-center gap-3 text-stone-400 text-sm">
+      <div className="w-4 h-4 border-2 border-stone-200 border-t-stone-400 rounded-full animate-spin flex-shrink-0" />
+      Loading schedule…
+    </div>
+  );
+
+  if (!schedule) return null;
+
+  const { byDay, weekStart, targetDay, userName } = schedule;
+  const todayTasks = byDay[targetDay]?.tasks || [];
+  const firstName = userName?.split(" ")[0] || "You";
+  const dayLabel = showTomorrow ? "Tomorrow" : "Today";
+
+  return (
+    <div className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden">
+      {/* Header row — compact, always visible */}
+      <button onClick={() => setExpanded(e => !e)} className="w-full text-left px-4 py-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">📋</span>
+            <span className="text-xs font-semibold text-stone-500 uppercase tracking-widest">
+              {firstName}'s Schedule
+            </span>
+          </div>
+          <span className="text-xs text-stone-400">{expanded ? "▲ Less" : "This week ▾"}</span>
+        </div>
+
+        {/* Today's tasks preview */}
+        {todayTasks.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-stone-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-stone-300 flex-shrink-0" />
+            <span>Nothing assigned {dayLabel.toLowerCase()} · {fmtShort(byDay[targetDay]?.date)}</span>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {todayTasks.slice(0, 3).map(t => {
+              const c = colFor(t.color);
+              return (
+                <div key={t.id} className={`flex items-start gap-2 ${t.completed ? "opacity-50" : ""}`}>
+                  <div className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5" style={{ background: c.bd }} />
+                  <div className="flex-1 min-w-0">
+                    <span className={`text-sm font-medium text-stone-700 ${t.completed ? "line-through" : ""}`}>{t.content}</span>
+                    <span className="text-xs text-stone-400 ml-1.5">{t.farm}</span>
+                  </div>
+                  {t.completed && <span className="text-xs text-green-600 font-semibold flex-shrink-0">✓</span>}
+                </div>
+              );
+            })}
+            {todayTasks.length > 3 && (
+              <div className="text-xs text-stone-400 pl-3.5">+{todayTasks.length - 3} more</div>
+            )}
+          </div>
+        )}
+
+        {/* Day label badge */}
+        <div className="flex items-center gap-2 mt-2">
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${showTomorrow ? "bg-amber-50 text-amber-700" : "bg-stone-100 text-stone-600"}`}>
+            {dayLabel} · {fmtShort(byDay[targetDay]?.date)}
+          </span>
+          {todayTasks.length > 0 && (
+            <span className="text-xs text-stone-400">{todayTasks.filter(t => t.completed).length}/{todayTasks.length} done</span>
+          )}
+        </div>
+      </button>
+
+      {/* 7-day expanded view */}
+      {expanded && (
+        <div className="border-t border-stone-100">
+          {DAYS.map((day, i) => {
+            const dayData = byDay[day];
+            const dayTasks = dayData?.tasks || [];
+            const isTarget = day === targetDay;
+            const isPast = new Date(dayData?.date) < new Date(new Date().toDateString());
+            const allDone = dayTasks.length > 0 && dayTasks.every(t => t.completed);
+
+            return (
+              <div key={day} className={`border-b border-stone-50 last:border-0 ${isTarget ? "bg-amber-50/40" : ""} ${isPast && !isTarget ? "opacity-50" : ""}`}>
+                <div className="px-4 py-2.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold ${isTarget ? "text-amber-700" : "text-stone-600"}`}>
+                        {i === (now.getDay() === 0 ? 6 : now.getDay() - 1) && !showTomorrow ? "Today" :
+                         i === (targetDate.getDay() === 0 ? 6 : targetDate.getDay() - 1) && showTomorrow ? "Tomorrow" :
+                         day}
+                      </span>
+                      <span className="text-xs text-stone-400">{fmtShort(dayData?.date)}</span>
+                    </div>
+                    {dayTasks.length > 0 && (
+                      <span className={`text-xs font-semibold ${allDone ? "text-green-600" : "text-stone-400"}`}>
+                        {allDone ? "✓ All done" : `${dayTasks.filter(t=>t.completed).length}/${dayTasks.length}`}
+                      </span>
+                    )}
+                  </div>
+                  {dayTasks.length === 0 ? (
+                    <span className="text-xs text-stone-300 italic">Nothing assigned</span>
+                  ) : (
+                    <div className="space-y-1">
+                      {dayTasks.map(t => {
+                        const c = colFor(t.color);
+                        return (
+                          <div key={t.id} className={`flex items-start gap-2 ${t.completed ? "opacity-50" : ""}`}>
+                            <div className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5" style={{ background: c.bd }} />
+                            <div className="flex-1 min-w-0">
+                              <span className={`text-xs font-medium text-stone-700 ${t.completed ? "line-through" : ""}`}>{t.content}</span>
+                              <span className="text-xs text-stone-400 ml-1.5 text-[10px]">{t.farm}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          <button
+            onClick={() => { setExpanded(false); setTab("workflow"); }}
+            className="w-full text-center py-2.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 transition-colors"
+          >
+            Open full workflow →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Weather Widget ────────────────────────────────────────────────────────────
 // Uses Open-Meteo (free, no API key, BOM-quality data for Australia)
 // Fetches once on mount, caches for 30 min in sessionStorage
@@ -1234,7 +1443,7 @@ function PaddockMoveSheet({ mob, paddocks, onClose, onMoveAll, onSplit }) {
   );
 }
 
-function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api, farmCenters }) {
+function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api, farmCenters, currentUser }) {
   const [homeFarm, setHomeFarm] = React.useState(null);
   const [dashLoading, setDashLoading] = React.useState(false);
 
@@ -1410,6 +1619,9 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
 
       {/* ── Weather ── */}
       <WeatherWidget farmName={farmName} farmCenters={farmCenters} />
+
+      {/* ── My Schedule ── */}
+      <MyScheduleWidget currentUser={currentUser} api={api} setTab={setTab} />
 
       {/* ── Workflow — clean card, amber accent ── */}
       <button
@@ -5322,6 +5534,7 @@ export default function App() {
         isOnline={isOnline} pendingChanges={pendingChanges} syncCount={syncCount}
         syncing={syncing} handleSync={handleSync} setShowPaddockList={setShowPaddockList}
         paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
+        currentUser={currentUser}
       />}
       {tab === "map" && MapScreen()}
       {tab === "livestock" && LivestockScreen()}

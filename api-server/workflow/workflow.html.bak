@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Farm Weekly Planner – Kurra-Wirra</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f3f4f6;color:#111;font-size:14px}
+/* When embedded in the farm app iframe, push content above the host nav bar */
+body.embedded { padding-bottom: 64px; }
+body.embedded .fab { bottom: 82px; }
+body.embedded .modal-box { padding-bottom: 82px; max-height: calc(94vh - 64px); }
+button,input,select,textarea{font-family:inherit}
+input,select,textarea{font-size:14px;border:1.5px solid #d1d5db;border-radius:9px;padding:9px 12px;width:100%;background:#fff;color:#111;outline:none;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.1)}
+label{font-size:11px;color:#6b7280;display:block;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+
+/* Layout */
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.header{background:#1e3a2e;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:10px;flex-wrap:wrap}
+.header-left{display:flex;align-items:center;gap:10px}
+.header-logo{height:38px;border-radius:6px;object-fit:cover}
+.header-title{color:#fff;font-size:16px;font-weight:700;line-height:1}
+.header-sub{color:#86efac;font-size:11px;margin-top:2px}
+.pub-badge{background:#22c55e;color:#fff;font-size:10px;padding:3px 9px;border-radius:12px;font-weight:700;letter-spacing:.3px}
+.header-right{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+
+/* Toolbar */
+.toolbar{background:#fff;border-bottom:1px solid #e5e7eb;padding:9px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;flex-wrap:wrap;gap:8px}
+.optionsbar{background:#fafafa;border-bottom:1px solid #eee;padding:7px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0}
+.optionsbar:empty{display:none}
+.opt-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;cursor:pointer;padding:4px 10px;border:1.5px solid #d1d5db;border-radius:8px;background:#fff;font-weight:500}
+.opt-toggle.on{background:#1e3a2e;color:#fff;border-color:#1e3a2e}
+.opt-toggle:active{transform:scale(.97)}
+/* Hide staff names on cards when prefs.hideStaff is set */
+body.hide-staff .task-card .tc-staff{display:none}
+.week-nav{display:flex;gap:5px;align-items:center}
+.week-label{font-size:13px;font-weight:700;min-width:155px;text-align:center;color:#1f2937}
+.nav-btn{padding:7px 13px;font-size:16px;border:1.5px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer;line-height:1}
+.nav-btn:hover{background:#f9fafb}
+.filters{display:flex;gap:7px;flex-wrap:wrap}
+.filters select{width:auto;padding:7px 10px;font-size:12px;border-radius:8px;cursor:pointer}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:8px 14px;border-radius:9px;border:1.5px solid #d1d5db;background:#fff;color:#111;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:all .1s;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(.96)}
+.btn-primary{background:#3b82f6;color:#fff;border-color:#3b82f6}
+.btn-primary:hover{background:#2563eb}
+.btn-green{background:#16a34a;color:#fff;border-color:#16a34a}
+.btn-green:hover{background:#15803d}
+.btn-ghost{background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.28);color:#fff}
+.btn-ghost:hover{background:rgba(255,255,255,.2)}
+.btn-sm{padding:5px 10px;font-size:12px;border-radius:7px}
+
+/* Notice */
+.notice{padding:10px 16px;background:#fef9c3;font-size:12px;color:#854d0e;border-bottom:1px solid #fcd34d;flex-shrink:0}
+
+/* Grid wrapper – fills remaining height, scrolls horizontally */
+.grid-outer{flex:1;overflow:auto;position:relative}
+.grid-table{border-collapse:collapse;width:100%;table-layout:fixed}
+.grid-table th{position:sticky;top:0;z-index:10;background:#2d5a3d;color:#d1fae5;font-size:11px;font-weight:600;padding:8px 6px;text-align:center;border:1px solid rgba(255,255,255,.12);white-space:nowrap}
+.grid-table th.farm-th{text-align:left;padding-left:12px;width:110px;position:sticky;left:0;z-index:20;background:#2d5a3d}
+.grid-table td{padding:6px 5px;vertical-align:top;border:1px solid #e5e7eb;background:#fff;min-width:130px}
+.grid-table td.farm-td{position:sticky;left:0;z-index:5;background:#f0fdf4;font-size:11px;font-weight:700;color:#15803d;padding:10px 11px;vertical-align:middle;white-space:nowrap;border-right:2px solid #bbf7d0;width:110px}
+
+/* Task card */
+.task-card{border-radius:8px;padding:8px 10px;margin-bottom:5px;position:relative;border-left:4px solid #9ca3af;cursor:grab;user-select:none;transition:box-shadow .15s,opacity .15s}
+.task-card:active{cursor:grabbing}
+.task-card.dragging{opacity:.4;box-shadow:none}
+.task-card.drag-over-card{margin-top:28px}
+.task-card .tc-title{font-size:12px;font-weight:600;line-height:1.4;color:#1f2937;padding-right:0}
+.task-card .tc-staff{font-size:10px;margin-top:3px;font-weight:500}
+.task-card .tc-notes{font-size:10px;color:#6b7280;margin-top:2px;font-style:italic}
+.task-card .tc-notes-toggle{background:none;border:none;padding:2px 0;margin-top:3px;font-size:10px;color:#2563eb;cursor:pointer;font-weight:600}
+.task-card .tc-notes-toggle:hover{text-decoration:underline}
+.task-card .tc-notes-full{background:rgba(0,0,0,.04);border-radius:6px;padding:5px 7px;margin-top:4px;font-style:normal}
+.task-card .tc-done-label{font-size:9px;color:#16a34a;margin-top:2px;font-weight:600}
+.task-card .tc-actions{display:flex;gap:1px;margin-top:6px;padding-top:5px;border-top:1px solid rgba(0,0,0,.07);align-items:center;flex-wrap:wrap}
+.tc-btn{background:none;border:none;padding:4px 6px;border-radius:5px;font-size:13px;cursor:pointer;line-height:1;color:#6b7280}
+.tc-btn:hover{background:rgba(0,0,0,.07)}
+/* Completed state: tinted + strikethrough title */
+.task-card.done{opacity:.72}
+.task-card.done .tc-title{text-decoration:line-through;color:#6b7280}
+.task-card.done::after{content:"";position:absolute;inset:0;background:rgba(22,163,74,.08);border-radius:8px;pointer-events:none}
+/* Staff "mark complete" button */
+.tc-done-btn{width:100%;padding:6px;border-radius:7px;border:1.5px solid #16a34a;background:#fff;color:#16a34a;font-size:11px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.tc-done-btn:active{transform:scale(.97)}
+.tc-done-btn.on{background:#16a34a;color:#fff}
+
+/* Drop zone indicator */
+.cell-drop-active{background:#eff6ff !important;outline:2px dashed #3b82f6;outline-offset:-2px}
+
+/* Add cell btn */
+.add-cell-btn{width:100%;padding:5px;border:1.5px dashed #d1d5db;border-radius:7px;background:none;font-size:11px;color:#9ca3af;cursor:pointer;margin-top:3px}
+.add-cell-btn:hover{border-color:#9ca3af;color:#6b7280;background:#f9fafb}
+
+/* Legend */
+.legend{display:flex;flex-wrap:wrap;gap:5px;padding:8px 14px;background:#fff;border-top:1px solid #e5e7eb;flex-shrink:0}
+.leg-pill{font-size:10px;padding:2px 9px;border-radius:12px;border:1px solid;font-weight:500}
+
+/* Modal */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.open{display:flex}
+.modal-box{background:#fff;border-radius:16px;width:100%;max-width:540px;max-height:92vh;overflow-y:auto;padding:24px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.modal-title{font-size:17px;font-weight:700;margin-bottom:18px;color:#1f2937}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:13px}
+.form-field{margin-bottom:13px}
+.pill-group{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.staff-pill{padding:7px 12px;border-radius:20px;font-size:12px;border:1.5px solid #e5e7eb;background:#f9fafb;color:#374151;cursor:pointer;transition:all .1s;font-weight:500}
+.staff-pill.on{background:#3b82f6;color:#fff;border-color:#3b82f6}
+.staff-pill:active{transform:scale(.94)}
+/* Colour/category pills — tinted in their own colour */
+.color-pill{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1.5px solid #e5e7eb;cursor:pointer;transition:all .1s}
+.color-pill:active{transform:scale(.94)}
+.color-pill.on{box-shadow:0 0 0 2px rgba(0,0,0,.08);font-weight:700}
+.color-dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex-shrink:0}
+.modal-actions{display:flex;gap:8px;margin-top:18px}
+.modal-actions .btn{flex:1;padding:12px;font-size:14px}
+
+/* Splash */
+#splash{position:fixed;inset:0;background:#1e3a2e;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity .5s}
+#splash img{width:160px;max-width:55vw;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,.4);margin-bottom:28px;background:#fff;padding:10px}
+#splash .spinner{width:36px;height:36px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .85s linear infinite}
+#splash .splash-text{color:#86efac;font-size:13px;margin-top:14px;letter-spacing:.5px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(max-width:600px){
+  .header{padding:9px 12px}
+  .header-title{font-size:15px}
+  .header-logo{height:32px}
+  .week-label{min-width:0;flex:1;font-size:13px}
+  .modal-box{padding:18px;border-radius:18px 18px 0 0;max-width:100%;max-height:94vh;position:fixed;bottom:0;left:0;right:0}
+  .modal-overlay{align-items:flex-end;padding:0}
+  .form-row{grid-template-columns:1fr}
+  .toolbar{padding:7px 10px;flex-wrap:wrap}
+  .filters{display:flex;gap:6px;width:100%;margin-top:6px}
+  .filters select{flex:1;min-width:0;font-size:12px;padding:8px 8px}
+  .legend{display:none}
+  .btn-sm{padding:7px 11px}
+
+  /* View switching on phone is driven by body classes m-day / m-cal */
+  .desktop-grid{display:none}
+  .mobile-view{display:none}
+  .view-switch{display:flex}
+  body.m-day  .mobile-view{display:flex}
+  body.m-cal  .desktop-grid{display:flex;flex-direction:column;flex:1;min-height:0}
+  /* Calendar mode on phone: scroll both ways; pinch-zoom via transform */
+  body.m-cal .grid-outer{overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;flex:1}
+  body.m-cal #grid-zoom{transform-origin:top left;width:max-content}
+  body.m-cal .grid-table{table-layout:auto;width:max-content;min-width:100%}
+  body.m-cal .grid-table td{min-width:138px;max-width:160px}
+  body.m-cal .grid-table td.farm-td{min-width:auto;width:74px;font-size:10px;padding:8px 6px}
+  body.m-cal .grid-table th{font-size:11px;padding:7px 5px}
+  body.m-cal .task-card{white-space:normal;padding:6px 8px;margin-bottom:4px}
+  body.m-cal .task-card .tc-title{font-size:11.5px;line-height:1.3}
+  body.m-cal .task-card .tc-staff{font-size:9.5px}
+  body.m-cal .add-cell-btn{font-size:10px;padding:4px}
+}
+@media(min-width:601px){
+  .mobile-view{display:none}
+  .view-switch{display:none}
+  .desktop-grid{display:flex;flex-direction:column;flex:1;min-height:0}
+}
+
+/* View switch (segmented control) */
+.view-switch{gap:0;border:1.5px solid #d1d5db;border-radius:9px;overflow:hidden;margin-left:auto}
+.view-switch button{border:none;background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 12px;cursor:pointer}
+.view-switch button.on{background:#1e3a2e;color:#fff}
+
+/* Calendar zoom controls (mobile) */
+.zoom-bar{display:none;gap:6px;align-items:center}
+body.m-cal .zoom-bar{display:flex}
+.zoom-btn{width:30px;height:30px;border-radius:8px;border:1.5px solid #d1d5db;background:#fff;font-size:16px;font-weight:700;line-height:1;cursor:pointer;color:#374151}
+
+/* ---- Mobile day-strip (chips to switch day) ---- */
+.day-strip{display:flex;gap:6px;overflow-x:auto;padding:9px 10px;background:#fff;border-bottom:1px solid #e5e7eb;flex-shrink:0;-webkit-overflow-scrolling:touch}
+.day-chip{flex-shrink:0;min-width:52px;padding:7px 10px;border-radius:12px;border:1.5px solid #e5e7eb;background:#f9fafb;text-align:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.day-chip.on{background:#1e3a2e;border-color:#1e3a2e}
+.day-chip.on .dc-day,.day-chip.on .dc-date{color:#fff}
+.day-chip.done{opacity:.5}
+.dc-day{font-size:12px;font-weight:700;color:#1f2937;line-height:1.2}
+.dc-date{font-size:10px;color:#6b7280;margin-top:1px}
+.dc-count{display:inline-block;margin-top:3px;font-size:9px;font-weight:700;background:#22c55e;color:#fff;border-radius:8px;padding:1px 5px}
+.day-chip.on .dc-count{background:#fff;color:#1e3a2e}
+
+/* ---- Mobile day body ---- */
+.mobile-view{flex-direction:column;flex:1;min-height:0;overflow:hidden}
+.mday-scroll{flex:1;overflow-y:auto;padding:10px 10px 80px;-webkit-overflow-scrolling:touch}
+.mfarm-group{margin-bottom:14px}
+.mfarm-head{display:flex;align-items:center;gap:7px;margin-bottom:7px}
+.mfarm-name{font-size:12px;font-weight:800;color:#15803d;text-transform:uppercase;letter-spacing:.4px}
+.mfarm-line{flex:1;height:1px;background:#d1fae5}
+.mfarm-empty{font-size:12px;color:#9ca3af;font-style:italic;padding:2px 2px 6px}
+.m-add-btn{width:100%;padding:10px;border:1.5px dashed #cbd5e1;border-radius:11px;background:#fff;font-size:13px;color:#64748b;cursor:pointer;font-weight:600;margin-top:2px}
+.m-add-btn:active{transform:scale(.99)}
+
+/* Floating add button (admin, mobile) */
+.fab{position:fixed;bottom:18px;right:16px;width:54px;height:54px;border-radius:50%;background:#16a34a;color:#fff;border:none;font-size:28px;line-height:1;box-shadow:0 6px 18px rgba(22,163,74,.45);cursor:pointer;z-index:100;display:none}
+@media(max-width:600px){ .fab.show{display:flex;align-items:center;justify-content:center} }
+
+/* ---- Task detail modal big done button ---- */
+.detail-done-btn{width:100%;padding:15px;border-radius:13px;border:2px solid #16a34a;background:#fff;color:#16a34a;font-size:16px;font-weight:800;cursor:pointer;-webkit-tap-highlight-color:transparent;margin-top:6px}
+.detail-done-btn.on{background:#16a34a;color:#fff}
+.detail-done-btn:active{transform:scale(.98)}
+.detail-meta{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.detail-chip{font-size:12px;padding:4px 11px;border-radius:14px;font-weight:600}
+.detail-notes{background:#f9fafb;border:1px solid #e5e7eb;border-radius:11px;padding:12px;font-size:14px;line-height:1.5;color:#374151;margin-top:10px;white-space:pre-wrap}
+
+/* Mobile task card tweaks: smaller inline done, whole card tappable */
+.task-card.tappable{cursor:pointer}
+.tc-done-mini{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:50%;border:1.5px solid #16a34a;background:#fff;color:#16a34a;font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.tc-done-mini.on{background:#16a34a;color:#fff}
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <img style="display:none" alt="Kurra-Wirra"/>
+  <div class="spinner"></div>
+  <div class="splash-text">Loading your farm planner…</div>
+</div>
+
+<div class="app" id="app" style="visibility:hidden">
+
+  <div class="header">
+    <div class="header-left">
+      <img class="header-logo" style="display:none" alt="KW"/>
+      <div>
+        <div class="header-title">Farm Weekly Planner</div>
+        <div class="header-sub">Kurra-Wirra &amp; Properties</div>
+      </div>
+      <span class="pub-badge" id="pub-badge" style="display:none">Published</span>
+    </div>
+    <div class="header-right" id="header-btns"></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="week-nav">
+      <button class="nav-btn" onclick="prevWeek()">&#8249;</button>
+      <span class="week-label" id="week-label"></span>
+      <button class="nav-btn" onclick="nextWeek()">&#8250;</button>
+      <button class="btn btn-sm" style="color:#6b7280" onclick="goToday()">Today</button>
+    </div>
+    <div class="view-switch" id="view-switch">
+      <button id="vs-day" onclick="setMobileView('day')">Day</button>
+      <button id="vs-cal" onclick="setMobileView('cal')">Week</button>
+    </div>
+    <div class="filters">
+      <select id="farm-filter" onchange="applyFilters()"></select>
+      <select id="staff-filter" onchange="applyFilters()"></select>
+    </div>
+  </div>
+
+  <div class="optionsbar" id="optionsbar"></div>
+
+  <div class="notice" id="notice" style="display:none">🚧 The schedule is being updated — please check back shortly.</div>
+
+  <!-- Desktop: full weekly grid -->
+  <div class="desktop-grid" id="desktop-grid">
+    <div class="grid-outer" id="grid-outer">
+      <div id="grid-zoom">
+        <table class="grid-table" id="grid-table">
+          <thead id="grid-head"></thead>
+          <tbody id="grid-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <!-- Mobile: one day at a time -->
+  <div class="mobile-view" id="mobile-view">
+    <div class="day-strip" id="day-strip"></div>
+    <div class="mday-scroll" id="mday-scroll"></div>
+  </div>
+
+  <button class="fab" id="fab" onclick="openAddTask(null, DAYS[mobileDay])">＋</button>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box" id="modal-box">
+    <div id="modal-inner"></div>
+  </div>
+</div>
+
+<script>
+
+/* ── KW Farm App integration ─────────────────────────────────────────────
+   When embedded as an iframe in the farm app, the parent passes the API
+   base URL and auth token via postMessage so this file can authenticate.
+   When opened standalone (e.g. direct URL), it falls back to same-origin.
+─────────────────────────────────────────────────────────────────────────── */
+let KW_API_BASE = "";   // e.g. "https://kw-farm-api.onrender.com"
+let KW_AUTH_TOKEN = ""; // JWT from the farm app login
+
+function kwFetch(path, opts = {}) {
+  const url = KW_API_BASE ? KW_API_BASE + path : path;
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (KW_AUTH_TOKEN) headers["Authorization"] = "Bearer " + KW_AUTH_TOKEN;
+  return fetch(url, { ...opts, headers });
+}
+
+// Listen for credentials from the parent farm app iframe
+window.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "KW_INIT") {
+    KW_API_BASE = e.data.apiBase || "";
+    KW_AUTH_TOKEN = e.data.token || "";
+    if (KW_AUTH_TOKEN) {
+      isAdmin = e.data.role !== "Worker";
+    }
+    // Mark body as embedded so CSS can add bottom padding for the host app's nav bar
+    document.body.classList.add("embedded");
+    loadState().then(() => render());
+  }
+});
+
+// Tell the parent we are ready to receive credentials
+window.addEventListener("load", () => {
+  try { window.parent.postMessage({ type: "KW_WORKFLOW_READY" }, "*"); } catch(e) {}
+});
+
+/* =====================================================
+   CONSTANTS
+===================================================== */
+const FARMS  = ["Staff Off-Site","Admin","Kurra-Wirra","Arundale","Mooralla","Hamilton","Carramar"];
+const DAYS   = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const COLORS = [
+  {v:"default", bg:"#f3f4f6", bd:"#9ca3af", tx:"#374151", lb:"Default"},
+  {v:"blue",    bg:"#dbeafe", bd:"#3b82f6", tx:"#1e40af", lb:"Machinery"},
+  {v:"green",   bg:"#dcfce7", bd:"#22c55e", tx:"#15803d", lb:"Livestock"},
+  {v:"red",     bg:"#fee2e2", bd:"#ef4444", tx:"#b91c1c", lb:"Urgent"},
+  {v:"yellow",  bg:"#fef9c3", bd:"#eab308", tx:"#92400e", lb:"General"},
+  {v:"purple",  bg:"#f3e8ff", bd:"#a855f7", tx:"#6b21a8", lb:"Vet/Medical"},
+];
+const DEF_STAFF = ["Simon","Mikaela","Anthony","Rob","Smokes","Jayden","Michael","Blake","Maggie","Abbey","Jai","Tom","Craig","Leemings","Fenton","Bridget"];
+
+/* =====================================================
+   STATE
+===================================================== */
+let tasks     = [];          // admin working draft
+let published = [];          // snapshot staff see (set when admin clicks Publish)
+let staff     = [...DEF_STAFF];
+let prefs     = { hideWeekend: false, hideStaff: false };
+let weekStart = getMonday(new Date());
+let isAdmin   = false;
+let farmFilter  = "All Farms";
+let staffFilter = "";
+let editingId   = null;
+let selStaff    = [];
+let selColor    = "default";
+let selRecur    = "none";
+let showPastDays = false; // staff view: reveal days already finished
+let mobileDay = Math.min(new Date().getDay()===0?6:new Date().getDay()-1, 6); // today's index on phone
+let mobileViewMode = "cal";  // 'day' or 'cal' (week grid) on phones — default to week grid
+let calScale = 1;            // calendar zoom level on phones
+
+/* drag state */
+let dragId = null;
+let _lastSnapshot = "";
+
+/* =====================================================
+   STORAGE  (shared via server API — visible on all devices)
+===================================================== */
+async function loadState() {
+  try {
+    const res = await kwFetch("/api/workflow", { cache: "no-store" });
+    if(res.ok){
+      const d = await res.json();
+      if(d && (d.tasks||d.staff||d.prefs||d.published)){
+        if(d.tasks) tasks=d.tasks;
+        if(d.published) published=d.published;
+        if(d.staff) staff=d.staff;
+        if(d.prefs) prefs={...prefs, ...d.prefs};
+        // Migration: first run on new model with no published snapshot yet —
+        // treat the existing tasks as already published so staff aren't blank.
+        if(!d.published && d.tasks && d.tasks.length){ published = JSON.parse(JSON.stringify(d.tasks)); }
+      }
+    }
+  } catch(e){
+    console.warn("Load failed, trying local cache", e);
+    try {
+      const raw = localStorage.getItem("kwp-workflow-cache");
+      if(raw){ const d=JSON.parse(raw); if(d.tasks) tasks=d.tasks; if(d.published) published=d.published; if(d.staff) staff=d.staff; if(d.prefs) prefs={...prefs, ...d.prefs}; }
+    } catch(_){}
+  }
+}
+
+let _saveTimer = null;
+function saveState() {
+  const payload = {tasks,published,staff,prefs};
+  _lastSnapshot = JSON.stringify(payload);
+  // Keep a local cache as a safety net.
+  try { localStorage.setItem("kwp-workflow-cache", JSON.stringify(payload)); } catch(_){}
+  // Debounce server writes so rapid edits batch into one request.
+  if(_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(()=>{
+    kwFetch("/api/workflow", {
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+    }).catch(e=>console.warn("Save to server failed (kept local copy)", e));
+  }, 400);
+}
+
+/* =====================================================
+   UTILS
+===================================================== */
+function getMonday(d){ const r=new Date(d); r.setHours(0,0,0,0); const dy=r.getDay(); r.setDate(r.getDate()+(dy===0?-6:1-dy)); return r; }
+function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function toISO(d){
+  // Local date (not UTC) — using toISOString() here shifts the day in
+  // Australian timezones and breaks day-boundary logic.
+  const x = new Date(d);
+  const y = x.getFullYear();
+  const m = String(x.getMonth()+1).padStart(2,"0");
+  const day = String(x.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+}
+function fmtDate(d){ return new Date(d).toLocaleDateString("en-AU",{day:"numeric",month:"short"}); }
+function fmtDay(d){ return new Date(d).toLocaleDateString("en-AU",{weekday:"short"}); }
+function colFor(v){ return COLORS.find(c=>c.v===v)||COLORS[0]; }
+function uid(){ return Date.now() + Math.floor(Math.random()*1000); }
+function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+
+/* =====================================================
+   RENDER HELPERS
+===================================================== */
+function weekISO(){ return toISO(weekStart); }
+
+// Admin works on the live draft (tasks); staff see the published snapshot.
+function sourceTasks(){ return isAdmin ? tasks : published; }
+
+function getVisibleTasks(){
+  const ws=weekStart, we=addDays(ws,6);
+  return sourceTasks().filter(t=>{
+    const td=new Date(t.date);
+    if(td<ws||td>we) return false;
+    if(farmFilter!=="All Farms"&&t.farm!==farmFilter) return false;
+    if(staffFilter&&!(t.assignedStaff||[]).includes(staffFilter)) return false;
+    return true;
+  });
+}
+
+// Is a given day index "finished"? Finished = the day is in the past
+// (relative to today) OR every task that day is completed and there is at
+// least one task. Used in staff view to auto-hide done days.
+// A day is "finished" once it's in the past (before today). At local midnight
+// the day that just ended drops off, leaving today + future days.
+function isDayFinished(di){
+  const dayDate = addDays(weekStart, di); dayDate.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  return dayDate < today;
+}
+
+// Which day indices to show as columns, honouring hide-weekend and (staff
+// view only) the auto-hide-finished-days behaviour.
+function visibleDays(){
+  let idxs = [0,1,2,3,4,5,6];
+  if(prefs.hideWeekend) idxs = idxs.filter(i=>i<5);
+  if(!isAdmin && !showPastDays){
+    idxs = idxs.filter(i=>!isDayFinished(i));
+  }
+  return idxs;
+}
+
+function renderHeader(){
+  const dirty = hasUnpublishedChanges();
+  const badge = document.getElementById("pub-badge");
+  if(badge){
+    if(isAdmin){
+      badge.style.display = "inline-flex";
+      badge.textContent = dirty ? "Unpublished changes" : "Published ✓";
+      badge.style.background = dirty ? "#f59e0b" : "#22c55e";
+    } else {
+      badge.style.display = "none";
+    }
+  }
+  const hb = document.getElementById("header-btns");
+  hb.innerHTML = `
+    ${isAdmin?`<button class="btn btn-ghost btn-sm" onclick="openManageStaff()">👥 Staff</button>`:""}
+    ${isAdmin?`<button class="btn btn-green btn-sm" onclick="openAddTask()">＋ Add task</button>`:""}
+    ${isAdmin?`<button class="btn ${dirty?"btn-primary":"btn-ghost"} btn-sm" onclick="publishNow()" ${dirty?"":"style=\"opacity:.6\""}>📢 ${dirty?"Publish to staff":"Published"}</button>`:""}
+    ${isAdmin
+      ?`<button class="btn btn-ghost btn-sm" onclick="doLogout()">🔓 Admin</button>`
+      :`<button class="btn btn-ghost btn-sm" onclick="openLogin()">🔒 Login</button>`}
+  `;
+}
+
+// Has the admin's draft diverged from what staff currently see?
+function hasUnpublishedChanges(){
+  return JSON.stringify(tasks) !== JSON.stringify(published);
+}
+
+// Push the current draft live: staff now see exactly what admin sees.
+function publishNow(){
+  published = JSON.parse(JSON.stringify(tasks));
+  saveState();
+  render();
+  toast("Published — staff can now see the latest schedule.");
+}
+
+// Tiny transient toast.
+function toast(msg){
+  let el = document.getElementById("kwp-toast");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "kwp-toast";
+    el.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e3a2e;color:#fff;padding:11px 18px;border-radius:12px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.3);max-width:90%;text-align:center";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = "1";
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>{ el.style.transition="opacity .4s"; el.style.opacity="0"; }, 2600);
+}
+
+function renderToolbar(){
+  document.getElementById("week-label").textContent = `${fmtDate(weekStart)} – ${fmtDate(addDays(weekStart,6))}`;
+
+  const ff = document.getElementById("farm-filter");
+  const sf = document.getElementById("staff-filter");
+  const fv = ff.value || farmFilter;
+  const sv = sf.value || staffFilter;
+  ff.innerHTML = ["All Farms",...FARMS].map(f=>`<option${f===fv?" selected":""}>${f}</option>`).join("");
+  sf.innerHTML = `<option value="">All Staff</option>`+staff.map(s=>`<option value="${esc(s)}"${s===sv?" selected":""}>${esc(s)}</option>`).join("");
+  // When staff names are hidden, the staff filter is meaningless — hide it.
+  sf.style.display = prefs.hideStaff ? "none" : "";
+}
+
+function renderNotice(){
+  const el = document.getElementById("notice");
+  el.style.display = (!isAdmin && published.length===0) ? "block":"none";
+}
+
+function renderGrid(){
+  const show = isAdmin || published.length>0;
+  const go   = document.getElementById("grid-outer");
+  if(!show){ go.innerHTML=""; return; }
+
+  const vis     = getVisibleTasks();
+  const farms   = farmFilter==="All Farms"?FARMS:[farmFilter];
+  const days    = visibleDays();
+  const thead   = document.getElementById("grid-head");
+  const tbody   = document.getElementById("grid-body");
+
+  thead.innerHTML = `<tr>
+    <th class="farm-th">Farm</th>
+    ${days.map(i=>`<th><div style="font-size:12px">${DAYS[i]}</div><div style="font-size:9px;opacity:.65;font-weight:400;margin-top:2px">${fmtDate(addDays(weekStart,i))}</div></th>`).join("")}
+  </tr>`;
+
+  tbody.innerHTML = "";
+  for(const farm of farms){
+    const tr = document.createElement("tr");
+    // Farm cell
+    const farmTd = document.createElement("td");
+    farmTd.className = "farm-td";
+    farmTd.textContent = farm;
+    tr.appendChild(farmTd);
+
+    for(const di of days){
+      const day = DAYS[di];
+      const td  = document.createElement("td");
+      td.dataset.farm = farm;
+      td.dataset.day  = day;
+
+      // Drop zone events
+      td.addEventListener("dragover",  onCellDragOver);
+      td.addEventListener("dragenter", onCellDragEnter);
+      td.addEventListener("dragleave", onCellDragLeave);
+      td.addEventListener("drop",      onCellDrop);
+
+      const cellTasks = vis.filter(t=>t.farm===farm&&t.day===day);
+      for(const t of cellTasks){
+        td.appendChild(buildCard(t));
+      }
+      if(isAdmin){
+        const ab = document.createElement("button");
+        ab.className="add-cell-btn";
+        ab.textContent="+ Add";
+        ab.onclick = ()=>openAddTask(farm,day);
+        td.appendChild(ab);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+function buildCard(t){
+  const c   = colFor(t.color);
+  const st  = (t.assignedStaff||[]).join(", ");
+  const div = document.createElement("div");
+  div.className = "task-card" + (t.completed ? " done" : "") + (!isAdmin ? " tappable" : "");
+  div.dataset.id = t.id;
+  div.style.cssText = `background:${c.bg};border-left-color:${c.bd}`;
+
+  const noteText = (t.notes||"").trim();
+  const longNote = noteText.length > 40;
+
+  let inner = "";
+
+  // Staff view: small round done toggle in the corner; whole card opens detail.
+  if(!isAdmin){
+    inner += `<button class="tc-done-mini ${t.completed?"on":""}" data-action="done" data-id="${t.id}" title="${t.completed?"Mark not done":"Mark done"}">${t.completed?"✓":""}</button>`;
+  }
+
+  inner += `<div class="tc-title">${esc(t.content)}</div>`;
+  if(st)    inner += `<div class="tc-staff" style="color:${c.tx}">${esc(st)}</div>`;
+  if(t.recur && t.recur!=="none") inner += `<div class="tc-recur" style="font-size:9px;color:#6b7280;margin-top:2px">🔁 ${t.recur==="daily"?"Daily":"Weekly"}</div>`;
+
+  // Notes: short notes show inline; long notes collapse behind a toggle (admin only;
+  // staff get full notes in the tap-to-open detail view).
+  if(noteText){
+    if(isAdmin && longNote){
+      inner += `<button class="tc-notes-toggle" data-action="notes" data-id="${t.id}">📝 Notes ▾</button>
+                <div class="tc-notes tc-notes-full" data-notes-for="${t.id}" style="display:none">${esc(noteText)}</div>`;
+    } else if(isAdmin){
+      inner += `<div class="tc-notes">${esc(noteText)}</div>`;
+    } else if(!longNote){
+      inner += `<div class="tc-notes">${esc(noteText)}</div>`;
+    } else {
+      inner += `<div class="tc-notes">📝 Tap to read notes…</div>`;
+    }
+  }
+
+  // Admin action row (full controls). Staff have no row — they tap to open.
+  if(isAdmin){
+    div.draggable = true;
+    inner += `<div class="tc-actions">
+      <button class="tc-btn" title="${t.completed?"Mark not done":"Mark done"}" data-action="done" data-id="${t.id}" style="color:${t.completed?"#16a34a":"#9ca3af"}">${t.completed?"✓ Done":"○ Done"}</button>
+      <button class="tc-btn" title="Edit" data-action="edit" data-id="${t.id}" style="color:#3b82f6">✎</button>
+      <button class="tc-btn" title="Duplicate" data-action="dup" data-id="${t.id}" style="color:#7c3aed">⧉</button>
+      <button class="tc-btn" title="Delete" data-action="del" data-id="${t.id}" style="color:#ef4444">✕</button>
+    </div>`;
+  }
+
+  div.innerHTML = inner;
+  bindCardEvents(div, t.id);
+  return div;
+}
+
+// Bind all interactive behaviour for a task card (used by both grid and mobile).
+function bindCardEvents(div, id){
+  // Action buttons
+  div.querySelectorAll("[data-action]").forEach(btn=>{
+    btn.addEventListener("click", e=>{
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      if(action==="edit") openEditTask(id);
+      if(action==="dup")  dupTask(id);
+      if(action==="del")  delTask(id);
+      if(action==="done") toggleDone(id);
+      if(action==="notes"){
+        const full = div.querySelector(`[data-notes-for="${id}"]`);
+        if(full){
+          const open = full.style.display !== "none";
+          full.style.display = open ? "none" : "block";
+          btn.textContent = open ? "📝 Notes ▾" : "📝 Notes ▴";
+        }
+      }
+    });
+  });
+
+  // Staff: tapping the card (not the mini done button) opens the detail view.
+  if(!isAdmin){
+    div.addEventListener("click", ()=>openTaskDetail(id));
+  }
+
+  // Drag (admin)
+  if(isAdmin){
+    div.draggable = true;
+    div.addEventListener("dragstart", e=>{
+      dragId = id;
+      setTimeout(()=>div.classList.add("dragging"),0);
+      e.dataTransfer.effectAllowed="move";
+    });
+    div.addEventListener("dragend", ()=>{
+      div.classList.remove("dragging");
+      dragId=null;
+      document.querySelectorAll(".cell-drop-active").forEach(el=>el.classList.remove("cell-drop-active"));
+    });
+  }
+}
+
+/* =====================================================
+   DRAG & DROP
+===================================================== */
+function onCellDragOver(e){ e.preventDefault(); e.dataTransfer.dropEffect="move"; }
+function onCellDragEnter(e){ e.preventDefault(); this.classList.add("cell-drop-active"); }
+function onCellDragLeave(e){ if(!this.contains(e.relatedTarget)) this.classList.remove("cell-drop-active"); }
+function onCellDrop(e){
+  e.preventDefault();
+  this.classList.remove("cell-drop-active");
+  if(dragId===null) return;
+  const farm = this.dataset.farm;
+  const day  = this.dataset.day;
+  const t    = tasks.find(x=>x.id===dragId);
+  if(!t||(!farm&&!day)) return;
+  const di   = DAYS.indexOf(day);
+  t.farm     = farm;
+  t.day      = day;
+  t.date     = toISO(addDays(weekStart,di));
+  saveState();
+  renderGrid();
+}
+
+/* =====================================================
+   LEGEND
+===================================================== */
+function renderLegend(){
+  document.getElementById("legend").innerHTML = COLORS.map(c=>
+    `<span class="leg-pill" style="background:${c.bg};color:${c.tx};border-color:${c.bd}">${c.lb}</span>`
+  ).join("");
+}
+
+/* =====================================================
+   FULL RENDER
+===================================================== */
+function render(){
+  materialiseWeekly();
+  applyMobileViewClass();
+  renderHeader();
+  renderToolbar();
+  renderOptionsBar();
+  renderNotice();
+  renderGrid();
+  renderMobile();
+  renderLegend();
+  applyCalZoom();
+  // Show FAB only for admin on mobile when schedule is editable
+  const fab = document.getElementById("fab");
+  if(fab) fab.classList.toggle("show", isAdmin && mobileViewMode==="day");
+}
+
+/* =====================================================
+   MOBILE: one-day-at-a-time view
+===================================================== */
+function renderMobile(){
+  const show = isAdmin || published.length>0;
+  const strip = document.getElementById("day-strip");
+  const body  = document.getElementById("mday-scroll");
+  if(!show){ strip.innerHTML=""; body.innerHTML=""; return; }
+
+  const days = visibleDays();
+  // Keep mobileDay valid against the visible set.
+  if(!days.includes(mobileDay)) mobileDay = days[0] ?? 0;
+
+  // Day chips
+  strip.innerHTML = days.map(i=>{
+    const dayTasks = getVisibleTasks().filter(t=>t.day===DAYS[i]);
+    const open = dayTasks.filter(t=>!t.completed).length;
+    const finished = isDayFinished(i);
+    return `<div class="day-chip ${i===mobileDay?"on":""} ${finished?"done":""}" onclick="setMobileDay(${i})">
+      <div class="dc-day">${DAYS[i].slice(0,3)}</div>
+      <div class="dc-date">${fmtDate(addDays(weekStart,i))}</div>
+      ${open>0?`<span class="dc-count">${open}</span>`:""}
+    </div>`;
+  }).join("");
+
+  // Day body — tasks grouped by farm
+  const day = DAYS[mobileDay];
+  const farms = farmFilter==="All Farms" ? FARMS : [farmFilter];
+  let html = "";
+  for(const farm of farms){
+    const cellTasks = getVisibleTasks().filter(t=>t.farm===farm && t.day===day);
+    if(cellTasks.length===0 && !isAdmin) continue; // staff: skip empty farms
+    html += `<div class="mfarm-group">
+      <div class="mfarm-head"><span class="mfarm-name">${esc(farm)}</span><span class="mfarm-line"></span></div>`;
+    if(cellTasks.length===0){
+      html += `<div class="mfarm-empty">No tasks</div>`;
+    } else {
+      const holder = document.createElement("div");
+      cellTasks.forEach(t=>holder.appendChild(buildCard(t)));
+      html += holder.innerHTML;
+    }
+    if(isAdmin){
+      html += `<button class="m-add-btn" onclick="openAddTask('${farm.replace(/'/g,"\\'")}','${day}')">＋ Add to ${esc(farm)}</button>`;
+    }
+    html += `</div>`;
+  }
+  if(!html) html = `<div class="mfarm-empty" style="text-align:center;padding:30px">Nothing scheduled for ${day}.</div>`;
+  body.innerHTML = html;
+
+  // Re-bind card actions/clicks (innerHTML above dropped listeners)
+  body.querySelectorAll(".task-card").forEach(card=>{
+    bindCardEvents(card, parseInt(card.dataset.id));
+  });
+}
+
+function setMobileDay(i){ mobileDay=i; renderMobile(); }
+
+// Switch phone layout between single-day and week-grid (calendar) views.
+function setMobileView(mode){
+  mobileViewMode = mode;
+  applyMobileViewClass();
+  render();
+}
+function applyMobileViewClass(){
+  document.body.classList.toggle("m-day", mobileViewMode==="day");
+  document.body.classList.toggle("m-cal", mobileViewMode==="cal");
+  const vd=document.getElementById("vs-day"), vc=document.getElementById("vs-cal");
+  if(vd) vd.classList.toggle("on", mobileViewMode==="day");
+  if(vc) vc.classList.toggle("on", mobileViewMode==="cal");
+}
+// Zoom the week grid on phones by scaling the grid wrapper.
+function calZoom(dir){
+  calScale = Math.min(2.2, Math.max(0.5, calScale + dir*0.15));
+  applyCalZoom();
+}
+function applyCalZoom(){
+  const z = document.getElementById("grid-zoom");
+  if(z) z.style.transform = `scale(${calScale.toFixed(2)})`;
+}
+
+// Pinch-to-zoom on the calendar grid (two-finger).
+let _pinchStartDist = 0, _pinchStartScale = 1;
+function _dist(t){ const dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY; return Math.hypot(dx,dy); }
+function initPinchZoom(){
+  const outer = document.getElementById("grid-outer");
+  if(!outer) return;
+  outer.addEventListener("touchstart", e=>{
+    if(e.touches.length===2){
+      _pinchStartDist = _dist(e.touches);
+      _pinchStartScale = calScale;
+    }
+  }, {passive:true});
+  outer.addEventListener("touchmove", e=>{
+    if(e.touches.length===2 && _pinchStartDist>0){
+      e.preventDefault();
+      const ratio = _dist(e.touches)/_pinchStartDist;
+      calScale = Math.min(2.2, Math.max(0.5, _pinchStartScale*ratio));
+      applyCalZoom();
+    }
+  }, {passive:false});
+  outer.addEventListener("touchend", e=>{
+    if(e.touches.length<2) _pinchStartDist = 0;
+  }, {passive:true});
+}
+
+
+
+
+function renderOptionsBar(){
+  const bar = document.getElementById("optionsbar");
+  // Apply hide-staff body class
+  document.body.classList.toggle("hide-staff", !!prefs.hideStaff);
+
+  if(isAdmin){
+    bar.innerHTML = `
+      <button class="opt-toggle ${prefs.hideWeekend?"on":""}" onclick="toggleHideWeekend()">
+        ${prefs.hideWeekend?"☑":"☐"} Hide weekend
+      </button>
+      <button class="opt-toggle ${prefs.hideStaff?"on":""}" onclick="toggleHideStaff()">
+        ${prefs.hideStaff?"☑":"☐"} Hide staff names
+      </button>
+    `;
+  } else {
+    // Staff view: offer to show/hide finished days
+    bar.innerHTML = `
+      <button class="opt-toggle ${showPastDays?"on":""}" onclick="togglePastDays()">
+        ${showPastDays?"Hide finished days":"Show finished days"}
+      </button>
+    `;
+  }
+}
+
+function toggleHideWeekend(){ prefs.hideWeekend=!prefs.hideWeekend; saveState(); render(); }
+function toggleHideStaff(){ prefs.hideStaff=!prefs.hideStaff; saveState(); render(); }
+function togglePastDays(){ showPastDays=!showPastDays; render(); }
+
+/* =====================================================
+   MODAL
+===================================================== */
+function openModal(html){
+  document.getElementById("modal-inner").innerHTML = html;
+  document.getElementById("modal-overlay").classList.add("open");
+}
+function closeModal(){
+  document.getElementById("modal-overlay").classList.remove("open");
+  document.getElementById("modal-inner").innerHTML = "";
+}
+document.getElementById("modal-overlay").addEventListener("click",function(e){
+  if(e.target===this) closeModal();
+});
+
+/* =====================================================
+   LOGIN
+===================================================== */
+function openLogin(){
+  openModal(`
+    <div class="modal-title">Admin login</div>
+    <div class="form-field">
+      <label>Password</label>
+      <input type="password" id="m-pw" placeholder="Enter password…"/>
+      <div id="m-pw-err" style="color:#ef4444;font-size:12px;margin-top:6px;display:none">Incorrect — try "admin"</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" type="button" id="m-login-btn">Login</button>
+    </div>
+  `);
+  setTimeout(()=>{
+    const pw=document.getElementById("m-pw");
+    if(pw){ pw.focus(); pw.addEventListener("keydown",e=>{ if(e.key==="Enter") doLogin(); }); }
+    const lb=document.getElementById("m-login-btn");
+    if(lb) lb.addEventListener("click", doLogin);
+  },30);
+}
+function doLogin(){
+  const v=(document.getElementById("m-pw")||{}).value||"";
+  if(v==="admin"){ isAdmin=true; closeModal(); render(); }
+  else { const e=document.getElementById("m-pw-err"); if(e) e.style.display="block"; }
+}
+function doLogout(){ isAdmin=false; render(); }
+
+/* =====================================================
+   ADD / EDIT TASK
+===================================================== */
+function openAddTask(farm,day){
+  editingId = null;
+  selStaff  = [];
+  selColor  = "default";
+  selRecur  = "none";
+  _showTaskModal(farm||"Kurra-Wirra", day||"Monday", "","","default",[]);
+}
+function openEditTask(id){
+  const t=tasks.find(x=>x.id===id);
+  if(!t) return;
+  editingId = id;
+  selStaff  = [...(t.assignedStaff||[])];
+  selColor  = t.color||"default";
+  selRecur  = t.recur||"none";
+  _showTaskModal(t.farm,t.day,t.content,t.notes||"",t.color||"default",selStaff);
+}
+function _showTaskModal(farm,day,content,notes,color,assigned){
+  const farmOpts  = FARMS.map(f=>`<option value="${esc(f)}"${farm===f?" selected":""}>${esc(f)}</option>`).join("");
+  const dayOpts   = DAYS.map(d=>`<option${day===d?" selected":""}>${esc(d)}</option>`).join("");
+  const colorPills = COLORS.map(c=>{
+    const on = color===c.v;
+    return `<button type="button" class="color-pill${on?" on":""}" data-color="${c.v}"
+      style="background:${c.bg};border-color:${on?c.bd:"#e5e7eb"};color:${c.tx}">
+      <span class="color-dot" style="background:${c.bd}"></span>${c.lb}
+    </button>`;
+  }).join("");
+  const pills     = staff.map(s=>{
+    const on=assigned.includes(s);
+    return `<button type="button" class="staff-pill${on?" on":""}" data-name="${esc(s)}">${esc(s)}</button>`;
+  }).join("");
+
+  openModal(`
+    <div class="modal-title">${editingId?"Edit task":"Add task"}</div>
+    <div class="form-row">
+      <div><label>Farm</label><select id="m-farm">${farmOpts}</select></div>
+      <div><label>Day</label><select id="m-day">${dayOpts}</select></div>
+    </div>
+    <div class="form-field">
+      <label>Repeat</label>
+      <select id="m-recur">
+        <option value="none"${selRecur==="none"?" selected":""}>Does not repeat</option>
+        <option value="daily"${selRecur==="daily"?" selected":""}>Every day this week</option>
+        <option value="weekdays"${selRecur==="weekdays"?" selected":""}>Weekdays (Mon–Fri)</option>
+        <option value="weekly"${selRecur==="weekly"?" selected":""}>Weekly (same day, ongoing)</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label>Task description *</label>
+      <textarea id="m-content" rows="3" placeholder="What needs doing…">${esc(content)}</textarea>
+    </div>
+    <div class="form-field">
+      <label>Notes (optional)</label>
+      <input type="text" id="m-notes" value="${esc(notes)}" placeholder="Any extra info…"/>
+    </div>
+    <div class="form-field">
+      <label>Colour / category</label>
+      <div class="pill-group" id="m-colors">${colorPills}</div>
+    </div>
+    <div class="form-field">
+      <label>Assign staff</label>
+      <div class="pill-group" id="m-pills">${pills}</div>
+    </div>
+    <div id="m-err" style="color:#ef4444;font-size:12px;margin-bottom:8px;display:none">Please enter a task description.</div>
+    <div class="modal-actions">
+      <button class="btn" type="button" id="m-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="m-save">${editingId?"Save changes":"Add task"}</button>
+    </div>
+  `);
+
+  // Wire buttons AFTER modal is in DOM
+  setTimeout(()=>{
+    const content_el = document.getElementById("m-content");
+    if(content_el) content_el.focus();
+
+    document.getElementById("m-cancel").addEventListener("click", closeModal);
+    document.getElementById("m-save").addEventListener("click", saveTask);
+
+    // Colour pills
+    document.querySelectorAll("#m-colors .color-pill").forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        selColor = btn.dataset.color;
+        document.querySelectorAll("#m-colors .color-pill").forEach(b=>{
+          const c = colFor(b.dataset.color);
+          const on = b.dataset.color===selColor;
+          b.classList.toggle("on", on);
+          b.style.borderColor = on ? c.bd : "#e5e7eb";
+        });
+      });
+    });
+
+    // Staff pills
+    document.querySelectorAll("#m-pills .staff-pill").forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        const name=btn.dataset.name;
+        const idx=selStaff.indexOf(name);
+        if(idx>=0){ selStaff.splice(idx,1); btn.classList.remove("on"); }
+        else { selStaff.push(name); btn.classList.add("on"); }
+        updatePillStyles();
+      });
+    });
+    updatePillStyles();
+  },30);
+}
+function updatePillStyles(){
+  document.querySelectorAll("#m-pills .staff-pill").forEach(btn=>{
+    const on=selStaff.includes(btn.dataset.name);
+    btn.style.background  = on?"#3b82f6":"#f9fafb";
+    btn.style.color       = on?"#fff":"#374151";
+    btn.style.borderColor = on?"#3b82f6":"#e5e7eb";
+  });
+}
+function saveTask(){
+  const farm    = document.getElementById("m-farm").value;
+  const day     = document.getElementById("m-day").value;
+  const content = document.getElementById("m-content").value.trim();
+  const notes   = document.getElementById("m-notes").value.trim()||null;
+  const color   = selColor;
+  const recur   = (document.getElementById("m-recur")||{}).value || "none";
+  if(!content){ document.getElementById("m-err").style.display="block"; return; }
+  const date = toISO(addDays(weekStart, DAYS.indexOf(day)));
+
+  if(editingId){
+    const t=tasks.find(x=>x.id===editingId);
+    if(t) Object.assign(t,{farm,day,content,notes,color,recur,assignedStaff:[...selStaff],date});
+    closeModal(); saveState(); render();
+    return;
+  }
+
+  const base = {farm,content,notes,color,assignedStaff:[...selStaff],completed:false,createdAt:new Date().toISOString()};
+
+  if(recur==="daily" || recur==="weekdays"){
+    // One copy on each relevant day of THIS week, linked by a series id.
+    const series = uid();
+    const dayIdxs = recur==="weekdays" ? [0,1,2,3,4] : [0,1,2,3,4,5,6];
+    dayIdxs.forEach(di=>{
+      tasks.push({...base, id:uid(), series, recur, day:DAYS[di], date:toISO(addDays(weekStart,di))});
+    });
+  } else if(recur==="weekly"){
+    // Single task flagged weekly; it auto-materialises into future weeks.
+    tasks.push({...base, id:uid(), series:uid(), recur:"weekly", weeklyDay:day, day, date});
+  } else {
+    tasks.push({...base, id:uid(), recur:"none", day, date});
+  }
+  closeModal(); saveState(); render();
+}
+
+// Materialise weekly-recurring tasks into the current week if missing.
+function materialiseWeekly(){
+  if(!isAdmin) return;  // staff never mutate the draft
+  const wk = weekISO();
+  let added = false;
+  const weeklyTemplates = tasks.filter(t=>t.recur==="weekly");
+  // Group by series so we only carry the latest definition forward.
+  const seen = {};
+  weeklyTemplates.forEach(t=>{ seen[t.series] = t; });
+  Object.values(seen).forEach(tpl=>{
+    const di = DAYS.indexOf(tpl.weeklyDay||tpl.day);
+    if(di<0) return;
+    const targetDate = toISO(addDays(weekStart,di));
+    // Already a copy of this series in this week?
+    const exists = tasks.some(t=>t.series===tpl.series && t.date===targetDate);
+    if(!exists){
+      tasks.push({
+        farm:tpl.farm, content:tpl.content, notes:tpl.notes, color:tpl.color,
+        assignedStaff:[...(tpl.assignedStaff||[])], completed:false,
+        createdAt:new Date().toISOString(), id:uid(), series:tpl.series,
+        recur:"weekly", weeklyDay:tpl.weeklyDay||tpl.day, day:DAYS[di], date:targetDate,
+      });
+      added = true;
+    }
+  });
+  if(added) saveState();
+}
+
+/* =====================================================
+   TASK ACTIONS
+===================================================== */
+function delTask(id){
+  if(!confirm("Delete this task?")) return;
+  tasks=tasks.filter(t=>t.id!==id); saveState(); render();
+}
+function dupTask(id){
+  const t=tasks.find(x=>x.id===id);
+  if(!t){ return; }
+  tasks.push({...t,id:uid(),createdAt:new Date().toISOString()});
+  saveState(); render();
+}
+function toggleDone(id){
+  const t=sourceTasks().find(x=>x.id===id);
+  if(t){ t.completed=!t.completed; saveState(); render(); }
+}
+
+/* =====================================================
+   TASK DETAIL (staff tap-to-open)
+===================================================== */
+function openTaskDetail(id){
+  const t=sourceTasks().find(x=>x.id===id);
+  if(!t) return;
+  const c  = colFor(t.color);
+  const st = (t.assignedStaff||[]).join(", ");
+  const noteText = (t.notes||"").trim();
+  openModal(`
+    <div class="modal-title" style="padding-right:30px">${esc(t.content)}</div>
+    <div class="detail-meta">
+      <span class="detail-chip" style="background:${c.bg};color:${c.tx}">${c.lb}</span>
+      <span class="detail-chip" style="background:#eef2ff;color:#3730a3">${esc(t.farm)}</span>
+      <span class="detail-chip" style="background:#f1f5f9;color:#334155">${esc(t.day)}</span>
+      ${t.recur&&t.recur!=="none"?`<span class="detail-chip" style="background:#fef3c7;color:#92400e">🔁 ${t.recur==="daily"?"Daily":"Weekly"}</span>`:""}
+    </div>
+    ${st?`<div style="font-size:13px;color:#4b5563;margin-bottom:4px"><strong>Who:</strong> ${esc(st)}</div>`:""}
+    ${noteText?`<div class="detail-notes">${esc(noteText)}</div>`:`<div style="font-size:13px;color:#9ca3af;font-style:italic;margin-top:6px">No extra notes.</div>`}
+    <button class="detail-done-btn ${t.completed?"on":""}" id="d-done">${t.completed?"✓ Completed — tap to undo":"Mark complete"}</button>
+    <button class="btn" type="button" id="d-close" style="width:100%;margin-top:8px;padding:12px">Close</button>
+  `);
+  setTimeout(()=>{
+    const dd=document.getElementById("d-done");
+    if(dd) dd.addEventListener("click",()=>{ toggleDone(id); closeModal(); });
+    const dc=document.getElementById("d-close");
+    if(dc) dc.addEventListener("click", closeModal);
+  },30);
+}
+
+
+/* =====================================================
+   MANAGE STAFF
+===================================================== */
+function openManageStaff(){ _renderStaffModal(); }
+function _renderStaffModal(){
+  const list=staff.map(s=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 13px;background:#f9fafb;border-radius:9px;margin-bottom:7px">
+      <span style="font-size:14px">${esc(s)}</span>
+      <button data-rmstaff="${esc(s)}" style="background:none;border:none;cursor:pointer;color:#ef4444;font-size:22px;line-height:1;padding:2px 6px">×</button>
+    </div>`).join("");
+  openModal(`
+    <div class="modal-title">Manage staff</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input type="text" id="m-newstaff" placeholder="New staff name…" style="flex:1"/>
+      <button class="btn btn-primary" type="button" id="m-addstaff-btn" style="flex-shrink:0;white-space:nowrap">Add</button>
+    </div>
+    <div style="max-height:350px;overflow-y:auto">${list}</div>
+    <button class="btn" type="button" id="m-staff-done" style="width:100%;margin-top:12px;padding:12px">Done</button>
+  `);
+  setTimeout(()=>{
+    const inp=document.getElementById("m-newstaff"); if(inp) inp.focus();
+    document.getElementById("m-addstaff-btn").addEventListener("click",addStaff);
+    document.getElementById("m-staff-done").addEventListener("click",closeModal);
+    document.getElementById("m-newstaff").addEventListener("keydown",e=>{ if(e.key==="Enter") addStaff(); });
+    document.querySelectorAll("[data-rmstaff]").forEach(btn=>{
+      btn.addEventListener("click",()=>{ removeStaff(btn.dataset.rmstaff); });
+    });
+  },30);
+}
+function addStaff(){
+  const v=(document.getElementById("m-newstaff")||{}).value||""; const n=v.trim();
+  if(!n||staff.includes(n)) return;
+  staff.push(n); saveState(); _renderStaffModal();
+}
+function removeStaff(name){ staff=staff.filter(s=>s!==name); saveState(); _renderStaffModal(); }
+
+/* =====================================================
+   WEEK NAV / FILTERS
+===================================================== */
+function prevWeek()   { weekStart=addDays(weekStart,-7); render(); }
+function nextWeek()   { weekStart=addDays(weekStart, 7); render(); }
+function goToday()    { weekStart=getMonday(new Date()); render(); }
+function applyFilters(){ farmFilter=document.getElementById("farm-filter").value; staffFilter=document.getElementById("staff-filter").value; render(); }
+
+/* =====================================================
+   BOOT
+===================================================== */
+loadState().then(()=>{
+  document.getElementById("app").style.visibility="visible";
+  render();
+  initPinchZoom();
+  const splash=document.getElementById("splash");
+  if(splash){ splash.style.opacity="0"; setTimeout(()=>splash.remove(),500); }
+  startAutoRefresh();
+});
+
+// Poll the server so changes made on other devices show up automatically.
+function startAutoRefresh(){
+  _lastSnapshot = JSON.stringify({tasks,published,staff,prefs});
+  setInterval(async ()=>{
+    // Don't disrupt the user mid-edit.
+    const modalOpen = document.getElementById("modal-overlay").classList.contains("open");
+    if(modalOpen || dragId!==null) return;
+    try {
+      const res = await kwFetch("/api/workflow", { cache:"no-store" });
+      if(!res.ok) return;
+      const d = await res.json();
+      const snap = JSON.stringify({tasks:d.tasks||[],published:d.published||[],staff:d.staff||staff,prefs:d.prefs||prefs});
+      if(snap !== _lastSnapshot){
+        if(d.tasks) tasks=d.tasks;
+        if(d.published) published=d.published;
+        if(d.staff) staff=d.staff;
+        if(d.prefs) prefs={...prefs, ...d.prefs};
+        _lastSnapshot = snap;
+        render();
+      }
+    } catch(_){}
+  }, 30000);
+}
+</script>
+</body>
+</html>
