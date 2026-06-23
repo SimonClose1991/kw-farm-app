@@ -62,6 +62,7 @@ body.hide-staff .task-card .tc-staff{display:none}
 
 /* ── Grid ── */
 .grid-outer{flex:1;overflow:auto;position:relative}
+#grid-zoom{min-width:100%;transform-origin:top left}
 .grid-table{border-collapse:collapse;width:100%;table-layout:fixed}
 .grid-table th{position:sticky;top:0;z-index:10;background:#1c1917;color:#e7e5e4;font-size:10px;font-weight:600;padding:9px 6px;text-align:center;border:1px solid rgba(255,255,255,.07);white-space:nowrap;letter-spacing:.4px;text-transform:uppercase}
 .grid-table th.farm-th{text-align:left;padding-left:12px;width:115px;position:sticky;left:0;z-index:20;background:#1c1917}
@@ -69,7 +70,7 @@ body.hide-staff .task-card .tc-staff{display:none}
 .grid-table td.farm-td{position:sticky;left:0;z-index:5;background:#fafaf9;font-size:11px;font-weight:700;color:#57534e;padding:10px 12px;vertical-align:middle;white-space:nowrap;border-right:2px solid #e7e5e4;width:115px;letter-spacing:.01em}
 
 /* ── Task card ── */
-.task-card{border-radius:8px;padding:7px 9px;margin-bottom:4px;position:relative;border-left:4px solid #d4d4d4;border:1.5px solid #f5f5f4;border-left-width:4px;cursor:grab;user-select:none;transition:box-shadow .12s,opacity .12s,transform .1s;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.task-card{border-radius:8px;padding:7px 36px 7px 9px;margin-bottom:4px;position:relative;border-left:4px solid #d4d4d4;border:1.5px solid #f5f5f4;border-left-width:4px;cursor:pointer;user-select:none;transition:box-shadow .12s,opacity .12s,transform .1s;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .task-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .task-card:active{cursor:grabbing}
 .task-card.dragging{opacity:.35;box-shadow:0 8px 24px rgba(0,0,0,.18);transform:scale(1.02)}
@@ -79,10 +80,10 @@ body.hide-staff .task-card .tc-staff{display:none}
 .task-card .tc-notes{font-size:10px;color:#a8a29e;margin-top:2px;font-style:italic;line-height:1.4}
 .task-card .tc-notes-toggle{background:none;border:none;padding:2px 0;margin-top:3px;font-size:10px;color:#d97706;cursor:pointer;font-weight:600}
 .task-card .tc-notes-full{background:rgba(0,0,0,.03);border-radius:7px;padding:6px 8px;margin-top:4px;font-style:normal;font-size:10px;color:#57534e}
-.task-card .tc-actions{display:flex;gap:0;margin-top:5px;padding-top:4px;border-top:1px solid rgba(0,0,0,.06);align-items:center}
-.tc-drag-handle{display:none;padding:4px 8px 4px 4px;cursor:grab;color:#c4b5a5;font-size:18px;line-height:1;touch-action:none;user-select:none;-webkit-user-select:none;flex-shrink:0}
-.tc-drag-handle:active{cursor:grabbing;color:#a8a29e}
-@media(max-width:600px){ .tc-drag-handle{display:flex;align-items:center} }
+.task-card .tc-actions{display:none}
+.tc-drag-handle{position:absolute;top:0;right:0;bottom:0;width:28px;display:flex;align-items:center;justify-content:center;cursor:grab;color:#d4c8c0;font-size:15px;touch-action:none;user-select:none;-webkit-user-select:none;border-left:1px solid rgba(0,0,0,.06);border-radius:0 8px 8px 0;background:rgba(0,0,0,.02)}
+.tc-drag-handle:hover{background:rgba(0,0,0,.05);color:#a8a29e}
+.tc-drag-handle:active{cursor:grabbing}
 .tc-btn{background:none;border:none;padding:3px 6px;border-radius:5px;font-size:11px;cursor:pointer;line-height:1;color:#a8a29e;transition:all .1s}
 .tc-btn:hover{background:rgba(0,0,0,.06);color:#57534e}
 .task-card.done{opacity:.65}
@@ -544,69 +545,63 @@ function buildCard(t){
   const c=colFor(t.color);
   const st=(t.assignedStaff||[]).map(n=>displayName(n)).join(", ");
   const div=document.createElement("div");
-  div.className="task-card"+(t.completed?" done":"")+(!isAdmin?" tappable":"");
+  div.className="task-card"+(t.completed?" done":"");
   div.dataset.id=t.id;
   div.style.cssText=`background:${c.bg};border-left-color:${c.bd}`;
-  const noteText=(t.notes||"").trim(), longNote=noteText.length>40;
   let inner="";
-  if(!isAdmin) inner+=`<button class="tc-done-mini ${t.completed?"on":""}" data-action="done" data-id="${t.id}">${t.completed?"✓":""}</button>`;
-  inner+=`<div class="tc-title">${esc(t.content)}</div>`;
-  if(st) inner+=`<div class="tc-staff" style="color:${c.tx}">${esc(st)}</div>`;
-  if(t.recur&&t.recur!=="none") inner+=`<div style="font-size:9px;color:#a8a29e;margin-top:2px">🔁 ${t.recur==="daily"?"Daily":"Weekly"}</div>`;
-  if(noteText){
-    if(isAdmin&&longNote){
-      inner+=`<button class="tc-notes-toggle" data-action="notes" data-id="${t.id}">📝 Notes ▾</button><div class="tc-notes tc-notes-full" data-notes-for="${t.id}" style="display:none">${esc(noteText)}</div>`;
-    } else if(isAdmin){
-      inner+=`<div class="tc-notes">${esc(noteText)}</div>`;
-    } else if(!longNote){
-      inner+=`<div class="tc-notes">${esc(noteText)}</div>`;
-    } else {
-      inner+=`<div class="tc-notes">📝 Tap to read notes…</div>`;
-    }
-  }
-  if(isAdmin){
-    div.draggable=true;
-    inner+=`<div class="tc-actions">
-      <button class="tc-btn" data-action="done" data-id="${t.id}" title="${t.completed?"Undo":"Done"}" style="color:${t.completed?"#15803d":"#c4b5a5"}">${t.completed?"✓":"○"} Done</button>
-      <button class="tc-btn" data-action="edit" data-id="${t.id}" title="Edit" style="color:#3b82f6">✎</button>
-      <button class="tc-btn" data-action="dup"  data-id="${t.id}" title="Duplicate" style="color:#7c3aed">⧉</button>
-      <button class="tc-btn" data-action="del"  data-id="${t.id}" title="Delete" style="color:#ef4444">✕</button>
-      <span class="tc-drag-handle" data-drag="${t.id}" title="Drag to move">⠿</span>
-    </div>`;
+  if(!isAdmin){
+    // Staff view: done toggle in corner, tap card for detail
+    inner+=`<button class="tc-done-mini ${t.completed?"on":""}" data-action="done" data-id="${t.id}">${t.completed?"✓":""}</button>`;
+    inner+=`<div class="tc-title">${esc(t.content)}</div>`;
+    if(st) inner+=`<div class="tc-staff" style="color:${c.tx}">${esc(st)}</div>`;
+    if(t.recur&&t.recur!=="none") inner+=`<div style="font-size:9px;color:#a8a29e;margin-top:2px">🔁 ${t.recur==="daily"?"Daily":"Weekly"}</div>`;
+    const noteText=(t.notes||"").trim();
+    if(noteText&&noteText.length<=40) inner+=`<div class="tc-notes">${esc(noteText)}</div>`;
+    else if(noteText) inner+=`<div class="tc-notes">📝 Tap to read notes…</div>`;
+  } else {
+    // Admin view: just title + staff + drag handle. Click opens edit modal.
+    inner+=`<div class="tc-title" style="${t.completed?"text-decoration:line-through;opacity:.5":""}">${esc(t.content)}</div>`;
+    if(st) inner+=`<div class="tc-staff" style="color:${c.tx}">${esc(st)}</div>`;
+    if(t.recur&&t.recur!=="none") inner+=`<div style="font-size:9px;color:#a8a29e;margin-top:2px">🔁 ${t.recur==="daily"?"Daily":"Weekly"}</div>`;
+    // Drag handle — always visible, triggers drag
+    inner+=`<span class="tc-drag-handle" data-drag="${t.id}" title="Drag to reorder / move day">⠇</span>`;
   }
   div.innerHTML=inner;
   bindCardEvents(div, t.id);
   return div;
 }
 function bindCardEvents(div, id){
-  div.querySelectorAll("[data-action]").forEach(btn=>{
-    btn.addEventListener("click", e=>{
-      e.stopPropagation();
-      const a=btn.dataset.action;
-      if(a==="edit") openEditTask(id);
-      if(a==="dup")  dupTask(id);
-      if(a==="del")  delTask(id);
-      if(a==="done") toggleDone(id);
-      if(a==="notes"){
-        const full=div.querySelector(`[data-notes-for="${id}"]`);
-        if(full){ const open=full.style.display!=="none"; full.style.display=open?"none":"block"; btn.textContent=open?"📝 Notes ▾":"📝 Notes ▴"; }
-      }
-    });
+  // Staff done-mini button
+  div.querySelectorAll("[data-action='done']").forEach(btn=>{
+    btn.addEventListener("click", e=>{ e.stopPropagation(); toggleDone(id); });
   });
-  if(!isAdmin) div.addEventListener("click",()=>openTaskDetail(id));
-  if(isAdmin){
-    div.draggable=true;
-    div.addEventListener("dragstart",e=>{ dragId=id; setTimeout(()=>div.classList.add("dragging"),0); e.dataTransfer.effectAllowed="move"; });
-    div.addEventListener("dragend",()=>{
-      div.classList.remove("dragging"); dragId=null; dragOverId=null;
-      document.querySelectorAll(".cell-drop-active,.drag-over-card").forEach(el=>el.classList.remove("cell-drop-active","drag-over-card"));
+  if(!isAdmin){
+    div.addEventListener("click",()=>openTaskDetail(id));
+  } else {
+    // Admin: tap card body to open edit modal (not when touching drag handle)
+    div.addEventListener("click", e=>{
+      if(e.target.closest(".tc-drag-handle")) return;
+      openEditTask(id);
     });
-    div.addEventListener("dragover",e=>{
-      e.preventDefault(); e.stopPropagation(); dragOverId=id;
-      document.querySelectorAll(".drag-over-card").forEach(el=>el.classList.remove("drag-over-card"));
-      div.classList.add("drag-over-card");
-    });
-    div.addEventListener("dragleave",e=>{ if(!div.contains(e.relatedTarget)){ div.classList.remove("drag-over-card"); if(dragOverId===id) dragOverId=null; } });
+    // Desktop drag — only starts when dragging from the handle
+    const handle = div.querySelector(".tc-drag-handle");
+    if(handle){
+      div.draggable=false; // disabled by default
+      handle.addEventListener("mousedown", ()=>{ div.draggable=true; });
+      div.addEventListener("dragstart", e=>{ dragId=id; setTimeout(()=>div.classList.add("dragging"),0); e.dataTransfer.effectAllowed="move"; });
+      div.addEventListener("dragend", ()=>{
+        div.draggable=false; div.classList.remove("dragging"); dragId=null; dragOverId=null;
+        document.querySelectorAll(".cell-drop-active,.drag-over-card").forEach(el=>el.classList.remove("cell-drop-active","drag-over-card"));
+      });
+      div.addEventListener("dragover", e=>{
+        e.preventDefault(); e.stopPropagation(); dragOverId=id;
+        document.querySelectorAll(".drag-over-card").forEach(el=>el.classList.remove("drag-over-card"));
+        div.classList.add("drag-over-card");
+      });
+      div.addEventListener("dragleave", e=>{
+        if(!div.contains(e.relatedTarget)){ div.classList.remove("drag-over-card"); if(dragOverId===id) dragOverId=null; }
+      });
+    }
   }
 }
 
@@ -709,7 +704,15 @@ function applyMobileViewClass(){
   if(vc) vc.classList.toggle("on",mobileViewMode==="cal");
 }
 function calZoom(dir){ calScale=Math.min(2.2,Math.max(0.5,calScale+dir*0.15)); applyCalZoom(); }
-function applyCalZoom(){ const z=document.getElementById("grid-zoom"); if(z) z.style.transform=`scale(${calScale.toFixed(2)})`; }
+function applyCalZoom(){
+  const z=document.getElementById("grid-zoom"); if(!z) return;
+  z.style.transform=`scale(${calScale.toFixed(2)})`;
+  // sticky position breaks inside a CSS transform context — switch off when zoomed
+  const zoomed = calScale !== 1;
+  document.querySelectorAll(".grid-table th, .grid-table td.farm-td").forEach(el=>{
+    el.style.position = zoomed ? "relative" : "";
+  });
+}
 let _pinchDist=0,_pinchScale=1;
 function _dist(t){ return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY); }
 function initPinchZoom(){
@@ -796,11 +799,20 @@ function _showTaskModal(farm,day,content,notes,color,assigned){
       <button class="btn" type="button" id="m-cancel">Cancel</button>
       <button class="btn btn-primary" type="button" id="m-save">${editingId?"Save changes":"Add task"}</button>
     </div>
+    ${editingId?`<div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn" type="button" id="m-dup" style="flex:1;color:#7c3aed;border-color:#e9d5ff">⧉ Duplicate</button>
+      <button class="btn" type="button" id="m-del" style="flex:1;color:#ef4444;border-color:#fecaca">🗑 Delete</button>
+    </div>`:""}
   `);
   setTimeout(()=>{
     document.getElementById("m-content")?.focus();
     document.getElementById("m-cancel")?.addEventListener("click",closeModal);
     document.getElementById("m-save")?.addEventListener("click",saveTask);
+    document.getElementById("m-dup")?.addEventListener("click",()=>{ closeModal(); dupTask(editingId); });
+    document.getElementById("m-del")?.addEventListener("click",()=>{
+      if(!confirm("Delete this task?")) return;
+      closeModal(); delTask(editingId);
+    });
     document.querySelectorAll("#m-colors .color-pill").forEach(btn=>{
       btn.addEventListener("click",()=>{
         selColor=btn.dataset.color;
