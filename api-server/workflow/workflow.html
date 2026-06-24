@@ -341,6 +341,7 @@ window.addEventListener("message", e=>{
         }catch(_){}
       }
       render();
+      startAutoRefresh();
     });
   }
 });
@@ -451,11 +452,21 @@ function getVisibleTasks(){
     return true;
   });
 }
-function isDayFinished(di){ const d=addDays(weekStart,di); d.setHours(0,0,0,0); const t=new Date(); t.setHours(0,0,0,0); return d<t; }
+function isDayFinished(di){
+  const d=addDays(weekStart,di);
+  d.setHours(0,0,0,0,0);
+  const t=new Date();
+  t.setHours(0,0,0,0,0);
+  return d.getTime() < t.getTime();
+}
 function visibleDays(){
   let idxs=[0,1,2,3,4,5,6];
   if(prefs.hideWeekend) idxs=idxs.filter(i=>i<5);
-  if(!isAdmin&&!showPastDays) idxs=idxs.filter(i=>!isDayFinished(i));
+  if(!isAdmin&&!showPastDays){
+    const filtered=idxs.filter(i=>!isDayFinished(i));
+    // Always show at least today even if filter is aggressive
+    idxs = filtered.length>0 ? filtered : idxs;
+  }
   return idxs;
 }
 function hasUnpublishedChanges(){ return JSON.stringify(tasks)!==JSON.stringify(published); }
@@ -518,6 +529,7 @@ function renderNotice(){
 }
 function renderGrid(){
   const show=isAdmin||(sourceTasks().length>0);
+  console.log("[KW] renderGrid: show="+show+" tasks="+sourceTasks().length+" days="+visibleDays()+" weekStart="+weekStart.toISOString());
   const go=document.getElementById("grid-outer");
   if(!show){ go.innerHTML=""; return; }
   const vis=getVisibleTasks(), farms=farmFilter==="All Farms"?FARMS:[farmFilter], days=visibleDays();
@@ -546,6 +558,11 @@ function renderGrid(){
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
+  }
+  // Ensure grid is scrollable on mobile cal mode
+  if(mobileViewMode==="cal"){
+    const go2=document.getElementById("grid-outer");
+    if(go2) go2.style.display="block";
   }
 }
 function buildCard(t){
@@ -1141,13 +1158,24 @@ function touchMoveToDay(day){
 
 
 /* ── Boot ────────────────────────────────────────────────── */
-loadState().then(()=>{
+// Only auto-boot when NOT embedded (standalone use).
+// When embedded in the app, KW_INIT fires and triggers loadState with proper credentials.
+const isEmbedded = window.self !== window.top;
+if(!isEmbedded){
+  loadState().then(()=>{
+    document.getElementById("app").style.visibility="visible";
+    render(); initPinchZoom(); initTouchDrag();
+    const splash=document.getElementById("splash");
+    if(splash){ splash.style.opacity="0"; setTimeout(()=>splash.remove(),500); }
+    startAutoRefresh();
+  });
+} else {
+  // Show app shell immediately; KW_INIT will call loadState + render
   document.getElementById("app").style.visibility="visible";
-  render(); initPinchZoom(); initTouchDrag();
+  initPinchZoom(); initTouchDrag();
   const splash=document.getElementById("splash");
   if(splash){ splash.style.opacity="0"; setTimeout(()=>splash.remove(),500); }
-  startAutoRefresh();
-});
+}
 function startAutoRefresh(){
   _lastSnapshot=JSON.stringify({tasks,published,staff,prefs});
   setInterval(async()=>{
