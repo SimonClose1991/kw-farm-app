@@ -433,7 +433,11 @@ function colFor(v){ return COLORS.find(c=>c.v===v)||COLORS[0]; }
 function uid(){ return Date.now()+Math.floor(Math.random()*1000); }
 function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
 function weekISO(){ return toISO(weekStart); }
-function sourceTasks(){ return isAdmin?tasks:published; }
+function sourceTasks(){ 
+  if(isAdmin) return tasks;
+  // In view mode, show published snapshot — fall back to tasks if never explicitly published
+  return published.length > 0 ? published : tasks;
+}
 function getVisibleTasks(){
   const ws=weekStart,we=addDays(ws,6);
   return sourceTasks().filter(t=>{
@@ -507,10 +511,10 @@ function renderToolbar(){
   sf.style.display=prefs.hideStaff?"none":"";
 }
 function renderNotice(){
-  document.getElementById("notice").style.display=(!isAdmin&&published.length===0)?"block":"none";
+  document.getElementById("notice").style.display=(!isAdmin&&sourceTasks().length===0)?"block":"none";
 }
 function renderGrid(){
-  const show=isAdmin||published.length>0;
+  const show=isAdmin||(sourceTasks().length>0);
   const go=document.getElementById("grid-outer");
   if(!show){ go.innerHTML=""; return; }
   const vis=getVisibleTasks(), farms=farmFilter==="All Farms"?FARMS:[farmFilter], days=visibleDays();
@@ -650,7 +654,7 @@ function render(){
 
 /* ── Mobile ──────────────────────────────────────────────── */
 function renderMobile(){
-  const show=isAdmin||published.length>0;
+  const show=isAdmin||(sourceTasks().length>0);
   const strip=document.getElementById("day-strip"), body=document.getElementById("mday-scroll");
   if(!show){ strip.innerHTML=""; body.innerHTML=""; return; }
   const days=visibleDays();
