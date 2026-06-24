@@ -453,7 +453,8 @@ function GooglePaddockMap({
   // Accept currentInsightMode and currentPaddockStats as params to avoid stale closures
   const updateLabelForZoom = (g, map, centroid, p, labelMarkerRef, zoom, currentInsightMode, currentPaddockStats) => {
     if (labelMarkerRef.setMap) labelMarkerRef.setMap(null);
-    if (zoom < 11) return null;
+    // No labels when too zoomed out — too crowded
+    if (zoom < 12) return null;
 
     const mode_ = currentInsightMode || insightMode;
     const stats_ = (currentPaddockStats || paddockStats)[p.name] || {};
@@ -465,9 +466,11 @@ function GooglePaddockMap({
       else if (mode_ === "grazed") badge = stats_.daysSinceGrazed != null ? `${stats_.daysSinceGrazed}d ago` : "";
     }
 
+    // zoom 12-13: abbreviated initials only, no badge
+    // zoom 14+: full name + badge
     const nameLine = zoom >= 14 ? p.name : abbrev(p.name);
     const lines = [nameLine, ...(zoom >= 14 && badge ? [badge] : [])];
-    const fontSize = zoom >= 14 ? 13 : 11;
+    const fontSize = zoom >= 14 ? 13 : 10;
     const lineH = fontSize + 4;
     const dpr = window.devicePixelRatio || 1;
 
@@ -516,6 +519,10 @@ function GooglePaddockMap({
       const g = window.google.maps;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
+        // Also clear label markers — no longer stored in overlays
+        if (mapInstanceRef.current.labelMarkers) {
+          Object.values(mapInstanceRef.current.labelMarkers).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
+        }
       }
       const map = new g.Map(mapDivRef.current, {
         center: { lat: center[0], lng: center[1] },
@@ -563,24 +570,33 @@ function GooglePaddockMap({
         polygons[p.name] = poly;
         overlays.push(poly);
 
-        // Initial label at current zoom (always show in paddocks mode)
-        const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, map.getZoom());
-        if (lm) { labelMarkers[p.name] = lm; overlays.push(lm); }
+        // Initial label at current zoom — NOT pushed to overlays array
+        // Labels are managed exclusively via ref.labelMarkers and cleared explicitly on zoom
+        const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, map.getZoom(), insightMode, paddockStats);
+        labelMarkers[p.name] = lm || null;
       });
 
-      // Zoom-aware label update — reads fresh insightMode/paddockStats from ref to avoid stale closure
+      // Zoom-aware label update
       map.addListener("zoom_changed", () => {
         const z = map.getZoom();
-        const freshInsightMode = mapInstanceRef.current?.currentInsightMode || insightMode;
-        const freshPaddockStats = mapInstanceRef.current?.currentPaddockStats || paddockStats;
-        Object.entries(labelMarkers).forEach(([name, lm]) => {
-          if (lm) lm.setMap(null);
-        });
+        const ref = mapInstanceRef.current;
+        const freshInsightMode = ref?.currentInsightMode || insightMode;
+        const freshPaddockStats = ref?.currentPaddockStats || paddockStats;
+        const freshCentroids = ref?.centroids || centroids;
+        // Step 1: remove ALL currently visible label markers
+        const currentLabels = ref?.labelMarkers || labelMarkers;
+        Object.values(currentLabels).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
+        // Step 2: reset the dict
+        const newLabels = {};
+        if (ref) ref.labelMarkers = newLabels;
+        // Step 3: create fresh labels for new zoom level
         paddocks.forEach((p) => {
-          if (!centroids[p.name]) return;
-          const newLm = updateLabelForZoom(g, map, centroids[p.name], p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
-          if (newLm) { labelMarkers[p.name] = newLm; overlays.push(newLm); }
-          else labelMarkers[p.name] = null;
+          const cen = freshCentroids[p.name];
+          if (!cen) return;
+          const newLm = updateLabelForZoom(g, map, cen, p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
+          newLabels[p.name] = newLm || null;
+          // Update closure copy too in case ref isn't set yet
+          labelMarkers[p.name] = newLm || null;
         });
       });
 
@@ -1422,12 +1438,10 @@ function WeatherWidget({ farmName, farmCenters }) {
       let sprayWindow = null;
       if (sprayHours.length >= 2) {
         sprayOk = true;
-        // For today show the actual time window
-        if (i === 0) {
-          const start = Math.min(...sprayHours);
-          const end = Math.max(...sprayHours) + 1;
-          sprayWindow = `${start}:00–${end}:00`;
-        }
+        // Show actual time window for every day in the forecast
+        const start = Math.min(...sprayHours);
+        const end = Math.max(...sprayHours) + 1;
+        sprayWindow = `${start}:00–${end}:00`;
       }
 
       const dirLabels = ["N","NE","E","SE","S","SW","W","NW"];
@@ -1464,7 +1478,7 @@ function WeatherWidget({ farmName, farmCenters }) {
   if (!weather || weather.length === 0) return null;
 
   const today = weather[0];
-  const sprayDaysAhead = weather.slice(1).filter(d => d.sprayOk).length;
+  const sprayDaysAhead = weather.filter(d => d.sprayOk).length;
 
   return (
     <div className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden">
@@ -1531,7 +1545,7 @@ function WeatherWidget({ farmName, farmCenters }) {
                 <div className="flex-shrink-0">
                   {day.sprayOk ? (
                     <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-1 rounded-full whitespace-nowrap">
-                      🌿 {i === 0 && day.sprayWindow ? day.sprayWindow : "Spray OK"}
+                      🌿 {day.sprayWindow || "Spray OK"}
                     </span>
                   ) : (
                     <span className="text-xs text-stone-300 px-2 py-1 rounded-full border border-stone-100 whitespace-nowrap">
@@ -2440,7 +2454,7 @@ export default function App() {
 
   const [tab, setTab] = useState("home");
   const [showMenu, setShowMenu] = useState(false);
-  const pendingMenuAction = React.useRef(null); // tracks which modal to open after menu closes
+  const pendingMenuAction = React.useRef(null); // kept for any legacy references
   const [showPaddockList, setShowPaddockList] = useState(false);
   const [homeFarm, setHomeFarm] = useState(null); // which farm dashboard is open on home screen
   const [dragMobId, setDragMobId] = useState(null);
@@ -2581,6 +2595,14 @@ export default function App() {
   const [showRainfall, setShowRainfall] = useState(false);
   const [rainfall, setRainfall] = useState([]);
   const [rainfallForm, setRainfallForm] = useState({});
+
+  // Auto-close menu when any overlay modal opens — effect fires after state commits
+  // This is the correct fix for inline-function screens where batched setState is unreliable
+  React.useEffect(() => {
+    if (showRainfall || showPaddockList || showRecords || showInsightPicker) {
+      setShowMenu(false);
+    }
+  }, [showRainfall, showPaddockList, showRecords, showInsightPicker]); // eslint-disable-line
   React.useEffect(() => {
     if (!loggedInEmail) return;
     api.listRainfall(farmName).then(setRainfall).catch(() => {});
@@ -2894,27 +2916,6 @@ export default function App() {
   };
 
   // ── Menu pending action effect ──────────────────────────────────────────────
-  // Fires AFTER menu closes. Uses a ref so no stale closure issues.
-  const menuEffectInitialized = React.useRef(false);
-  React.useEffect(() => {
-    // Skip the initial mount (showMenu starts false, pendingMenuAction is null)
-    if (!menuEffectInitialized.current) { menuEffectInitialized.current = true; return; }
-    if (showMenu) return; // menu just opened
-    const action = pendingMenuAction.current;
-    if (!action) return;
-    pendingMenuAction.current = null;
-    if (action === "rainfall") setShowRainfall(true);
-    if (action === "paddocklist") setShowPaddockList(true);
-    if (action === "records") {
-      setShowRecords(true);
-      if (allMobHistory.length === 0) {
-        setRecordsLoading(true);
-        api.listAllMobHistory(farmName)
-          .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
-          .catch(() => setRecordsLoading(false));
-      }
-    }
-  }, [showMenu]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const Header = ({ title, right }) => (
     <div className="bg-white/80 backdrop-blur-md flex items-center justify-between px-5 py-4 sticky top-0 z-10 border-b border-slate-100">
@@ -4881,11 +4882,11 @@ export default function App() {
             </span>
             <ChevronRight size={16} className="text-slate-300" />
           </button>
-          <button data-action="rainfall" onClick={() => { pendingMenuAction.current = "rainfall"; setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => setShowRainfall(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-sky-500"><Droplet size={16} /></div>
             <span className="font-semibold text-slate-700">Rainfall records</span>
           </button>
-          <button data-action="paddocklist" onClick={() => { pendingMenuAction.current = "paddocklist"; setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => setShowPaddockList(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center text-green-600">▦</div>
             <div className="text-left">
               <div className="font-semibold text-slate-700">Paddock list</div>
@@ -4893,7 +4894,15 @@ export default function App() {
             </div>
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
-          <button data-action="records" onClick={() => { pendingMenuAction.current = "records"; setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => {
+            setShowRecords(true);
+            if (allMobHistory.length === 0) {
+              setRecordsLoading(true);
+              api.listAllMobHistory(farmName)
+                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+                .catch(() => setRecordsLoading(false));
+            }
+          }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 text-sm font-bold">📋</div>
             <div className="text-left">
               <div className="font-semibold text-slate-700">Records & Export</div>
