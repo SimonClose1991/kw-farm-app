@@ -36,6 +36,7 @@ const FARMS_DATA = {
 
 const QUICK_ACTIONS = [
   ["Recount", "🔢"], ["WEC", "🔬"],
+  ["Score", "⭐"],
   ["Ent/mgmt group", "🗂️"],
   ["Move", "↕️"], ["Draft/Split", "🔀"],
 ];
@@ -50,7 +51,7 @@ const MOB_ACTIONS = [
   ["Merge", "🔗"],
 ];
 // Actions a "Worker" role is allowed to perform day-to-day
-const WORKER_ACTIONS = ["Treat", "Weigh", "Recount", "WEC", "Death", "Sale"];
+const WORKER_ACTIONS = ["Treat", "Weigh", "Recount", "WEC", "Score", "Death", "Sale"];
 const ROLE_OPTIONS = ["Admin", "Manager", "Worker"];
 
 const BREEDS_DEFAULT = {
@@ -956,6 +957,7 @@ const ACTION_FIELDS = {
     { label: "Late scans / uncertain (head)", type: "number", placeholder: "e.g. 5" },
     { label: "Notes", type: "text", placeholder: "e.g. Scanned by Elders" },
   ],
+  Score: [{ label: "_score_counter", type: "score_counter" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining assessment" }],
   Merge: [{ label: "Merge into mob", type: "select", options: [] }],
   Delete: [],
 };
@@ -2674,6 +2676,7 @@ export default function App() {
     if (name === "Recount") prefill["New head count"] = m.count;
     if (name === "DSE") prefill["DSE rating per head"] = m.dse;
     if (name === "ADG" && m.assumedADG) prefill["Assumed ADG (kg/day)"] = m.assumedADG;
+    if (name === "Score") prefill["_scores"] = []; // fresh counter each time
     setFormValues(prefill);
     setActionForm(name);
   };
@@ -2690,6 +2693,10 @@ export default function App() {
     if (name === "Death" && formValues["Number of deaths"]) patch.count = Math.max(0, mob.count - Number(formValues["Number of deaths"]));
     if (name === "Sale" && formValues["Number sold"]) patch.count = Math.max(0, mob.count - Number(formValues["Number sold"]));
     if (name === "DSE" && formValues["DSE rating per head"]) patch.dse = Number(formValues["DSE rating per head"]);
+    if (name === "Score" && formValues["Average condition score"]) {
+      patch.lastScore = Number(formValues["Average condition score"]);
+      patch.lastScoreDate = formValues["Date"] || todayStr();
+    }
     if (name === "Weigh" && formValues["Average weight (kg)"]) {
       patch.lastWeight = Number(formValues["Average weight (kg)"]);
       patch.lastWeightDate = formValues["Date"] || todayStr();
@@ -2761,10 +2768,16 @@ export default function App() {
     }
 
     // --- History record ---
-    const summary = Object.entries(formValues)
-      .filter(([, v]) => v)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(", ");
+    let summary;
+    if (name === "Score" && formValues["Average condition score"]) {
+      const scores = formValues["_scores"] || [];
+      summary = `Condition score: ${formValues["Average condition score"]}/5.0 (${scores.length} animal${scores.length !== 1 ? "s" : ""} scored${formValues["Notes"] ? " · " + formValues["Notes"] : ""})`;
+    } else {
+      summary = Object.entries(formValues)
+        .filter(([k, v]) => v && !k.startsWith("_")) // skip internal keys like _scores
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ");
+    }
     const historyDate = formValues["Date"] || formValues["Date scanned"] || todayStr();
     setHistory((prev) => {
       const list = prev[mobId] || [];
@@ -4328,6 +4341,77 @@ export default function App() {
     const isDateField = field.type === "date";
     const value = formValues[field.label] ?? (isDateField ? todayStr() : "");
     const onChange = (v) => setFormValues((prev) => ({ ...prev, [field.label]: v }));
+
+    // ── Condition score counter ───────────────────────────────────────────────
+    if (field.type === "score_counter") {
+      const scores = formValues["_scores"] || [];
+      const avg = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+      const SCORE_VALUES = [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
+      const addScore = (s) => {
+        const next = [...scores, s];
+        setFormValues(prev => ({
+          ...prev,
+          "_scores": next,
+          "Average condition score": (next.reduce((a, b) => a + b, 0) / next.length).toFixed(2),
+        }));
+      };
+      const removeLastScore = () => {
+        if (scores.length === 0) return;
+        const next = scores.slice(0, -1);
+        setFormValues(prev => ({
+          ...prev,
+          "_scores": next,
+          "Average condition score": next.length > 0 ? (next.reduce((a, b) => a + b, 0) / next.length).toFixed(2) : "",
+        }));
+      };
+      return (
+        <div>
+          <div className="text-xs text-slate-400 mb-2">Tap a score for each animal — average is calculated automatically</div>
+          {/* Score buttons */}
+          <div className="grid grid-cols-5 gap-1.5 mb-3">
+            {SCORE_VALUES.map(s => (
+              <button key={s} type="button"
+                onClick={() => addScore(s)}
+                className={`rounded-xl py-3 font-bold text-sm border-2 transition-colors ${
+                  s <= 2 ? "border-red-200 bg-red-50 text-red-700 active:bg-red-100" :
+                  s <= 3 ? "border-amber-200 bg-amber-50 text-amber-700 active:bg-amber-100" :
+                  "border-green-200 bg-green-50 text-green-700 active:bg-green-100"
+                }`}
+              >{s}</button>
+            ))}
+          </div>
+          {/* Running tally */}
+          <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold text-slate-500">{scores.length} animal{scores.length !== 1 ? "s" : ""} scored</div>
+              {scores.length > 0 && (
+                <button type="button" onClick={removeLastScore} className="text-xs text-slate-400 hover:text-red-500">← Undo last</button>
+              )}
+            </div>
+            {scores.length > 0 ? (
+              <>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {scores.map((s, i) => (
+                    <span key={i} className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                      s <= 2 ? "bg-red-100 text-red-700" : s <= 3 ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"
+                    }`}>{s}</span>
+                  ))}
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-xs text-slate-400">Average:</span>
+                  <span className={`text-2xl font-bold ${avg <= 2 ? "text-red-600" : avg <= 3 ? "text-amber-600" : "text-green-600"}`}>
+                    {avg?.toFixed(2)}
+                  </span>
+                  <span className="text-xs text-slate-400">/ 5.0</span>
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-slate-300 italic text-center py-1">No scores entered yet</div>
+            )}
+          </div>
+        </div>
+      );
+    }
     if (field.type === "select") {
       let options = field.options;
       if (field.label === "Merge into mob") {
@@ -4436,6 +4520,22 @@ export default function App() {
                     </>
                   ) : (
                     <div className="text-sm text-slate-400 mt-2">Tap to add weight</div>
+                  )}
+                </button>
+                <button onClick={() => openAction("Score")} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 text-left">
+                  <div className="flex justify-between items-start">
+                    <div className="text-xs text-slate-400 font-semibold leading-tight">COND. SCORE</div>
+                    <ChevronRight size={16} className="text-slate-300" />
+                  </div>
+                  {selectedMob.lastScore ? (
+                    <>
+                      <div className={`text-2xl font-extrabold mt-1 ${selectedMob.lastScore <= 2 ? "text-red-600" : selectedMob.lastScore <= 3 ? "text-amber-600" : "text-green-600"}`}>
+                        {selectedMob.lastScore} <span className="text-sm font-medium text-slate-400">/ 5</span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">{selectedMob.lastScoreDate}</div>
+                    </>
+                  ) : (
+                    <div className="text-sm text-slate-400 mt-2">Tap to score</div>
                   )}
                 </button>
                 <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
@@ -4568,7 +4668,7 @@ export default function App() {
               <div className="space-y-3 mb-4">
                 {ACTION_FIELDS[actionForm]?.map((f) => (
                   <div key={f.label}>
-                    <label className="text-sm font-semibold text-slate-600 block mb-1">{f.label}</label>
+                    {f.type !== "score_counter" && <label className="text-sm font-semibold text-slate-600 block mb-1">{f.label}</label>}
                     {renderField(f)}
                   </div>
                 ))}
@@ -4893,6 +4993,7 @@ export default function App() {
           { id: "treatments", label: "Treatments",      action: "Treat"  },
           { id: "scans",      label: "Pregnancy Scans", action: "Scan"   },
           { id: "weights",    label: "Weights",         action: "Weigh"  },
+          { id: "scores",     label: "Cond. Scores",    action: "Score"  },
           { id: "moves",      label: "Mob Moves",       action: "Move"   },
           { id: "spray",      label: "Spray Records",   action: null     },
           { id: "rainfall",   label: "Rainfall",        action: null     },

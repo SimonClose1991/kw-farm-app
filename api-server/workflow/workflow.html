@@ -441,7 +441,10 @@ function sourceTasks(){
 function getVisibleTasks(){
   const ws=weekStart,we=addDays(ws,6);
   return sourceTasks().filter(t=>{
-    const td=new Date(t.date);
+    // Parse date as local (not UTC) to avoid timezone day-boundary errors
+    const parts=(t.date||"").split("-");
+    if(parts.length<3) return false;
+    const td=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
     if(td<ws||td>we) return false;
     if(farmFilter!=="All Farms"&&t.farm!==farmFilter) return false;
     if(staffFilter&&!(t.assignedStaff||[]).includes(staffFilter)) return false;
