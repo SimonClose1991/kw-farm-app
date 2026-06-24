@@ -308,7 +308,7 @@ window.addEventListener("message", e=>{
   if(e.data?.type==="KW_INIT"){
     KW_API_BASE = e.data.apiBase||"";
     KW_AUTH_TOKEN = e.data.token||"";
-    if(KW_AUTH_TOKEN) isAdmin = e.data.role==="Admin";
+    if(KW_AUTH_TOKEN) isAdmin = false; // Always start view-only — unlock via 🔒 button + password
     document.body.classList.add("embedded");
     // Inject logo
     const logoSrc = e.data.logoSrc || "";
@@ -769,7 +769,7 @@ function openLogin(){
 }
 function doLogin(){
   const v=(document.getElementById("m-pw")||{}).value||"";
-  if(v==="KW-Admin-2024!"){ isAdmin=true; closeModal(); render(); }
+  if(v==="admin"){ isAdmin=true; closeModal(); render(); }
   else { const e=document.getElementById("m-pw-err"); if(e) e.style.display="block"; }
 }
 function doLogout(){ isAdmin=false; render(); }
