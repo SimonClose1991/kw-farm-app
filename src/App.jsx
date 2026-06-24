@@ -67,8 +67,8 @@ const AGE_CLASSES = {
   Bulls:  ["Yearling", "Adult"],
   Rams:   ["Lambs", "Hoggets", "Adult"],
 };
-const TAG_COLOURS = ["Red", "Blue", "Green", "Yellow", "Orange", "Pink", "White", "Black"];
-const TAG_COLOUR_HEX = { Red: "#ef4444", Blue: "#3b82f6", Green: "#22c55e", Yellow: "#eab308", Orange: "#f97316", Pink: "#ec4899", White: "#f8fafc", Black: "#1e293b" };
+const TAG_COLOURS = ["Red", "Blue", "Green", "Yellow", "Orange", "Pink", "White", "Black", "Mixed"];
+const TAG_COLOUR_HEX = { Red: "#ef4444", Blue: "#3b82f6", Green: "#22c55e", Yellow: "#eab308", Orange: "#f97316", Pink: "#ec4899", White: "#f8fafc", Black: "#1e293b", Mixed: "#a78bfa" };
 const SPECIES_ICON = { Cattle: "🐄", Sheep: "🐑" };
 const PADDOCKS = ["North", "South", "East", "West", "River", "Yards"];
 const PADDOCK_COLOURS = ["Sky Blue", "Forest Green", "Sunset Orange", "Ruby Red", "Lavender", "Mustard"];
@@ -77,7 +77,7 @@ const LAND_USES = ["Grazing", "Cropping", "Fallow", "Yards/Infrastructure", "Veg
 
 // Land uses excluded from DSE/ha stocking rate calculation
 const NON_GRAZING_LAND_USES = new Set(["Cropping", "Fallow", "Yards/Infrastructure", "Vegetation", "Conservation Zone"]);
-const PASTURE_TYPES = ["Native grass", "Improved pasture", "Lucerne", "Cereal crop", "N/A"];
+const PASTURE_TYPES = ["Native grass", "Improved pasture", "Cereal crop", "Wheat", "Canola", "Summer Crop", "N/A"];
 
 // Landmark categories/types, modelled on the AgriWebb Farm Map Editor feature set
 const LANDMARK_CATEGORIES = {
@@ -269,9 +269,8 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
   if (projectRef) projectRef.current = { project, unproject, W, H };
 
   const colourForPaddock = (p) => {
+    const customColour = COLOUR_HEX[p.colour];
     if (insightMode === "outline") return "none";
-    if (insightMode === "usage") return USAGE_COLOURS[p.landUse] || "#999";
-    if (insightMode === "crop") return COLOUR_HEX[p.colour] || "#999"; // crop/pasture mapped via paddock colour
     if (insightMode === "stocking") {
       const stats = paddockStats[p.name] || {};
       const rate = stats.dsePerHa || 0;
@@ -298,7 +297,8 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
       if (days < 30) return "#eab308";
       return "#ef4444";
     }
-    return COLOUR_HEX[p.colour] || "#999";
+    // Custom colour wins over land-use colour
+    return customColour || USAGE_COLOURS[p.landUse] || "#999";
   };
 
   return (
@@ -415,9 +415,9 @@ function GooglePaddockMap({
   React.useEffect(() => { onSelectPinRef.current = onSelectPin; }, [onSelectPin]);
 
   const colourForPaddock = (p) => {
+    // Custom paddock colour always takes priority if set
+    const customColour = COLOUR_HEX[p.colour];
     if (insightMode === "outline") return null;
-    if (insightMode === "usage") return USAGE_COLOURS[p.landUse] || "#999999";
-    if (insightMode === "crop")  return COLOUR_HEX[p.colour] || "#999999";
     if (insightMode === "stocking") {
       const rate = (paddockStats[p.name] || {}).dsePerHa || 0;
       if (rate === 0) return "#475569";
@@ -441,7 +441,8 @@ function GooglePaddockMap({
       if (days < 30) return "#eab308";
       return "#ef4444";
     }
-    return COLOUR_HEX[p.colour] || "#999999";
+    // Default / usage / crop: custom colour wins, then land-use colour
+    return customColour || USAGE_COLOURS[p.landUse] || "#999999";
   };
 
   // Abbreviate a paddock name for mid-zoom labels: "Squashy Island" → "SI"
@@ -607,17 +608,63 @@ function GooglePaddockMap({
           const totalCount = groupMobs.reduce((s, m) => s + m.count, 0);
           const tagColour = TAG_COLOUR_HEX[groupMobs[0]?.tag] || "#cbd5e1";
           const emoji = species === "Cattle" ? "🐄" : species === "Sheep" ? "🐑" : species === "Rams" ? "🐏" : species === "Bulls" ? "🐂" : "🐾";
+          // Check WHP/ESI status across all mobs in group
+          const today = new Date(); today.setHours(0,0,0,0);
+          let inWhp = false, inEsi = false;
+          groupMobs.forEach(m => {
+            if (!m.lastTreatDate || !m.whpDays) return;
+            const treatDate = new Date(m.lastTreatDate); treatDate.setHours(0,0,0,0);
+            const daysSince = Math.floor((today - treatDate) / 86400000);
+            if (daysSince < (m.whpDays || 0)) inWhp = true;
+            if (daysSince < (m.esiDays || 0)) inEsi = true;
+          });
+          const badges = [inWhp && "W", inEsi && "E"].filter(Boolean).join("/");
+          // Build teardrop marker using canvas so it sits ABOVE paddock labels
+          const canvas = document.createElement("canvas");
+          const dpr = window.devicePixelRatio || 1;
+          const W = 48, H = 58; // teardrop: circle on top, point below
+          canvas.width = W * dpr; canvas.height = H * dpr;
+          const ctx = canvas.getContext("2d");
+          ctx.scale(dpr, dpr);
+          // Teardrop shape
+          ctx.beginPath();
+          ctx.arc(W/2, W/2 - 4, W/2 - 3, Math.PI, 0, false);
+          ctx.bezierCurveTo(W - 3, W/2 + 6, W/2 + 8, H - 4, W/2, H - 2);
+          ctx.bezierCurveTo(W/2 - 8, H - 4, 3, W/2 + 6, 3, W/2 - 4);
+          ctx.closePath();
+          ctx.fillStyle = "#ffffff";
+          ctx.shadowColor = "rgba(0,0,0,0.3)";
+          ctx.shadowBlur = 4;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = tagColour;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          // Species emoji
+          ctx.font = "18px Arial";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(emoji, W/2, W/2 - 6);
+          // Count
+          ctx.font = "bold 10px Arial";
+          ctx.fillStyle = "#1e293b";
+          ctx.fillText(String(totalCount), W/2, W/2 + 9);
+          // W/E badges
+          if (badges) {
+            ctx.fillStyle = inWhp ? "#ef4444" : "#f97316";
+            ctx.font = "bold 8px Arial";
+            ctx.fillText(badges, W/2, W/2 + 20);
+          }
+          const markerSize = new g.Size(W, H);
           const marker = new g.Marker({
-            position: pos, map,
-            label: { text: `${emoji} ${totalCount}`, color: "#1e293b", fontWeight: "bold", fontSize: "12px" },
+            position: { lat: pos.lat + 0.0006, lng: pos.lng }, // offset up so teardrop point is at centroid
+            map,
             icon: {
-              path: g.SymbolPath.CIRCLE,
-              scale: 18,
-              fillColor: "#ffffff",
-              fillOpacity: 1,
-              strokeColor: tagColour,
-              strokeWeight: 3,
+              url: canvas.toDataURL(),
+              scaledSize: markerSize,
+              anchor: new g.Point(W/2, H - 2), // anchor at teardrop point
             },
+            zIndex: 50,
           });
           marker.addListener("click", () => onSelectPin?.({ l: totalCount, mob: groupMobs[0], mobs: groupMobs }));
           // Long-press to trigger move sheet
@@ -819,15 +866,40 @@ function GooglePaddockMap({
       const speciesOffset = species === "Cattle" || species === "Bulls" ? 0 : (species === "Sheep" ? 0.0008 : 0.0004);
       const pos = { lat: base.lat + speciesOffset, lng: base.lng + speciesOffset * 0.5 };
       const totalCount = groupMobs.reduce((s, m) => s + m.count, 0);
+      const tagColour = TAG_COLOUR_HEX[groupMobs[0]?.tag] || "#cbd5e1";
       const emoji = species === "Cattle" ? "🐄" : species === "Sheep" ? "🐑" : species === "Rams" ? "🐏" : species === "Bulls" ? "🐂" : "🐾";
+      // WHP/ESI check
+      const today2 = new Date(); today2.setHours(0,0,0,0);
+      let inWhp2 = false, inEsi2 = false;
+      groupMobs.forEach(m => {
+        if (!m.lastTreatDate || !m.whpDays) return;
+        const td = new Date(m.lastTreatDate); td.setHours(0,0,0,0);
+        const d = Math.floor((today2 - td) / 86400000);
+        if (d < (m.whpDays || 0)) inWhp2 = true;
+        if (d < (m.esiDays || 0)) inEsi2 = true;
+      });
+      const badges2 = [inWhp2 && "W", inEsi2 && "E"].filter(Boolean).join("/");
+      // Teardrop canvas marker
+      const cvs = document.createElement("canvas");
+      const dpr = window.devicePixelRatio || 1;
+      const W = 48, H = 58;
+      cvs.width = W * dpr; cvs.height = H * dpr;
+      const ctx = cvs.getContext("2d");
+      ctx.scale(dpr, dpr);
+      ctx.beginPath();
+      ctx.arc(W/2, W/2 - 4, W/2 - 3, Math.PI, 0, false);
+      ctx.bezierCurveTo(W - 3, W/2 + 6, W/2 + 8, H - 4, W/2, H - 2);
+      ctx.bezierCurveTo(W/2 - 8, H - 4, 3, W/2 + 6, 3, W/2 - 4);
+      ctx.closePath();
+      ctx.fillStyle = "#ffffff"; ctx.shadowColor = "rgba(0,0,0,0.3)"; ctx.shadowBlur = 4; ctx.fill();
+      ctx.shadowBlur = 0; ctx.strokeStyle = tagColour; ctx.lineWidth = 3; ctx.stroke();
+      ctx.font = "18px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#000"; ctx.fillText(emoji, W/2, W/2 - 6);
+      ctx.font = "bold 10px Arial"; ctx.fillStyle = "#1e293b"; ctx.fillText(String(totalCount), W/2, W/2 + 9);
+      if (badges2) { ctx.fillStyle = inWhp2 ? "#ef4444" : "#f97316"; ctx.font = "bold 8px Arial"; ctx.fillText(badges2, W/2, W/2 + 20); }
       const marker = new g.Marker({
-        position: pos, map,
-        label: { text: `${emoji} ${totalCount}`, color: "#1e293b", fontWeight: "bold", fontSize: "12px" },
-        icon: {
-          path: g.SymbolPath.CIRCLE, scale: 22,
-          fillColor: "#fff", fillOpacity: 0.95,
-          strokeColor: "#cbd5e1", strokeWeight: 2,
-        },
+        position: { lat: pos.lat + 0.0006, lng: pos.lng }, map,
+        icon: { url: cvs.toDataURL(), scaledSize: new g.Size(W, H), anchor: new g.Point(W/2, H - 2) },
         zIndex: 50,
       });
       // Click — open mob detail sheet
@@ -846,32 +918,46 @@ function GooglePaddockMap({
     if (ref.renderLandmarks) ref.renderLandmarks(ref.map.getZoom(), openGateIds);
   }, [landmarks, openGateIds]);
 
-  // Separate effect: update polygon fill colors AND labels when insight mode changes
+  // Separate effect: update polygon fill colors AND labels when insight mode OR paddocks change
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
     if (!ref?.polygons || !window.google?.maps) return;
-    // Keep ref up to date so zoom_changed listener gets fresh values
     ref.currentInsightMode = insightMode;
     ref.currentPaddockStats = paddockStats;
-    // Update polygon colours
+    // Clear ALL existing label markers first (prevents stale name labels when paddocks rename)
+    if (ref.labelMarkers) {
+      Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
+      ref.labelMarkers = {};
+    }
+    // Update polygon colours — use ref.polygons keys (which are by paddock name at map-build time)
+    // Match by paddock id if name changed
     paddocks.forEach((p) => {
+      // Try current name first, then search all polygon keys for a matching paddock
       const poly = ref.polygons[p.name];
-      if (!poly) return;
-      const fill = colourForPaddock(p);
-      if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
+      if (poly) {
+        const fill = colourForPaddock(p);
+        if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
+      }
     });
-    // Redraw all labels with fresh insightMode so badge shows correct data
-    if (ref.labelMarkers && ref.map) {
+    // Also update any polygons whose key doesn't match current name (renamed paddocks)
+    Object.keys(ref.polygons).forEach(key => {
+      const p = paddocks.find(x => x.name === key);
+      if (p) {
+        const fill = colourForPaddock(p);
+        if (fill) ref.polygons[key].setOptions({ fillColor: fill, fillOpacity: 0.45 });
+      }
+    });
+    // Redraw all labels with fresh data
+    if (ref.map) {
       const z = ref.map.getZoom();
       const g = window.google.maps;
-      Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
       paddocks.forEach((p) => {
         if (!ref.centroids?.[p.name]) return;
         const newLm = updateLabelForZoom(g, ref.map, ref.centroids[p.name], p, { setMap: () => {} }, z, insightMode, paddockStats);
-        ref.labelMarkers[p.name] = newLm || null;
+        if (ref.labelMarkers) ref.labelMarkers[p.name] = newLm || null;
       });
     }
-  }, [insightMode, paddockStats]);
+  }, [insightMode, paddockStats, paddocks]);
 
   // Separate effect: update draw polygon without rebuilding map
   React.useEffect(() => {
@@ -941,7 +1027,7 @@ const ACTION_FIELDS = {
   "Ent/mgmt group": [{ label: "Management group", type: "text", placeholder: "e.g. Breeders" }],
   Move: [{ label: "Move to paddock", type: "select", options: [] }, { label: "Date", type: "date" }],
   "Draft/Split": [{ label: "Number to split off", type: "number" }, { label: "New mob name", type: "text" }],
-  Treat: [{ label: "Treatment", type: "select", options: [] }, { label: "Dose rate", type: "text" }],
+  Treat: [{ label: "_treatment_picker", type: "treatment_picker" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining" }],
   Weigh: [{ label: "Average weight (kg)", type: "number" }, { label: "Date", type: "date" }],
   ADG: [{ label: "Assumed ADG (kg/day)", type: "number", placeholder: "e.g. 0.2" }],
   Death: [{ label: "Number of deaths", type: "number" }, { label: "Cause", type: "text" }],
@@ -2487,7 +2573,9 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showRecords, setShowRecords] = useState(false);
-  const [recordsType, setRecordsType] = useState("deaths"); // deaths | treatments | scans | spray | rainfall
+  const [recordsType, setRecordsType] = useState("deaths");
+  const [recordsDateFrom, setRecordsDateFrom] = useState("");
+  const [recordsDateTo, setRecordsDateTo] = useState("");
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [allMobHistory, setAllMobHistory] = useState([]); // all mob history across all mobs
   const [showRainfall, setShowRainfall] = useState(false);
@@ -2696,6 +2784,12 @@ export default function App() {
     if (name === "Score" && formValues["Average condition score"]) {
       patch.lastScore = Number(formValues["Average condition score"]);
       patch.lastScoreDate = formValues["Date"] || todayStr();
+    }
+    if (name === "Treat" && formValues["_whpDays"]) {
+      const treatDate = formValues["Date"] || todayStr();
+      patch.lastTreatDate = treatDate;
+      patch.whpDays = Number(formValues["_whpDays"]);
+      patch.esiDays = Number(formValues["_esiDays"] || 0);
     }
     if (name === "Weigh" && formValues["Average weight (kg)"]) {
       patch.lastWeight = Number(formValues["Average weight (kg)"]);
@@ -3921,6 +4015,28 @@ export default function App() {
               📍 {sprayFormPaddock.name} · {sprayFormPaddock.ha} ha
             </div>
           )}
+          {/* Pick from spray inventory first */}
+          {sprayInventory.length > 0 && (
+            <div className="mb-4">
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Select from inventory</label>
+              <select className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
+                onChange={(e) => {
+                  const item = sprayInventory.find(x => String(x.id) === e.target.value);
+                  if (item) setSprayForm(p => ({
+                    ...p,
+                    title: item.title || p.title,
+                    whp: item.whp || p.whp,
+                    esi: item.esi || p.esi,
+                    applicationRate: item.applicationRate || p.applicationRate,
+                    applicationMethod: item.applicationMethod || p.applicationMethod,
+                    batchNumber: item.batchNumber || p.batchNumber,
+                  }));
+                }}>
+                <option value="">— Choose a chemical —</option>
+                {sprayInventory.map(i => <option key={i.id} value={i.id}>{i.title}</option>)}
+              </select>
+            </div>
+          )}
           <div className="space-y-3 mb-4">
             {[
               { key: "treatmentDate", label: "Treatment date *", type: "date" },
@@ -4342,11 +4458,57 @@ export default function App() {
     const value = formValues[field.label] ?? (isDateField ? todayStr() : "");
     const onChange = (v) => setFormValues((prev) => ({ ...prev, [field.label]: v }));
 
-    // ── Condition score counter ───────────────────────────────────────────────
+    // ── Treatment multi-picker ─────────────────────────────────────────────────
+    if (field.type === "treatment_picker") {
+      const inventory = treatmentInventory || [];
+      const selected = formValues["_selectedTreatments"] || [];
+      const toggle = (item) => {
+        const already = selected.find(x => x.id === item.id);
+        const next = already ? selected.filter(x => x.id !== item.id) : [...selected, item];
+        setFormValues(prev => ({
+          ...prev,
+          "_selectedTreatments": next,
+          "Treatment": next.map(x => x.title).join(", "),
+          "_whpDays": Math.max(0, ...next.map(x => Number(x.whp) || 0)),
+          "_esiDays": Math.max(0, ...next.map(x => Number(x.esi) || 0)),
+        }));
+      };
+      return (
+        <div>
+          <div className="text-xs text-slate-400 mb-2">Select one or more treatments from inventory — tap to toggle</div>
+          {inventory.length === 0 && <div className="text-sm text-slate-400 italic">No treatments in inventory yet</div>}
+          <div className="space-y-2 max-h-52 overflow-y-auto">
+            {inventory.map(item => {
+              const on = selected.find(x => x.id === item.id);
+              return (
+                <button key={item.id} type="button" onClick={() => toggle(item)}
+                  className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 border-2 text-left transition-colors ${on ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"}`}>
+                  <div>
+                    <div className={`text-sm font-semibold ${on ? "text-amber-800" : "text-slate-700"}`}>{item.title}</div>
+                    <div className="text-xs text-slate-400">{[item.whp && `WHP ${item.whp}d`, item.esi && `ESI ${item.esi}d`].filter(Boolean).join(" · ")}</div>
+                  </div>
+                  {on && <span className="text-amber-500 font-bold text-lg">✓</span>}
+                </button>
+              );
+            })}
+          </div>
+          {selected.length > 0 && (
+            <div className="mt-3 bg-slate-50 rounded-xl p-3 text-xs text-slate-600">
+              <span className="font-semibold">Selected:</span> {selected.map(x => x.title).join(", ")}
+              {formValues["_whpDays"] > 0 && <div className="mt-1 text-red-600 font-semibold">⚠ WHP: {formValues["_whpDays"]} days · ESI: {formValues["_esiDays"]} days</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
     if (field.type === "score_counter") {
       const scores = formValues["_scores"] || [];
       const avg = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length) : null;
-      const SCORE_VALUES = [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
+      // Sheep & Rams: 2–4 in 0.25 increments. Cattle/Bulls: 1–5 in 0.5 increments
+      const isSheepSpecies = selectedMob?.species === "Sheep" || selectedMob?.species === "Rams";
+      const SCORE_VALUES = isSheepSpecies
+        ? [2, 2.25, 2.5, 2.75, 3, 3.25, 3.5, 3.75, 4]
+        : [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
       const addScore = (s) => {
         const next = [...scores, s];
         setFormValues(prev => ({
@@ -5027,7 +5189,12 @@ export default function App() {
         } else {
           // Mob history based record types
           const actionFilter = currentType.action;
-          rows = allMobHistory.filter(h => h.action === actionFilter);
+          rows = allMobHistory.filter(h => {
+            if (h.action !== actionFilter) return false;
+            if (recordsDateFrom && h.date < recordsDateFrom) return false;
+            if (recordsDateTo && h.date > recordsDateTo) return false;
+            return true;
+          });
           if (recordsType === "deaths") {
             columns = [
               { key: "date",    label: "Date" },
@@ -5153,13 +5320,35 @@ export default function App() {
               ))}
             </div>
 
+            {/* Date filter */}
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-white border-b border-slate-100 flex-shrink-0 flex-wrap">
+              <span className="text-xs font-semibold text-slate-500">Filter:</span>
+              <div className="flex items-center gap-1">
+                <label className="text-xs text-slate-400">From</label>
+                <input type="date" value={recordsDateFrom}
+                  onChange={e => setRecordsDateFrom(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white" />
+              </div>
+              <div className="flex items-center gap-1">
+                <label className="text-xs text-slate-400">To</label>
+                <input type="date" value={recordsDateTo}
+                  onChange={e => setRecordsDateTo(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white" />
+              </div>
+              {(recordsDateFrom || recordsDateTo) && (
+                <button onClick={() => { setRecordsDateFrom(""); setRecordsDateTo(""); }}
+                  className="text-xs text-amber-700 font-semibold px-2 py-1 rounded-lg bg-amber-50">
+                  Clear
+                </button>
+              )}
+              <span className="ml-auto text-xs text-slate-400">{rows.length} records</span>
+            </div>
             {/* Export buttons */}
             <div className="flex gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex-shrink-0">
               <div className="text-xs text-slate-400 font-semibold self-center mr-1">Export:</div>
               <button onClick={toCSV} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">CSV</button>
               <button onClick={toExcel} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">Excel</button>
               <button onClick={toPrint} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">Print / PDF</button>
-              <div className="ml-auto text-xs text-slate-400 self-center">{rows.length} records</div>
             </div>
 
             {/* Table */}
