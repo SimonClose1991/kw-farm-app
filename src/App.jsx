@@ -1204,7 +1204,7 @@ function MyScheduleWidget({ currentUser, api, setTab }) {
         </div>
       </button>
 
-      {/* 7-day expanded view */}
+      {/* 7-day expanded view — only shows today onwards, not past days */}
       {expanded && (
         <div className="border-t border-stone-100">
           {DAYS.map((day, i) => {
@@ -1213,6 +1213,9 @@ function MyScheduleWidget({ currentUser, api, setTab }) {
             const isTarget = day === targetDay;
             const isPast = new Date(dayData?.date) < new Date(new Date().toDateString());
             const allDone = dayTasks.length > 0 && dayTasks.every(t => t.completed);
+
+            // Skip past days entirely — only show today onwards
+            if (isPast && !isTarget) return null;
 
             return (
               <div key={day} className={`border-b border-stone-50 last:border-0 ${isTarget ? "bg-amber-50/40" : ""} ${isPast && !isTarget ? "opacity-50" : ""}`}>
@@ -1574,6 +1577,10 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
               ))}
             </div>
           </div>
+
+          {/* Weather & Schedule — always visible regardless of which farm is open */}
+          <WeatherWidget farmName={homeFarm} farmCenters={farmCenters} />
+          <MyScheduleWidget currentUser={currentUser} api={api} setTab={setTab} />
 
           {/* Quick links */}
           <div className="grid grid-cols-2 gap-3">
