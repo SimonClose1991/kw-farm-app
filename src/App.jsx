@@ -1427,7 +1427,7 @@ function WeatherWidget({ farmName, farmCenters }) {
           const wind = hourly.windspeed_10m[hi];
           const precip = hourly.precipitation_probability[hi];
           const rh = hourly.relativehumidity_2m[hi];
-          if (wind < 15 && precip < 20 && rh < 90 && hour >= 7 && hour <= 18) {
+          if (wind < 20 && precip < 20 && rh < 90 && hour >= 7 && hour <= 18) {
             sprayHours.push(hour);
           }
         });
@@ -1557,7 +1557,7 @@ function WeatherWidget({ farmName, farmCenters }) {
             </div>
           ))}
           <div className="px-4 py-2 text-center">
-            <span className="text-[10px] text-stone-300">BOM via Open-Meteo · Spray: wind &lt;15km/h, rain &lt;20%, RH &lt;90%, 7am–6pm</span>
+            <span className="text-[10px] text-stone-300">BOM via Open-Meteo · Spray: wind &lt;20km/h, rain &lt;20%, RH &lt;90%, 7am–6pm</span>
           </div>
         </div>
       )}
