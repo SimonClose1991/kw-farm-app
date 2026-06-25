@@ -571,23 +571,8 @@ function GooglePaddockMap({
           fillOpacity: mode === "paddocks" ? 0.45 : 0.15,
           map,
         });
-        // Only allow paddock selection when not in draw mode
-        if (!drawMode) {
-          poly.addListener("click", () => onSelect(p));
-          // Add a transparent hit-area polygon with thick invisible stroke so fingers
-          // can tap near the paddock edge and still hit it (especially on mobile)
-          const hitPoly = new g.Polygon({
-            paths: latlngs.map(([lat, lng]) => ({ lat, lng })),
-            strokeOpacity: 0,
-            strokeWeight: 20, // wide invisible hit zone around the border
-            fillOpacity: 0,
-            clickable: true,
-            map,
-            zIndex: 2,
-          });
-          hitPoly.addListener("click", () => onSelect(p));
-          overlays.push(hitPoly);
-        }
+        // Individual polygon click still works on desktop
+        if (!drawMode) poly.addListener("click", () => onSelect(p));
         polygons[p.id] = poly;  // keyed by ID
         overlays.push(poly);
 
@@ -620,7 +605,36 @@ function GooglePaddockMap({
         });
       });
 
-      // ── Livestock pins (livestock mode) ──
+      // ── Map-level tap handler (mobile-reliable) ──────────────────────────────
+      // Google Maps fires map 'click' reliably on iPhone even when overlay clicks fail.
+      // We do our own point-in-polygon check so a tap anywhere inside OR near a paddock works.
+      if (!drawMode) {
+        map.addListener("click", (e) => {
+          if (!window.google?.maps?.geometry?.poly) return;
+          const latLng = e.latLng;
+          const ref = mapInstanceRef.current;
+          if (!ref) return;
+          // Check exact containment first
+          for (const [pid, poly] of Object.entries(ref.polygons || {})) {
+            if (window.google.maps.geometry.poly.containsLocation(latLng, poly)) {
+              const p = paddocks.find(x => String(x.id) === String(pid));
+              if (p) { onSelect(p); return; }
+            }
+          }
+          // Near-miss tolerance: if no exact hit, find nearest paddock centroid within ~80m
+          const tol = 0.0008; // ~80m in degrees
+          let nearest = null, nearestDist = Infinity;
+          for (const [pid, cen] of Object.entries(ref.centroids || {})) {
+            if (typeof pid !== "string" || isNaN(Number(pid))) continue; // skip name-keyed aliases
+            const dist = Math.hypot(latLng.lat() - cen.lat, latLng.lng() - cen.lng);
+            if (dist < nearestDist) { nearestDist = dist; nearest = pid; }
+          }
+          if (nearest && nearestDist < tol) {
+            const p = paddocks.find(x => String(x.id) === String(nearest));
+            if (p) onSelect(p);
+          }
+        });
+      }
       if (mode === "livestock") {
         // Group mobs by paddock + species so each species gets its own tile
         const groups = {};
@@ -2624,13 +2638,11 @@ export default function App() {
   const [rainfall, setRainfall] = useState([]);
   const [rainfallForm, setRainfallForm] = useState({});
 
-  // Auto-close menu when any overlay modal opens — effect fires after state commits
-  // This is the correct fix for inline-function screens where batched setState is unreliable
-  React.useEffect(() => {
-    if (showRainfall || showPaddockList || showRecords || showInsightPicker) {
-      setShowMenu(false);
-    }
-  }, [showRainfall, showPaddockList, showRecords, showInsightPicker]); // eslint-disable-line
+  // NOTE: No auto-close-menu effect here. The modals (z-150/200/250) render above
+  // the menu (z-100) so they appear correctly without closing the menu first.
+  // Closing the menu simultaneously caused a race condition where the modal state
+  // was set but the menu unmount interrupted the render before the modal painted.
+  // Inventory works correctly with this same pattern — modal opens on top of menu.
   React.useEffect(() => {
     if (!loggedInEmail) return;
     api.listRainfall(farmName).then(setRainfall).catch(() => {});
