@@ -404,12 +404,18 @@ function GooglePaddockMap({
   drawMode = false, drawPoints = [], onDrawPoint,
   userLocation = null,
   openGateIds = [],
-  initialZoom = null, // if set, overrides fitBounds
+  initialZoom = null,
   landmarkPinMode = false, landmarkPinPos = null, onLandmarkPinMoved,
-  onMapCentreChange = null, // callback(lat, lng) when user pans
+  onMapCentreChange = null,
+  instanceRef = null, // optional: parent passes a ref to get access to mapInstanceRef.current
 }) {
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  // Sync internal ref to external ref so parent can access map/polygons/centroids
+  React.useEffect(() => {
+    if (instanceRef) instanceRef.current = mapInstanceRef.current;
+  });
+  React.useEffect(() => () => { if (instanceRef) instanceRef.current = null; }, []);
   // Store callbacks on refs so effects always use current values without stale closures
   const onSelectPinRef = useRef(onSelectPin);
   React.useEffect(() => { onSelectPinRef.current = onSelectPin; }, [onSelectPin]);
@@ -566,8 +572,22 @@ function GooglePaddockMap({
           map,
         });
         // Only allow paddock selection when not in draw mode
-        if (!drawMode) poly.addListener("click", () => onSelect(p));
-        if (!drawMode) poly.addListener("click", () => onSelect(p));
+        if (!drawMode) {
+          poly.addListener("click", () => onSelect(p));
+          // Add a transparent hit-area polygon with thick invisible stroke so fingers
+          // can tap near the paddock edge and still hit it (especially on mobile)
+          const hitPoly = new g.Polygon({
+            paths: latlngs.map(([lat, lng]) => ({ lat, lng })),
+            strokeOpacity: 0,
+            strokeWeight: 20, // wide invisible hit zone around the border
+            fillOpacity: 0,
+            clickable: true,
+            map,
+            zIndex: 2,
+          });
+          hitPoly.addListener("click", () => onSelect(p));
+          overlays.push(hitPoly);
+        }
         polygons[p.id] = poly;  // keyed by ID
         overlays.push(poly);
 
@@ -1017,13 +1037,19 @@ function geojsonToPaddocks(geojson) {
   return features.map((f, i) => {
     const props = f.properties || {};
     const name = props.name || props.Name || props.NAME || props.paddock || `Paddock ${i + 1}`;
-    let ha = props.ha || props.area_ha || props.Area || props.area;
-    if (!ha && f.geometry) {
+    // Always calculate ha from geometry — GeoJSON property values are often wrong
+    // (AgriWebb exports in acres, or uses rounded values)
+    let ha = 0;
+    if (f.geometry) {
       const geom = f.geometry;
       let ring = null;
       if (geom.type === "Polygon") ring = geom.coordinates[0];
       else if (geom.type === "MultiPolygon") ring = geom.coordinates[0][0];
       if (ring) ha = ringAreaHa(ring);
+    }
+    // Fall back to stored property only if geometry is missing
+    if (!ha) {
+      ha = Number(props.ha || props.area_ha || props.Area || props.area || 0);
     }
     return {
       id: Date.now() + i,
@@ -2458,7 +2484,8 @@ export default function App() {
   const [showPaddockList, setShowPaddockList] = useState(false);
   const [homeFarm, setHomeFarm] = useState(null); // which farm dashboard is open on home screen
   const [dragMobId, setDragMobId] = useState(null);
-  const [draggingMob, setDraggingMob] = useState(null); // { mob, startX, startY, currentX, currentY }
+  const [draggingMob, setDraggingMob] = useState(null);
+  const livMapRef = React.useRef(null); // exposes GooglePaddockMap internals for drag-to-paddock
   const [dragOverPaddock, setDragOverPaddock] = useState(null);
   const [showPaddockPicker, setShowPaddockPicker] = useState(false); // bottom-sheet paddock picker in mob details
   const [showInsightPicker, setShowInsightPicker] = useState(false); // insight overlay picker on map
@@ -3144,6 +3171,7 @@ export default function App() {
                 apiKey={googleMapsKey}
                 onError={() => setMapLoadError(true)}
                 userLocation={userLocation}
+                instanceRef={livMapRef}
               />
 
               {/* ── Drag overlay — covers Google Map during mob drag, intercepts all pointer events ── */}
@@ -3156,7 +3184,7 @@ export default function App() {
                   }}
                   onPointerUp={(e) => {
                     e.preventDefault();
-                    const mapRef = mapInstanceRef.current?.map;
+                    const mapRef = livMapRef.current?.map;
                     const mob = draggingMob.mob;
                     setDraggingMob(null);
                     // Restore Google Maps gesture handling
@@ -3176,7 +3204,6 @@ export default function App() {
                     const bounds = mapRef.getBounds();
                     if (!bounds) return;
 
-                    // Use fromContainerPixelToLatLng via the overlay projection
                     const scale = Math.pow(2, mapRef.getZoom());
                     const nw = projection.fromLatLngToPoint(
                       new window.google.maps.LatLng(bounds.getNorthEast().lat(), bounds.getSouthWest().lng())
@@ -3190,7 +3217,7 @@ export default function App() {
                     // Check which polygon contains the drop point
                     const g = window.google.maps;
                     let targetPaddock = null;
-                    const polygonsRef = mapInstanceRef.current?.polygons || {};
+                    const polygonsRef = livMapRef.current?.polygons || {};
                     for (const [pName, poly] of Object.entries(polygonsRef)) {
                       if (g.geometry?.poly?.containsLocation(dropLatLng, poly)) {
                         targetPaddock = pName;
@@ -3211,7 +3238,7 @@ export default function App() {
                       .catch(err => showToast(err.message || "Couldn't save move"));
                   }}
                   onPointerCancel={() => {
-                    const mapRef = mapInstanceRef.current?.map;
+                    const mapRef = livMapRef.current?.map;
                     setDraggingMob(null);
                     if (mapRef) mapRef.setOptions({ gestureHandling: "greedy" });
                   }}
@@ -3494,7 +3521,7 @@ export default function App() {
                     setPinSelected(null);
                     // Slight delay so modal closes before overlay appears
                     setTimeout(() => {
-                      const mapRef = mapInstanceRef.current?.map;
+                      const mapRef = livMapRef.current?.map;
                       if (mapRef) mapRef.setOptions({ gestureHandling: "none" });
                       const mapDiv = mapRef?.getDiv();
                       const rect = mapDiv?.getBoundingClientRect() || { left: 0, top: 0, width: 200, height: 200 };

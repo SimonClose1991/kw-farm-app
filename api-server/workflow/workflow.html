@@ -585,11 +585,15 @@ function buildCard(t){
     const noteText=(t.notes||"").trim();
     if(noteText&&noteText.length<=40) inner+=`<div class="tc-notes">${esc(noteText)}</div>`;
     else if(noteText) inner+=`<div class="tc-notes">📝 Tap to read notes…</div>`;
+    // Staff comment — show existing, always show add/edit button
+    if(t.comment) inner+=`<div class="tc-comment">💬 ${esc(t.comment)}</div>`;
+    inner+=`<button class="tc-comment-btn" data-action="comment" data-id="${t.id}">${t.comment?"✏️ Edit comment":"+ Add comment"}</button>`;
   } else {
     // Admin view: just title + staff + drag handle. Click opens edit modal.
     inner+=`<div class="tc-title" style="${t.completed?"text-decoration:line-through;opacity:.5":""}">${esc(t.content)}</div>`;
     if(st) inner+=`<div class="tc-staff" style="color:${c.tx}">${esc(st)}</div>`;
     if(t.recur&&t.recur!=="none") inner+=`<div style="font-size:9px;color:#a8a29e;margin-top:2px">🔁 ${t.recur==="daily"?"Daily":"Weekly"}</div>`;
+    if(t.comment) inner+=`<div class="tc-comment">💬 ${esc(t.comment)}</div>`;
     // Drag handle — always visible, triggers drag
     inner+=`<span class="tc-drag-handle" data-drag="${t.id}" title="Drag to reorder / move day">⠇</span>`;
   }
