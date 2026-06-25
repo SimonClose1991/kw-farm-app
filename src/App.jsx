@@ -552,7 +552,8 @@ function GooglePaddockMap({
         const path = latlngs.map(([lat, lng]) => ({ lat, lng }));
         path.forEach((pt) => bounds.extend(pt));
         const centroid = path.reduce((acc, pt) => ({ lat: acc.lat + pt.lat / path.length, lng: acc.lng + pt.lng / path.length }), { lat: 0, lng: 0 });
-        centroids[p.name] = centroid;
+        centroids[p.id] = centroid;  // keyed by ID so renames don't create stale entries
+        centroids[p.name] = centroid; // also keyed by name for mob marker paddock lookups
 
         const isGateOpen = landmarks.some(l => l.type === "Gate" && openGateIds.includes(String(l.id)) && (l.paddockA === p.name || l.paddockB === p.name));
         const fillColour = mode === "paddocks" ? (colourForPaddock(p) || "#999999") : "transparent";
@@ -567,13 +568,13 @@ function GooglePaddockMap({
         // Only allow paddock selection when not in draw mode
         if (!drawMode) poly.addListener("click", () => onSelect(p));
         if (!drawMode) poly.addListener("click", () => onSelect(p));
-        polygons[p.name] = poly;
+        polygons[p.id] = poly;  // keyed by ID
         overlays.push(poly);
 
         // Initial label at current zoom — NOT pushed to overlays array
         // Labels are managed exclusively via ref.labelMarkers and cleared explicitly on zoom
         const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, map.getZoom(), insightMode, paddockStats);
-        labelMarkers[p.name] = lm || null;
+        labelMarkers[p.id] = lm || null;  // keyed by ID
       });
 
       // Zoom-aware label update
@@ -589,14 +590,13 @@ function GooglePaddockMap({
         // Step 2: reset the dict
         const newLabels = {};
         if (ref) ref.labelMarkers = newLabels;
-        // Step 3: create fresh labels for new zoom level
+        // Step 3: create fresh labels for new zoom level (keyed by ID, not name)
         paddocks.forEach((p) => {
-          const cen = freshCentroids[p.name];
+          const cen = freshCentroids[p.id];
           if (!cen) return;
           const newLm = updateLabelForZoom(g, map, cen, p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
-          newLabels[p.name] = newLm || null;
-          // Update closure copy too in case ref isn't set yet
-          labelMarkers[p.name] = newLm || null;
+          newLabels[p.id] = newLm || null;
+          labelMarkers[p.id] = newLm || null;
         });
       });
 
@@ -803,6 +803,7 @@ function GooglePaddockMap({
         fittedBounds: alreadyFitted || (!drawMode && !initialZoom),
         landmarks, renderLandmarks: renderAllLandmarks,
         centroids, center, bounds,
+        paddockList: paddocks, // for ID-based centroid lookups in mob overlay effect
         renderMobs: null,
         currentInsightMode: insightMode,
         currentPaddockStats: paddockStats,
@@ -818,7 +819,7 @@ function GooglePaddockMap({
       window.__gmapsCallback = render;
       const script = document.createElement("script");
       script.id = "google-maps-js";
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=__gmapsCallback`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=geometry&callback=__gmapsCallback`;
       script.async = true;
       script.onerror = () => { if (!cancelled) onError?.(); };
       document.body.appendChild(script);
@@ -940,37 +941,36 @@ function GooglePaddockMap({
     if (!ref?.polygons || !window.google?.maps) return;
     ref.currentInsightMode = insightMode;
     ref.currentPaddockStats = paddockStats;
+    ref.paddockList = paddocks; // keep current for mob overlay centroid lookups
     // Clear ALL existing label markers first (prevents stale name labels when paddocks rename)
     if (ref.labelMarkers) {
       Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
       ref.labelMarkers = {};
     }
-    // Update polygon colours — use ref.polygons keys (which are by paddock name at map-build time)
-    // Match by paddock id if name changed
+    // Refresh name-keyed centroids so mob markers find renamed paddocks correctly
+    if (ref.centroids) {
+      paddocks.forEach((p) => {
+        const cen = ref.centroids[p.id];
+        if (cen) ref.centroids[p.name] = cen; // keep name alias up to date
+      });
+    }
+    // Update polygon colours — keyed by ID so renames are transparent
     paddocks.forEach((p) => {
-      // Try current name first, then search all polygon keys for a matching paddock
-      const poly = ref.polygons[p.name];
+      const poly = ref.polygons[p.id];
       if (poly) {
         const fill = colourForPaddock(p);
         if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
       }
     });
-    // Also update any polygons whose key doesn't match current name (renamed paddocks)
-    Object.keys(ref.polygons).forEach(key => {
-      const p = paddocks.find(x => x.name === key);
-      if (p) {
-        const fill = colourForPaddock(p);
-        if (fill) ref.polygons[key].setOptions({ fillColor: fill, fillOpacity: 0.45 });
-      }
-    });
-    // Redraw all labels with fresh data
+    // Redraw all labels with fresh data (keyed by ID)
     if (ref.map) {
       const z = ref.map.getZoom();
       const g = window.google.maps;
       paddocks.forEach((p) => {
-        if (!ref.centroids?.[p.name]) return;
-        const newLm = updateLabelForZoom(g, ref.map, ref.centroids[p.name], p, { setMap: () => {} }, z, insightMode, paddockStats);
-        if (ref.labelMarkers) ref.labelMarkers[p.name] = newLm || null;
+        const cen = ref.centroids?.[p.id];
+        if (!cen) return;
+        const newLm = updateLabelForZoom(g, ref.map, cen, p, { setMap: () => {} }, z, insightMode, paddockStats);
+        if (ref.labelMarkers) ref.labelMarkers[p.id] = newLm || null;
       });
     }
   }, [insightMode, paddockStats, paddocks]);
@@ -2458,6 +2458,7 @@ export default function App() {
   const [showPaddockList, setShowPaddockList] = useState(false);
   const [homeFarm, setHomeFarm] = useState(null); // which farm dashboard is open on home screen
   const [dragMobId, setDragMobId] = useState(null);
+  const [draggingMob, setDraggingMob] = useState(null); // { mob, startX, startY, currentX, currentY }
   const [dragOverPaddock, setDragOverPaddock] = useState(null);
   const [showPaddockPicker, setShowPaddockPicker] = useState(false); // bottom-sheet paddock picker in mob details
   const [showInsightPicker, setShowInsightPicker] = useState(false); // insight overlay picker on map
@@ -2645,22 +2646,33 @@ export default function App() {
     return () => { cancelled = true; };
   }, [loggedInEmail, farmName]);
 
-  // Pre-load ALL farms' mobs in the background so the Home screen all-farms totals are accurate.
-  // Only runs once on login. Never overwrites the current farm (the main effect handles that).
+  // ── Farm access control — must be declared before any effect that uses it ────
+  const ALL_FARM_NAMES = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"];
+  const accessibleFarms = React.useMemo(() => {
+    if (!currentUser || currentUser.role === "Admin") return ALL_FARM_NAMES;
+    const allowed = currentUser.allowedFarms || [];
+    if (!Array.isArray(allowed) || allowed.length === 0) return ALL_FARM_NAMES;
+    return ALL_FARM_NAMES.filter(f => allowed.includes(f));
+  }, [currentUser]);
+
+  // If current farmName is not accessible (e.g. after role change), reset to first accessible farm
+  React.useEffect(() => {
+    if (accessibleFarms.length > 0 && !accessibleFarms.includes(farmName)) {
+      setFarmName(accessibleFarms[0]);
+    }
+  }, [accessibleFarms, farmName]);
   React.useEffect(() => {
     if (!loggedInEmail) return;
-    const ALL_FARMS = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"];
-    ALL_FARMS.forEach((farm) => {
-      // Small delay so this doesn't race with the main per-farm load on login
+    const farmsToLoad = accessibleFarms;
+    farmsToLoad.forEach((farm) => {
       setTimeout(() => {
         api.listMobs(farm)
           .then((res) => setFarmsMobs((prev) => {
-            // Only update if this farm's array is still empty — don't overwrite real data
             if (prev[farm] && prev[farm].length > 0) return prev;
             return { ...prev, [farm]: res };
           }))
           .catch(() => {});
-      }, 1500); // wait 1.5s for the main load to finish first
+      }, 1500);
     });
   }, [loggedInEmail]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2961,13 +2973,12 @@ export default function App() {
   );
 
   // ── All-farms aggregate totals ──
-  const allMobs = Object.values(farmsMobs).flat();
+  const allMobs = accessibleFarms.flatMap(f => farmsMobs[f] || []);
   const totalCattle = allMobs.filter((m) => m.species === "Cattle" || /steer|cow|calf|calves|bull|heifer/i.test(m.type || "")).reduce((s, m) => s + m.count, 0);
   const totalSheep = allMobs.filter((m) => m.species === "Sheep" || /ewe|sheep|merino|lamb|wether|ram/i.test(m.type || "")).reduce((s, m) => s + m.count, 0);
   const totalDSE = allMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
-  // Per-farm summaries for farm tiles
-  const FARM_NAMES = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"];
-  const farmSummaries = FARM_NAMES.map((name) => {
+  // Per-farm summaries for farm tiles — only accessible farms
+  const farmSummaries = accessibleFarms.map((name) => {
     const farmMobs = farmsMobs[name] || [];
     const cattle = farmMobs.filter((m) => m.species === "Cattle").reduce((s, m) => s + m.count, 0);
     const sheep = farmMobs.filter((m) => m.species === "Sheep").reduce((s, m) => s + m.count, 0);
@@ -3122,17 +3133,112 @@ export default function App() {
         <div className="h-[78vh] relative">
 
           {googleMapsKey && !mapLoadError ? (
-            <GooglePaddockMap
-              paddocks={paddocks}
-              mobs={mobs}
-              mode="livestock"
-              center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-              onSelect={() => {}}
-              onSelectPin={setPinSelected}
-              apiKey={googleMapsKey}
-              onError={() => setMapLoadError(true)}
-              userLocation={userLocation}
-            />
+            <>
+              <GooglePaddockMap
+                paddocks={paddocks}
+                mobs={mobs}
+                mode="livestock"
+                center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
+                onSelect={() => {}}
+                onSelectPin={setPinSelected}
+                apiKey={googleMapsKey}
+                onError={() => setMapLoadError(true)}
+                userLocation={userLocation}
+              />
+
+              {/* ── Drag overlay — covers Google Map during mob drag, intercepts all pointer events ── */}
+              {draggingMob && (
+                <div
+                  className="absolute inset-0 z-[60]"
+                  style={{ cursor: "grabbing", touchAction: "none" }}
+                  onPointerMove={(e) => {
+                    setDraggingMob(prev => prev ? { ...prev, currentX: e.clientX, currentY: e.clientY } : null);
+                  }}
+                  onPointerUp={(e) => {
+                    e.preventDefault();
+                    const mapRef = mapInstanceRef.current?.map;
+                    const mob = draggingMob.mob;
+                    setDraggingMob(null);
+                    // Restore Google Maps gesture handling
+                    if (mapRef) mapRef.setOptions({ gestureHandling: "greedy" });
+
+                    if (!mapRef || !window.google?.maps) return;
+
+                    // Convert pointer position to LatLng
+                    const mapDiv = mapRef.getDiv();
+                    const rect = mapDiv.getBoundingClientRect();
+                    const offsetX = e.clientX - rect.left;
+                    const offsetY = e.clientY - rect.top;
+
+                    const projection = mapRef.getProjection();
+                    if (!projection) return;
+
+                    const bounds = mapRef.getBounds();
+                    if (!bounds) return;
+
+                    // Use fromContainerPixelToLatLng via the overlay projection
+                    const scale = Math.pow(2, mapRef.getZoom());
+                    const nw = projection.fromLatLngToPoint(
+                      new window.google.maps.LatLng(bounds.getNorthEast().lat(), bounds.getSouthWest().lng())
+                    );
+                    const dropPoint = new window.google.maps.Point(
+                      nw.x + offsetX / scale,
+                      nw.y + offsetY / scale
+                    );
+                    const dropLatLng = projection.fromPointToLatLng(dropPoint);
+
+                    // Check which polygon contains the drop point
+                    const g = window.google.maps;
+                    let targetPaddock = null;
+                    const polygonsRef = mapInstanceRef.current?.polygons || {};
+                    for (const [pName, poly] of Object.entries(polygonsRef)) {
+                      if (g.geometry?.poly?.containsLocation(dropLatLng, poly)) {
+                        targetPaddock = pName;
+                        break;
+                      }
+                    }
+
+                    if (!targetPaddock) { showToast("Drop on a paddock to move"); return; }
+                    if (targetPaddock === mob.paddock) { showToast("Already in that paddock"); return; }
+
+                    const dateStr = todayStr();
+                    const detail = `Moved from ${mob.paddock} to ${targetPaddock}`;
+                    setMobs(prev => prev.map(m => m.id === mob.id ? { ...m, paddock: targetPaddock, daysInPaddock: 0 } : m));
+                    showToast(`${mob.name} → ${targetPaddock}`);
+                    markChanged();
+                    api.updateMob(mob.id, { paddock: targetPaddock, daysInPaddock: 0 })
+                      .then(() => api.addMobHistory(mob.id, { action: "Move", detail, date: dateStr }))
+                      .catch(err => showToast(err.message || "Couldn't save move"));
+                  }}
+                  onPointerCancel={() => {
+                    const mapRef = mapInstanceRef.current?.map;
+                    setDraggingMob(null);
+                    if (mapRef) mapRef.setOptions({ gestureHandling: "greedy" });
+                  }}
+                >
+                  {/* Ghost mob tile that follows the finger */}
+                  {draggingMob && (
+                    <div
+                      className="fixed pointer-events-none z-[70] bg-white rounded-2xl shadow-2xl border-2 px-3 py-2 opacity-90"
+                      style={{
+                        left: draggingMob.currentX - 30,
+                        top: draggingMob.currentY - 50,
+                        borderColor: TAG_COLOUR_HEX[draggingMob.mob?.tag] || "#cbd5e1",
+                        transform: "scale(1.08)",
+                        transition: "transform 0.1s",
+                      }}
+                    >
+                      <div className="text-xs font-bold text-slate-700 whitespace-nowrap">{draggingMob.mob.name}</div>
+                      <div className="text-[10px] text-slate-400">{draggingMob.mob.count} hd · {draggingMob.mob.paddock}</div>
+                    </div>
+                  )}
+                  {/* Instruction hint */}
+                  <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full whitespace-nowrap">
+                    Drop on a paddock to move {draggingMob?.mob?.name}
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <div
               className="absolute inset-0 bg-cover bg-center"
@@ -3374,12 +3480,38 @@ export default function App() {
             </div>
           )}
           {pinSelected.mob && (
-            <button
-              onClick={() => { setSelectedMobId(pinSelected.mob.id); setMobTab("Summary"); setPinSelected(null); }}
-              className="w-full bg-red-900 text-white rounded-2xl py-3 font-bold"
-            >
-              View Mob Details
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setSelectedMobId(pinSelected.mob.id); setMobTab("Summary"); setPinSelected(null); }}
+                className="flex-1 bg-red-900 text-white rounded-2xl py-3 font-bold"
+              >
+                View Details
+              </button>
+              {canEdit && (
+                <button
+                  onClick={() => {
+                    const mob = pinSelected.mob;
+                    setPinSelected(null);
+                    // Slight delay so modal closes before overlay appears
+                    setTimeout(() => {
+                      const mapRef = mapInstanceRef.current?.map;
+                      if (mapRef) mapRef.setOptions({ gestureHandling: "none" });
+                      const mapDiv = mapRef?.getDiv();
+                      const rect = mapDiv?.getBoundingClientRect() || { left: 0, top: 0, width: 200, height: 200 };
+                      setDraggingMob({
+                        mob,
+                        currentX: rect.left + rect.width / 2,
+                        currentY: rect.top + rect.height / 2,
+                      });
+                    }, 150);
+                  }}
+                  className="bg-amber-500 text-white rounded-2xl py-3 px-4 font-bold"
+                  title="Drag to move paddock"
+                >
+                  ↕ Move
+                </button>
+              )}
+            </div>
           )}
         </Modal>
       )}
@@ -4955,10 +5087,10 @@ export default function App() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 px-6">
           <div className="bg-white rounded-3xl w-full overflow-hidden shadow-2xl">
             <div className="text-center font-extrabold py-4 border-b border-slate-100 text-slate-800">Switch farm</div>
-            {["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"].map((f) => (
+            {accessibleFarms.map((f) => (
               <button key={f} onClick={() => {
                 setFarmName(f);
-                setHomeFarm(null); // clear farm dashboard so home screen shows overview
+                setHomeFarm(null);
                 setAllMobHistory([]);
                 setShowSwitchFarm(false);
                 setShowMenu(false);
@@ -5202,6 +5334,8 @@ export default function App() {
             if (h.action !== actionFilter) return false;
             if (recordsDateFrom && h.date < recordsDateFrom) return false;
             if (recordsDateTo && h.date > recordsDateTo) return false;
+            // Only show records for accessible farms
+            if (h.farm && !accessibleFarms.includes(h.farm)) return false;
             return true;
           });
           if (recordsType === "deaths") {
@@ -6068,25 +6202,26 @@ export default function App() {
                   <div className="text-xs text-slate-400">{a.email}</div>
                 </div>
                 {isAdmin ? (
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={a.role}
-                      onChange={async (e) => {
-                        const newRole = e.target.value;
-                        setAccounts((prev) => prev.map((acc) => acc.id === a.id ? { ...acc, role: newRole } : acc));
-                        try {
-                          await api.updateAccount(a.id, { role: newRole });
-                        } catch (err) {
-                          showToast(err.message || "Couldn't update role");
-                        }
-                      }}
-                      className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
-                    >
-                      {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-                    </select>
-                    {a.id !== currentUserId && (
-                      <button
-                        onClick={async () => {
+                  <div className="flex flex-col gap-2 items-end">
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={a.role}
+                        onChange={async (e) => {
+                          const newRole = e.target.value;
+                          setAccounts((prev) => prev.map((acc) => acc.id === a.id ? { ...acc, role: newRole } : acc));
+                          try {
+                            await api.updateAccount(a.id, { role: newRole });
+                          } catch (err) {
+                            showToast(err.message || "Couldn't update role");
+                          }
+                        }}
+                        className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
+                      >
+                        {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                      {a.id !== currentUserId && (
+                        <button
+                          onClick={async () => {
                           setAccounts((prev) => prev.filter((acc) => acc.id !== a.id));
                           try {
                             await api.deleteAccount(a.id);
@@ -6098,6 +6233,41 @@ export default function App() {
                       >
                         <X size={14} />
                       </button>
+                    )}
+                    </div>
+                    {/* Farm access — not shown for Admin (they always see all) */}
+                    {a.role !== "Admin" && (
+                      <div className="text-right">
+                        <div className="text-[10px] text-slate-400 mb-1">Farm access:</div>
+                        <div className="flex flex-wrap gap-1 justify-end">
+                          {ALL_FARM_NAMES.map(f => {
+                            const allowed = a.allowedFarms || [];
+                            const hasAccess = allowed.length === 0 || allowed.includes(f);
+                            return (
+                              <button key={f}
+                                onClick={async () => {
+                                  const current = a.allowedFarms || [];
+                                  // Empty array = all farms. Build explicit list when restricting.
+                                  let base = current.length === 0 ? [...ALL_FARM_NAMES] : [...current];
+                                  const next = base.includes(f) ? base.filter(x => x !== f) : [...base, f];
+                                  // If all farms selected, store as empty (= no restriction)
+                                  const toStore = next.length === ALL_FARM_NAMES.length ? [] : next;
+                                  setAccounts(prev => prev.map(acc => acc.id === a.id ? { ...acc, allowedFarms: toStore } : acc));
+                                  try { await api.updateAccount(a.id, { allowedFarms: toStore }); }
+                                  catch (err) { showToast(err.message || "Couldn't update farm access"); }
+                                }}
+                                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border transition-colors ${
+                                  hasAccess
+                                    ? "bg-green-50 text-green-700 border-green-200"
+                                    : "bg-slate-50 text-slate-400 border-slate-200"
+                                }`}
+                              >
+                                {f.replace("Kurra-Wirra","KW")}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     )}
                   </div>
                 ) : (

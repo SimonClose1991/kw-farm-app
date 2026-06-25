@@ -81,9 +81,9 @@ body.hide-staff .task-card .tc-staff{display:none}
 .task-card .tc-notes-toggle{background:none;border:none;padding:2px 0;margin-top:3px;font-size:10px;color:#d97706;cursor:pointer;font-weight:600}
 .task-card .tc-notes-full{background:rgba(0,0,0,.03);border-radius:7px;padding:6px 8px;margin-top:4px;font-style:normal;font-size:10px;color:#57534e}
 .task-card .tc-actions{display:none}
-.tc-drag-handle{position:absolute;top:0;right:0;bottom:0;width:28px;display:flex;align-items:center;justify-content:center;cursor:grab;color:#d4c8c0;font-size:15px;touch-action:none;user-select:none;-webkit-user-select:none;border-left:1px solid rgba(0,0,0,.06);border-radius:0 8px 8px 0;background:rgba(0,0,0,.02)}
+.tc-drag-handle{position:absolute;top:0;right:0;bottom:0;width:32px;display:flex;align-items:center;justify-content:center;cursor:grab;color:#d4c8c0;font-size:15px;touch-action:none;user-select:none;-webkit-user-select:none;border-left:1px solid rgba(0,0,0,.06);border-radius:0 8px 8px 0;background:rgba(0,0,0,.02);-webkit-touch-callout:none}
 .tc-drag-handle:hover{background:rgba(0,0,0,.05);color:#a8a29e}
-.tc-drag-handle:active{cursor:grabbing}
+.tc-drag-handle:active{cursor:grabbing;color:#a8a29e}
 .tc-btn{background:none;border:none;padding:3px 6px;border-radius:5px;font-size:11px;cursor:pointer;line-height:1;color:#a8a29e;transition:all .1s}
 .tc-btn:hover{background:rgba(0,0,0,.06);color:#57534e}
 .task-card.done{opacity:.65}
@@ -203,6 +203,9 @@ body.m-cal .zoom-bar{display:flex}
 .touch-drag-clone{position:fixed;pointer-events:none;z-index:9000;opacity:.88;transform:scale(1.04);box-shadow:0 12px 32px rgba(0,0,0,.22);transition:none;width:calc(100vw - 40px);max-width:380px}
 .touch-drop-zone{outline:2px dashed #d97706;outline-offset:-2px;background:#fffbeb !important;border-radius:10px;min-height:44px}
 .touch-drag-source{opacity:.3}
+.tc-comment{font-size:10px;color:#78716c;margin-top:3px;font-style:italic;line-height:1.3;border-top:1px solid rgba(0,0,0,.05);padding-top:3px}
+.tc-comment-btn{font-size:10px;color:#a8a29e;background:none;border:none;cursor:pointer;padding:2px 0;margin-top:2px;text-align:left;display:block}
+.tc-comment-btn:hover{color:#57534e}
 .touch-drop-before{border-top:3px solid #d97706 !important;margin-top:2px}
 .mobile-day-mover{display:flex;gap:6px;overflow-x:auto;padding:8px 10px 6px;background:#fff;border-bottom:1px solid #f5f5f4;flex-shrink:0;-webkit-overflow-scrolling:touch}
 .mday-move-btn{flex-shrink:0;padding:6px 14px;border-radius:20px;font-size:11px;font-weight:700;border:1.5px solid #e7e5e4;background:#fafaf9;color:#57534e;cursor:pointer;white-space:nowrap}
@@ -599,8 +602,14 @@ function bindCardEvents(div, id){
   div.querySelectorAll("[data-action='done']").forEach(btn=>{
     btn.addEventListener("click", e=>{ e.stopPropagation(); toggleDone(id); });
   });
+  div.querySelectorAll("[data-action='comment']").forEach(btn=>{
+    btn.addEventListener("click", e=>{ e.stopPropagation(); openCommentModal(id); });
+  });
   if(!isAdmin){
-    div.addEventListener("click",()=>openTaskDetail(id));
+    div.addEventListener("click", e=>{
+      if(e.target.closest("[data-action]")) return;
+      openTaskDetail(id);
+    });
   } else {
     // Admin: tap card body to open edit modal (not when touching drag handle)
     div.addEventListener("click", e=>{
@@ -1033,31 +1042,30 @@ function goToday(){  weekStart=getMonday(new Date()); render(); }
 function applyFilters(){ farmFilter=document.getElementById("farm-filter").value; staffFilter=document.getElementById("staff-filter").value; render(); }
 
 /* ── Touch drag & drop (mobile admin) ── */
+/* ── Pointer-event drag (works on iPhone Safari + desktop) ── */
 function bindTouchDrag(card, id, farm, day){
   const handle = card.querySelector(".tc-drag-handle");
   if(!handle) return;
-  handle.addEventListener("touchstart", e=>{
-    e.preventDefault(); e.stopPropagation();
-    startTouchDrag(e.touches[0], card, id, farm, day);
-  },{passive:false});
-  // touchmove and touchend are registered on document in initTouchDrag()
-}
-function initTouchDrag(){
-  document.addEventListener("touchmove", e=>{
-    if(touchDragId===null) return;
+  handle.style.touchAction = "none"; // required for pointer capture on iOS
+  handle.addEventListener("pointerdown", e=>{
     e.preventDefault();
-    if(e.touches.length > 0) moveTouchDrag(e.touches[0]);
-  },{passive:false});
-  document.addEventListener("touchend", e=>{
-    if(touchDragId===null) return;
-    endTouchDrag();
-  },{passive:false});
-  document.addEventListener("touchcancel", e=>{
-    if(touchDragId===null) return;
-    cancelTouchDrag();
-  },{passive:false});
+    handle.setPointerCapture(e.pointerId);
+    startTouchDrag(e, card, id, farm, day);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup",   onUp);
+    handle.addEventListener("pointercancel", onCancel);
+    function onMove(ev){ ev.preventDefault(); moveTouchDrag(ev); }
+    function onUp(ev){   cleanup(); endTouchDrag(); }
+    function onCancel(){ cleanup(); cancelTouchDrag(); }
+    function cleanup(){
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup",   onUp);
+      handle.removeEventListener("pointercancel", onCancel);
+    }
+  });
 }
-function startTouchDrag(touch, card, id, farm, day){
+function initTouchDrag(){ /* no-op — pointer events are registered per-handle */ }
+function startTouchDrag(ev, card, id, farm, day){ const touch=ev; // PointerEvent has same clientX/clientY
   touchDragId=id; touchDragSource=card;
   card.classList.add("touch-drag-source");
   const rect=card.getBoundingClientRect();
@@ -1070,7 +1078,7 @@ function startTouchDrag(touch, card, id, farm, day){
   showDayMover(farm, day);
   if(navigator.vibrate) navigator.vibrate(40);
 }
-function moveTouchDrag(touch){
+function moveTouchDrag(ev){ const touch=ev;
   if(!touchDragClone) return;
   const w=touchDragClone.offsetWidth;
   touchDragClone.style.left=(touch.clientX-w/2)+"px";
@@ -1156,6 +1164,34 @@ function touchMoveToDay(day){
   toast("Moved to "+day);
 }
 
+
+/* ── Staff comment modal ────────────────────────────────────── */
+function openCommentModal(id){
+  const t=sourceTasks().find(x=>x.id===id);
+  if(!t) return;
+  openModal(`
+    <h2 class="modal-title">Add Comment</h2>
+    <p style="font-size:12px;color:#78716c;margin-bottom:12px">Let the team know the status of: <strong>${esc(t.content)}</strong></p>
+    <div class="form-field">
+      <label>Your comment</label>
+      <textarea id="m-comment" rows="3" placeholder="e.g. 100 cattle still to go, suggest moving to Thursday…" style="width:100%;border:1.5px solid #e7e5e4;border-radius:8px;padding:8px;font-size:13px;resize:none">${esc(t.comment||"")}</textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" id="m-comment-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="m-comment-save">Save Comment</button>
+    </div>
+  `);
+  setTimeout(()=>{
+    const ta=document.getElementById("m-comment");
+    if(ta) ta.focus();
+    document.getElementById("m-comment-cancel")?.addEventListener("click",closeModal);
+    document.getElementById("m-comment-save")?.addEventListener("click",()=>{
+      const val=(document.getElementById("m-comment")?.value||"").trim();
+      t.comment=val||undefined;
+      saveState(); closeModal(); render();
+    });
+  },50);
+}
 
 /* ── Boot ────────────────────────────────────────────────── */
 // Only auto-boot when NOT embedded (standalone use).

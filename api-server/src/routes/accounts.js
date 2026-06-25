@@ -8,7 +8,10 @@ const router = Router();
 
 function sanitize(account) {
   const { passwordHash, ...rest } = account;
-  return rest;
+  // Parse allowedFarms from JSON string to array
+  let allowedFarms = [];
+  try { allowedFarms = JSON.parse(rest.allowedFarms || "[]"); } catch {}
+  return { ...rest, allowedFarms };
 }
 
 // POST /api/auth/login
@@ -52,9 +55,13 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
 
 // PUT /api/accounts/:id
 router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
-  const { name, role } = req.body;
+  const { name, role, allowedFarms } = req.body;
+  const updates = {};
+  if (name) updates.name = name;
+  if (role) updates.role = role;
+  if (allowedFarms !== undefined) updates.allowedFarms = JSON.stringify(allowedFarms);
   const [updated] = await db.update(accounts)
-    .set({ ...(name && { name }), ...(role && { role }) })
+    .set(updates)
     .where(eq(accounts.id, Number(req.params.id)))
     .returning();
   if (!updated) return res.status(404).json({ error: "Account not found" });

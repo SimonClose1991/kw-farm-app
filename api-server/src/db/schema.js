@@ -16,6 +16,7 @@ export const accounts = pgTable("accounts", {
   email: text("email").notNull().unique(),
   role: text("role").notNull().default("Worker"), // Admin | Manager | Worker
   passwordHash: text("password_hash").notNull(),
+  allowedFarms: text("allowed_farms").default("[]"), // JSON array of farm names, empty = all farms
   createdAt: timestamp("created_at").defaultNow(),
 });
 
