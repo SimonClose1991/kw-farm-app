@@ -874,16 +874,24 @@ function GooglePaddockMap({
     if (window.google?.maps) {
       render();
     } else {
+      // Only add script if not already loading/loaded
       const existing = document.getElementById("google-maps-js");
-      if (existing) { existing.remove(); delete window.google; }
-      window.__gmapsCallback = render;
-      const script = document.createElement("script");
-      script.id = "google-maps-js";
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=geometry&callback=__gmapsCallback`;
-      script.async = true;
-      script.onerror = () => { if (!cancelled) onError?.(); };
-      document.body.appendChild(script);
-      timeoutId = setTimeout(() => { if (!cancelled && !window.google?.maps) onError?.(); }, 8000);
+      if (!existing) {
+        window.__gmapsCallback = render;
+        const script = document.createElement("script");
+        script.id = "google-maps-js";
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=geometry&callback=__gmapsCallback`;
+        script.async = true;
+        script.onerror = () => { if (!cancelled) onError?.(); };
+        document.body.appendChild(script);
+        timeoutId = setTimeout(() => { if (!cancelled && !window.google?.maps) onError?.(); }, 8000);
+      } else {
+        // Script already loading — wait for callback or poll
+        const poll = setInterval(() => {
+          if (window.google?.maps) { clearInterval(poll); if (!cancelled) render(); }
+        }, 100);
+        timeoutId = setTimeout(() => { clearInterval(poll); if (!cancelled && !window.google?.maps) onError?.(); }, 8000);
+      }
     }
     return () => {
       cancelled = true;
@@ -1006,7 +1014,7 @@ function GooglePaddockMap({
     ref.noteMarkers = [];
     if (!showNotesOnMap || fieldNotes.length === 0) return;
     fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng).forEach(note => {
-      const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+      const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
       const isUrgent = note.priority === "urgent";
       const m = new g.Marker({
         position: { lat: Number(note.lat), lng: Number(note.lng) },
@@ -1048,9 +1056,14 @@ function GooglePaddockMap({
       });
     }
     // Update polygon colours — keyed by ID so renames are transparent
+    // In livestock mode keep the blue outline style; only update colours in paddocks mode
     paddocks.forEach((p) => {
       const poly = ref.polygons[p.id];
-      if (poly) {
+      if (!poly) return;
+      if (mode === "livestock") {
+        // Livestock mode: always light blue outlines so mob markers stand out
+        poly.setOptions({ fillColor: "#38bdf8", fillOpacity: 0.15 });
+      } else {
         const fill = colourForPaddock(p);
         if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
       }
@@ -2711,7 +2724,7 @@ export default function App() {
   React.useEffect(() => {
     if (!loggedInEmail) return;
     api.listRainfall(farmName).then(setRainfall).catch(() => {});
-    api.listFieldNotes(farmName).then(setFieldNotes).catch(() => {});
+    api.listFieldNotes(farmName).then(setFieldNotes).catch(() => {}); // silent fail if table not ready
   }, [farmName, loggedInEmail]);
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState("");
@@ -5806,7 +5819,7 @@ export default function App() {
                 <div>
                   <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-50">Open — {open.length}</div>
                   {open.map(note => {
-                    const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+                    const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
                     return (
                       <button key={note.id} onClick={() => setFieldNoteDetail(note)}
                         className="w-full text-left px-4 py-3 border-b border-slate-50 active:bg-slate-50">
@@ -5832,7 +5845,7 @@ export default function App() {
                 <div>
                   <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-50">Resolved — {resolved.length}</div>
                   {resolved.map(note => {
-                    const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+                    const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
                     return (
                       <button key={note.id} onClick={() => setFieldNoteDetail(note)}
                         className="w-full text-left px-4 py-3 border-b border-slate-50 active:bg-slate-50 opacity-60">
@@ -5859,7 +5872,7 @@ export default function App() {
       {/* ── Field Note Detail ── */}
       {fieldNoteDetail && (() => {
         const note = fieldNoteDetail;
-        const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+        const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
         const isResolved = !!note.resolvedAt;
         return (
           <Modal title="Field Note" onClose={() => setFieldNoteDetail(null)}>
