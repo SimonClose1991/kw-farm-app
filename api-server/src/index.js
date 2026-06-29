@@ -54,6 +54,37 @@ app.use("/api/sheep", sheepRoutes);
 app.use("/api/cattle", cattleRoutes);
 app.use("/api/field-notes", fieldNotesRoutes);
 
+// ── Auto-create field_notes table if it doesn't exist ───────────────────────
+// Avoids needing a manual drizzle-kit push after first deploy of this feature
+import { sql } from "drizzle-orm";
+(async () => {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS field_notes (
+        id SERIAL PRIMARY KEY,
+        farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+        farm_name TEXT NOT NULL,
+        paddock TEXT,
+        lat NUMERIC NOT NULL,
+        lng NUMERIC NOT NULL,
+        accuracy_m NUMERIC,
+        location_approx BOOLEAN DEFAULT false,
+        category TEXT NOT NULL DEFAULT 'General',
+        body TEXT NOT NULL,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        author_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+        author_name TEXT,
+        resolved_at TIMESTAMP,
+        task_created BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    console.log("field_notes table ready");
+  } catch (err) {
+    console.error("field_notes table setup error:", err.message);
+  }
+})();
+
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: "Something went wrong on the server" });

@@ -6486,19 +6486,19 @@ export default function App() {
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm resize-none" />
             </div>
             <button onClick={async () => {
-              // Read fresh from state — the closure `form` may be stale after typing
               const current = fieldNoteForm;
               if (!current?.body?.trim()) { showToast("Please add a description"); return; }
               let lat = current.lat, lng = current.lng, accuracyM = current.accuracyM, locationApprox = current.locationApprox;
-              if (!lat && !locationApprox) {
-                // Try one more GPS grab
+              // If no GPS coords yet, try a fresh grab, then fall back to farm center
+              if (!lat) {
                 try {
                   const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 }));
                   lat = pos.coords.latitude; lng = pos.coords.longitude;
                   accuracyM = pos.coords.accuracy; locationApprox = false;
                 } catch {
-                  lat = FARM_CENTERS[farmName]?.[0] || 0;
-                  lng = FARM_CENTERS[farmName]?.[1] || 0;
+                  // Fall back to farm center — note will be marked approximate
+                  lat = FARM_CENTERS[farmName]?.[0] || -37.21;
+                  lng = FARM_CENTERS[farmName]?.[1] || 141.62;
                   locationApprox = true;
                 }
               }
