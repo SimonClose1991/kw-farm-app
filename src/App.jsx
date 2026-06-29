@@ -2573,48 +2573,7 @@ export default function App() {
   const [dragMobId, setDragMobId] = useState(null);
   const [draggingMob, setDraggingMob] = useState(null);
   const livMapRef = React.useRef(null); // exposes GooglePaddockMap internals for drag-to-paddock
-
-  // ── Field note pin-picking: when _pickingPin is true, next map click places pin ──
-  React.useEffect(() => {
-    if (!fieldNoteForm?._pickingPin) return;
-    // Try paddocks map ref first, then livestock map ref
-    const ref = livMapRef.current;
-    const mapInstance = ref?.map;
-    if (!mapInstance) {
-      showToast("Open the map tab first, then use Place on map");
-      return;
-    }
-    // Change cursor to crosshair
-    mapInstance.setOptions({ draggableCursor: "crosshair" });
-    const listener = mapInstance.addListener("click", (e) => {
-      const lat = e.latLng.lat();
-      const lng = e.latLng.lng();
-      // Detect which paddock was clicked
-      let detectedPaddock = null;
-      if (window.google?.maps?.geometry?.poly && ref.polygons) {
-        for (const [pid, poly] of Object.entries(ref.polygons)) {
-          if (window.google.maps.geometry.poly.containsLocation(e.latLng, poly)) {
-            const p = paddocks.find(x => String(x.id) === String(pid));
-            if (p) { detectedPaddock = p.name; break; }
-          }
-        }
-      }
-      setFieldNoteForm(prev => ({
-        ...prev,
-        lat, lng, accuracyM: null, locationApprox: false,
-        paddock: detectedPaddock || prev?.paddock,
-        _pickingPin: false,
-      }));
-      mapInstance.setOptions({ draggableCursor: null });
-      window.google.maps.event.removeListener(listener);
-    });
-    return () => {
-      try {
-        window.google?.maps?.event?.removeListener(listener);
-        mapInstance.setOptions({ draggableCursor: null });
-      } catch {}
-    };
-  }, [fieldNoteForm?._pickingPin]);
+  const paddocksRef = React.useRef([]); // stable ref for use in effects declared before paddocks state
   const [dragOverPaddock, setDragOverPaddock] = useState(null);
   const [showPaddockPicker, setShowPaddockPicker] = useState(false); // bottom-sheet paddock picker in mob details
   const [showInsightPicker, setShowInsightPicker] = useState(false); // insight overlay picker on map
@@ -2871,6 +2830,48 @@ export default function App() {
     setToast(msg);
     setTimeout(() => setToast(null), 1800);
   };
+
+  // Keep paddocksRef in sync so effects declared early can use current paddocks
+  paddocksRef.current = paddocks;
+
+  // ── Field note pin-picking: when _pickingPin is true, next map click places pin ──
+  React.useEffect(() => {
+    if (!fieldNoteForm?._pickingPin) return;
+    const ref = livMapRef.current;
+    const mapInstance = ref?.map;
+    if (!mapInstance) {
+      showToast("Open the map first, then use Place on map");
+      return;
+    }
+    mapInstance.setOptions({ draggableCursor: "crosshair" });
+    const listener = mapInstance.addListener("click", (e) => {
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      let detectedPaddock = null;
+      if (window.google?.maps?.geometry?.poly && ref.polygons) {
+        for (const [pid, poly] of Object.entries(ref.polygons)) {
+          if (window.google.maps.geometry.poly.containsLocation(e.latLng, poly)) {
+            const p = (paddocksRef.current || []).find(x => String(x.id) === String(pid));
+            if (p) { detectedPaddock = p.name; break; }
+          }
+        }
+      }
+      setFieldNoteForm(prev => ({
+        ...prev,
+        lat, lng, accuracyM: null, locationApprox: false,
+        paddock: detectedPaddock || prev?.paddock,
+        _pickingPin: false,
+      }));
+      mapInstance.setOptions({ draggableCursor: null });
+      window.google.maps.event.removeListener(listener);
+    });
+    return () => {
+      try {
+        window.google?.maps?.event?.removeListener(listener);
+        mapInstance.setOptions({ draggableCursor: null });
+      } catch {}
+    };
+  }, [fieldNoteForm?._pickingPin]); // eslint-disable-line
 
   const handleSync = async () => {
     if (!isOnline) { showToast("You're offline — changes will sync when you reconnect"); return; }
