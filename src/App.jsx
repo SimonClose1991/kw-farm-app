@@ -5485,28 +5485,6 @@ export default function App() {
         />
       )}
 
-      {showInsightPicker && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[200]" onClick={() => setShowInsightPicker(false)}>
-          <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
-            <div className="text-center font-semibold text-slate-800 py-3 border-b border-slate-100 text-base tracking-tight">Map Overlay</div>
-            <div className="p-3 space-y-1 pb-8">
-              {INSIGHT_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  onClick={() => { setInsightMode(opt.id); setShowInsightPicker(false); }}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-left transition-colors border ${insightMode === opt.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-700 border-stone-100 hover:border-stone-300"}`}
-                >
-                  <span className="text-lg">{opt.icon}</span>
-                  <span className="font-medium text-sm">{opt.label}</span>
-                  {insightMode === opt.id && <span className="ml-auto text-xs opacity-70">Active</span>}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Records Screen ── */}
       {showRecords && (() => {
         const RECORD_TYPES = [
@@ -5921,93 +5899,6 @@ export default function App() {
                 }} className="bg-rose-50 text-rose-500 rounded-2xl py-3 px-4 font-semibold">Delete</button>
               </div>
             </div>
-          </Modal>
-        );
-      })()}
-
-      {/* ── Field Note Create / Edit Form ── */}
-      {fieldNoteForm !== null && (() => {
-        const isEdit = !!fieldNoteForm.id;
-        const form = fieldNoteForm;
-        const setForm = (patch) => setFieldNoteForm(prev => ({ ...prev, ...patch }));
-        return (
-          <Modal title={isEdit ? "Edit Note" : "New Field Note"} onClose={() => setFieldNoteForm(null)}>
-            {/* GPS status */}
-            <div className={`flex items-center gap-2 text-xs rounded-xl px-3 py-2 mb-4 ${form.locationApprox ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700"}`}>
-              <span>{form.locationApprox ? "📍 Location approximate" : `📍 GPS: ${form.lat?.toFixed(5)}, ${form.lng?.toFixed(5)}${form.accuracyM ? ` ±${Math.round(form.accuracyM)}m` : ""}`}</span>
-            </div>
-            {/* Paddock */}
-            <div className="mb-3">
-              <label className="text-sm font-semibold text-slate-600 block mb-1">Paddock</label>
-              <select value={form.paddock || ""} onChange={e => setForm({ paddock: e.target.value || null })}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm">
-                <option value="">— No paddock —</option>
-                {paddocks.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
-              </select>
-            </div>
-            {/* Category */}
-            <div className="mb-3">
-              <label className="text-sm font-semibold text-slate-600 block mb-1">Category</label>
-              <div className="grid grid-cols-2 gap-1.5">
-                {NOTE_CATEGORIES.map(cat => (
-                  <button key={cat.id} type="button" onClick={() => setForm({ category: cat.id })}
-                    className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold border-2 transition-colors ${form.category === cat.id ? "border-amber-400 bg-amber-50 text-amber-900" : "border-slate-200 bg-white text-slate-600"}`}>
-                    <span>{cat.icon}</span>{cat.id}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {/* Priority */}
-            <div className="mb-3 flex gap-2">
-              {["normal", "urgent"].map(p => (
-                <button key={p} type="button" onClick={() => setForm({ priority: p })}
-                  className={`flex-1 rounded-xl py-2.5 text-sm font-bold border-2 transition-colors ${form.priority === p
-                    ? (p === "urgent" ? "border-red-400 bg-red-50 text-red-700" : "border-slate-300 bg-slate-100 text-slate-700")
-                    : "border-slate-200 bg-white text-slate-400"}`}>
-                  {p === "urgent" ? "🚨 Urgent" : "Normal"}
-                </button>
-              ))}
-            </div>
-            {/* Body */}
-            <div className="mb-4">
-              <label className="text-sm font-semibold text-slate-600 block mb-1">Observation *</label>
-              <textarea value={form.body || ""} onChange={e => setForm({ body: e.target.value })} rows={4}
-                placeholder="Describe what you observed…"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm resize-none" />
-            </div>
-            <button onClick={async () => {
-              if (!form.body?.trim()) { showToast("Please add a description"); return; }
-              if (!form.lat && !form.locationApprox) {
-                // Try one more GPS grab
-                try {
-                  const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 }));
-                  form.lat = pos.coords.latitude; form.lng = pos.coords.longitude;
-                  form.accuracyM = pos.coords.accuracy; form.locationApprox = false;
-                } catch {
-                  form.lat = FARM_CENTERS[farmName]?.[0] || 0;
-                  form.lng = FARM_CENTERS[farmName]?.[1] || 0;
-                  form.locationApprox = true;
-                }
-              }
-              try {
-                if (isEdit) {
-                  const updated = await api.updateFieldNote(form.id, { body: form.body, category: form.category, priority: form.priority, paddock: form.paddock });
-                  setFieldNotes(prev => prev.map(n => n.id === form.id ? { ...n, ...updated } : n));
-                  showToast("Note updated");
-                } else {
-                  const created = await api.createFieldNote(farmName, {
-                    lat: form.lat, lng: form.lng, accuracyM: form.accuracyM,
-                    locationApprox: form.locationApprox, paddock: form.paddock,
-                    category: form.category, body: form.body.trim(), priority: form.priority,
-                  });
-                  setFieldNotes(prev => [created, ...prev]);
-                  showToast("Note saved");
-                }
-                setFieldNoteForm(null);
-              } catch (err) { showToast(err.message || "Couldn't save note"); }
-            }} className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold">
-              {isEdit ? "Save Changes" : "Save Note"}
-            </button>
           </Modal>
         );
       })()}
@@ -6519,6 +6410,124 @@ export default function App() {
       <div className="md:hidden"><BottomNav /></div>
       {selectedMob && MobDetails()}
       {showMenu && MenuScreen()}
+
+      {/* ── Map Overlay picker — outside MapScreen/MenuScreen so tap works first time ── */}
+      {showInsightPicker && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[200]" onClick={() => setShowInsightPicker(false)}>
+          <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
+            <div className="text-center font-semibold text-slate-800 py-3 border-b border-slate-100 text-base tracking-tight">Map Overlay</div>
+            <div className="p-3 space-y-1 pb-8">
+              {INSIGHT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => { setInsightMode(opt.id); setShowInsightPicker(false); }}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-left transition-colors border ${insightMode === opt.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-700 border-stone-100 hover:border-stone-300"}`}
+                >
+                  <span className="text-lg">{opt.icon}</span>
+                  <span className="font-medium text-sm">{opt.label}</span>
+                  {insightMode === opt.id && <span className="ml-auto text-xs opacity-70">Active</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Field Note Form — outside MapScreen/MenuScreen so tap works first time ── */}
+      {/* ── Field Note Create / Edit Form ── */}
+      {fieldNoteForm !== null && (() => {
+        const isEdit = !!fieldNoteForm.id;
+        const form = fieldNoteForm;
+        const setForm = (patch) => setFieldNoteForm(prev => ({ ...prev, ...patch }));
+        return (
+          <Modal title={isEdit ? "Edit Note" : "New Field Note"} onClose={() => setFieldNoteForm(null)}>
+            {/* GPS status */}
+            <div className={`flex items-center gap-2 text-xs rounded-xl px-3 py-2 mb-4 ${form.locationApprox ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700"}`}>
+              <span>{form.locationApprox ? "📍 Location approximate" : `📍 GPS: ${form.lat?.toFixed(5)}, ${form.lng?.toFixed(5)}${form.accuracyM ? ` ±${Math.round(form.accuracyM)}m` : ""}`}</span>
+            </div>
+            {/* Paddock */}
+            <div className="mb-3">
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Paddock</label>
+              <select value={form.paddock || ""} onChange={e => setForm({ paddock: e.target.value || null })}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm">
+                <option value="">— No paddock —</option>
+                {paddocks.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+              </select>
+            </div>
+            {/* Category */}
+            <div className="mb-3">
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Category</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {NOTE_CATEGORIES.map(cat => (
+                  <button key={cat.id} type="button" onClick={() => setForm({ category: cat.id })}
+                    className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold border-2 transition-colors ${form.category === cat.id ? "border-amber-400 bg-amber-50 text-amber-900" : "border-slate-200 bg-white text-slate-600"}`}>
+                    <span>{cat.icon}</span>{cat.id}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Priority */}
+            <div className="mb-3 flex gap-2">
+              {["normal", "urgent"].map(p => (
+                <button key={p} type="button" onClick={() => setForm({ priority: p })}
+                  className={`flex-1 rounded-xl py-2.5 text-sm font-bold border-2 transition-colors ${form.priority === p
+                    ? (p === "urgent" ? "border-red-400 bg-red-50 text-red-700" : "border-slate-300 bg-slate-100 text-slate-700")
+                    : "border-slate-200 bg-white text-slate-400"}`}>
+                  {p === "urgent" ? "🚨 Urgent" : "Normal"}
+                </button>
+              ))}
+            </div>
+            {/* Body */}
+            <div className="mb-4">
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Observation *</label>
+              <textarea value={form.body || ""} onChange={e => setForm({ body: e.target.value })} rows={4}
+                placeholder="Describe what you observed…"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm resize-none" />
+            </div>
+            <button onClick={async () => {
+              // Read fresh from state — the closure `form` may be stale after typing
+              const current = fieldNoteForm;
+              if (!current?.body?.trim()) { showToast("Please add a description"); return; }
+              let lat = current.lat, lng = current.lng, accuracyM = current.accuracyM, locationApprox = current.locationApprox;
+              if (!lat && !locationApprox) {
+                // Try one more GPS grab
+                try {
+                  const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 }));
+                  lat = pos.coords.latitude; lng = pos.coords.longitude;
+                  accuracyM = pos.coords.accuracy; locationApprox = false;
+                } catch {
+                  lat = FARM_CENTERS[farmName]?.[0] || 0;
+                  lng = FARM_CENTERS[farmName]?.[1] || 0;
+                  locationApprox = true;
+                }
+              }
+              try {
+                if (isEdit) {
+                  const updated = await api.updateFieldNote(current.id, { body: current.body, category: current.category, priority: current.priority, paddock: current.paddock });
+                  setFieldNotes(prev => prev.map(n => n.id === current.id ? { ...n, ...updated } : n));
+                  showToast("Note updated");
+                } else {
+                  const created = await api.createFieldNote(farmName, {
+                    lat, lng, accuracyM, locationApprox,
+                    paddock: current.paddock,
+                    category: current.category,
+                    body: current.body.trim(),
+                    priority: current.priority,
+                  });
+                  setFieldNotes(prev => [created, ...prev]);
+                  showToast("Note saved");
+                }
+                setFieldNoteForm(null);
+              } catch (err) { showToast(err.message || "Couldn't save note"); }
+            }} className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold">
+              {isEdit ? "Save Changes" : "Save Note"}
+            </button>
+          </Modal>
+        );
+      })()}
+
+
       {showAddMob && AddMobModal()}
 
       {showMobSummaryDetail && (
