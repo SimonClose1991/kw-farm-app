@@ -270,6 +270,27 @@ export const cattleFeedHistory = pgTable("cattle_feed_history", {
   events: jsonb("events").default([]),
 });
 
+// ── Field Notes ──────────────────────────────────────────────────────────────
+// GPS-pinned observations recorded in the paddock. Paddock is derived from GPS location.
+export const fieldNotes = pgTable("field_notes", {
+  id: serial("id").primaryKey(),
+  farmId: integer("farm_id").notNull().references(() => farms.id, { onDelete: "cascade" }),
+  farmName: text("farm_name").notNull(),
+  paddock: text("paddock"),          // derived from GPS, null if outside all polygons
+  lat: numeric("lat").notNull(),
+  lng: numeric("lng").notNull(),
+  accuracyM: numeric("accuracy_m"),  // GPS accuracy radius in metres
+  locationApprox: boolean("location_approx").default(false), // true if GPS unavailable
+  category: text("category").notNull().default("General"), // Fencing|Water|Weeds|Livestock Infrastructure|Cropping|Machinery|General
+  body: text("body").notNull(),
+  priority: text("priority").notNull().default("normal"), // normal | urgent
+  authorId: integer("author_id").references(() => accounts.id, { onDelete: "set null" }),
+  authorName: text("author_name"),
+  resolvedAt: timestamp("resolved_at"),  // null = open, set = resolved
+  taskCreated: boolean("task_created").default(false), // true if converted to workflow task
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // ── Password setup / reset tokens ────────────────────────────────────────────
 export const passwordTokens = pgTable("password_tokens", {
   id: serial("id").primaryKey(),

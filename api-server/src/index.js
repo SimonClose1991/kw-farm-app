@@ -16,6 +16,7 @@ import breedsRoutes from "./routes/breeds.js";
 import workflowRoutes from "./routes/workflow.js";
 import sheepRoutes from "./routes/sheep.js";
 import cattleRoutes from "./routes/cattle.js";
+import fieldNotesRoutes from "./routes/fieldNotes.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -51,6 +52,7 @@ app.use("/api/breeds", breedsRoutes);
 app.use("/api/workflow", workflowRoutes);
 app.use("/api/sheep", sheepRoutes);
 app.use("/api/cattle", cattleRoutes);
+app.use("/api/field-notes", fieldNotesRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);

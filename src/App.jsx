@@ -80,6 +80,16 @@ const NON_GRAZING_LAND_USES = new Set(["Cropping", "Fallow", "Yards/Infrastructu
 const PASTURE_TYPES = ["Native grass", "Improved pasture", "Cereal crop", "Wheat", "Canola", "Summer Crop", "N/A"];
 
 // Landmark categories/types, modelled on the AgriWebb Farm Map Editor feature set
+const NOTE_CATEGORIES = [
+  { id: "Fencing",                 colour: "#f97316", icon: "🔧" },
+  { id: "Water",                   colour: "#38bdf8", icon: "💧" },
+  { id: "Weeds",                   colour: "#22c55e", icon: "🌿" },
+  { id: "Livestock Infrastructure",colour: "#a78bfa", icon: "🐄" },
+  { id: "Cropping",                colour: "#eab308", icon: "🌾" },
+  { id: "Machinery",               colour: "#94a3b8", icon: "🚜" },
+  { id: "General",                 colour: "#64748b", icon: "📋" },
+];
+
 const LANDMARK_CATEGORIES = {
   Buildings: [
     { type: "Building", icon: "🏠" },
@@ -407,10 +417,15 @@ function GooglePaddockMap({
   initialZoom = null,
   landmarkPinMode = false, landmarkPinPos = null, onLandmarkPinMoved,
   onMapCentreChange = null,
-  instanceRef = null, // optional: parent passes a ref to get access to mapInstanceRef.current
+  instanceRef = null,
+  fieldNotes = [], showNotesOnMap = false, onSelectNote,
 }) {
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  // Tracks whether fitBounds has run for the current farm+center combination.
+  // Stored outside mapInstanceRef so it survives map remounts (which null mapInstanceRef).
+  const fittedBoundsRef = useRef(false);
+  const fittedBoundsCenterRef = useRef(null); // reset when farm changes
   // Sync internal ref to external ref so parent can access map/polygons/centroids
   React.useEffect(() => {
     if (instanceRef) instanceRef.current = mapInstanceRef.current;
@@ -528,6 +543,10 @@ function GooglePaddockMap({
         // Also clear label markers — no longer stored in overlays
         if (mapInstanceRef.current.labelMarkers) {
           Object.values(mapInstanceRef.current.labelMarkers).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
+        }
+        // Clear note pin markers
+        if (mapInstanceRef.current.noteMarkers) {
+          mapInstanceRef.current.noteMarkers.forEach(m => { try { m.setMap(null); } catch {} });
         }
       }
       const map = new g.Map(mapDivRef.current, {
@@ -828,16 +847,23 @@ function GooglePaddockMap({
         overlays.push(dot);
       }
 
-      const alreadyFitted = mapInstanceRef.current?.fittedBounds;
+      // Reset fittedBounds if the farm center changed (user switched farms)
+      const centerKey = `${center[0]},${center[1]}`;
+      if (fittedBoundsCenterRef.current !== centerKey) {
+        fittedBoundsRef.current = false;
+        fittedBoundsCenterRef.current = centerKey;
+      }
+      const alreadyFitted = fittedBoundsRef.current;
       if (!alreadyFitted && (paddocks.length || landmarks.length) && !drawMode && !initialZoom) {
         try { map.fitBounds(bounds, 40); } catch {}
+        fittedBoundsRef.current = true;
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
-        fittedBounds: alreadyFitted || (!drawMode && !initialZoom),
+        fittedBounds: true, // always true — fitBounds is now managed by fittedBoundsRef
         landmarks, renderLandmarks: renderAllLandmarks,
         centroids, center, bounds,
-        paddockList: paddocks, // for ID-based centroid lookups in mob overlay effect
+        paddockList: paddocks,
         renderMobs: null,
         currentInsightMode: insightMode,
         currentPaddockStats: paddockStats,
@@ -968,6 +994,39 @@ function GooglePaddockMap({
     // Pass current openGateIds directly so renderLandmarks doesn't use stale closure
     if (ref.renderLandmarks) ref.renderLandmarks(ref.map.getZoom(), openGateIds);
   }, [landmarks, openGateIds]);
+
+  // ── Field note pins effect ─────────────────────────────────────────────────
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.map || !window.google?.maps) return;
+    const g = window.google.maps;
+    const map = ref.map;
+    // Clear previous note markers
+    (ref.noteMarkers || []).forEach(m => { try { m.setMap(null); } catch {} });
+    ref.noteMarkers = [];
+    if (!showNotesOnMap || fieldNotes.length === 0) return;
+    fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng).forEach(note => {
+      const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+      const isUrgent = note.priority === "urgent";
+      const m = new g.Marker({
+        position: { lat: Number(note.lat), lng: Number(note.lng) },
+        map,
+        label: { text: cat.icon, fontSize: "14px" },
+        icon: {
+          path: g.SymbolPath.CIRCLE,
+          scale: isUrgent ? 14 : 11,
+          fillColor: isUrgent ? "#ef4444" : cat.colour,
+          fillOpacity: 0.95,
+          strokeColor: "#ffffff",
+          strokeWeight: 2,
+        },
+        zIndex: 30,
+        title: note.body?.slice(0, 60),
+      });
+      m.addListener("click", () => onSelectNote?.(note));
+      ref.noteMarkers.push(m);
+    });
+  }, [fieldNotes, showNotesOnMap]);
 
   // Separate effect: update polygon fill colors AND labels when insight mode OR paddocks change
   React.useEffect(() => {
@@ -2545,6 +2604,12 @@ export default function App() {
   // Gate state: array of {id, paddockA, paddockB, landmarkId} — when a gate is open, the two
   // paddocks it connects are merged visually (yellow border) and their DSE/ha is combined.
   const [openGates, setOpenGates] = useState([]);
+  // ── Field Notes ──────────────────────────────────────────────────────────────
+  const [fieldNotes, setFieldNotes] = useState([]);
+  const [showFieldNotes, setShowFieldNotes] = useState(false);   // notes list screen
+  const [fieldNoteForm, setFieldNoteForm] = useState(null);      // null = closed, {} = new, {id} = edit
+  const [fieldNoteDetail, setFieldNoteDetail] = useState(null);  // viewing a note detail
+  const [showNotesOnMap, setShowNotesOnMap] = useState(false);   // map pin layer toggle
   // Bulk spray state: which paddocks are selected for a multi-paddock spray record
   const [spraySelectedPaddocks, setSpraySelectedPaddocks] = useState([]);
   const [showBulkSpray, setShowBulkSpray] = useState(false);
@@ -2646,6 +2711,7 @@ export default function App() {
   React.useEffect(() => {
     if (!loggedInEmail) return;
     api.listRainfall(farmName).then(setRainfall).catch(() => {});
+    api.listFieldNotes(farmName).then(setFieldNotes).catch(() => {});
   }, [farmName, loggedInEmail]);
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState("");
@@ -2858,10 +2924,10 @@ export default function App() {
       patch.lastScore = Number(formValues["Average condition score"]);
       patch.lastScoreDate = formValues["Date"] || todayStr();
     }
-    if (name === "Treat" && formValues["_whpDays"]) {
+    if (name === "Treat") {
       const treatDate = formValues["Date"] || todayStr();
       patch.lastTreatDate = treatDate;
-      patch.whpDays = Number(formValues["_whpDays"]);
+      patch.whpDays = Number(formValues["_whpDays"] || 0);
       patch.esiDays = Number(formValues["_esiDays"] || 0);
     }
     if (name === "Weigh" && formValues["Average weight (kg)"]) {
@@ -2939,9 +3005,14 @@ export default function App() {
     if (name === "Score" && formValues["Average condition score"]) {
       const scores = formValues["_scores"] || [];
       summary = `Condition score: ${formValues["Average condition score"]}/5.0 (${scores.length} animal${scores.length !== 1 ? "s" : ""} scored${formValues["Notes"] ? " · " + formValues["Notes"] : ""})`;
+    } else if (name === "Treat") {
+      const selected = formValues["_selectedTreatments"] || [];
+      const names = selected.map(x => x.title).join(", ");
+      const whp = formValues["_whpDays"];
+      summary = names ? `Treated: ${names}${whp ? ` · WHP ${whp}d` : ""}${formValues["Notes"] ? " · " + formValues["Notes"] : ""}` : "Treatment recorded";
     } else {
       summary = Object.entries(formValues)
-        .filter(([k, v]) => v && !k.startsWith("_")) // skip internal keys like _scores
+        .filter(([k, v]) => v && !k.startsWith("_"))
         .map(([k, v]) => `${k}: ${v}`)
         .join(", ");
     }
@@ -3065,13 +3136,44 @@ export default function App() {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowHelp(true)}
-          className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0 ${mapMode === "Paddocks" ? "bg-amber-100 text-amber-700 font-bold" : "bg-slate-100 text-slate-500"}`}
-          title={mapMode === "Paddocks" ? "Map overlay" : "Help"}
-        >
-          {mapMode === "Paddocks" ? "🗺" : <HelpCircle size={16} />}
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* Field notes layer toggle */}
+          <button
+            onClick={() => setShowNotesOnMap(v => !v)}
+            className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0 ${showNotesOnMap ? "bg-amber-400 text-white" : "bg-slate-100 text-slate-500"}`}
+            title="Field notes"
+          >📍</button>
+          {/* Add note button — only when notes layer is on */}
+          {showNotesOnMap && (
+            <button
+              onClick={() => {
+                const gps = userLocation ? { lat: userLocation.lat, lng: userLocation.lng, accuracyM: userLocation.accuracy } : null;
+                // Derive paddock from GPS
+                let detectedPaddock = null;
+                if (gps && window.google?.maps?.geometry?.poly) {
+                  const latlng = new window.google.maps.LatLng(gps.lat, gps.lng);
+                  const polys = livMapRef.current?.polygons || {};
+                  for (const [pid, poly] of Object.entries(polys)) {
+                    if (window.google.maps.geometry.poly.containsLocation(latlng, poly)) {
+                      const p = paddocks.find(x => String(x.id) === String(pid));
+                      if (p) { detectedPaddock = p.name; break; }
+                    }
+                  }
+                }
+                setFieldNoteForm({ lat: gps?.lat || null, lng: gps?.lng || null, accuracyM: gps?.accuracyM || null, locationApprox: !gps, paddock: detectedPaddock, category: "General", body: "", priority: "normal" });
+              }}
+              className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold flex-shrink-0"
+              title="Add field note"
+            >+</button>
+          )}
+          <button
+            onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowHelp(true)}
+            className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0 ${mapMode === "Paddocks" ? "bg-amber-100 text-amber-700 font-bold" : "bg-slate-100 text-slate-500"}`}
+            title={mapMode === "Paddocks" ? "Map overlay" : "Help"}
+          >
+            {mapMode === "Paddocks" ? "🗺" : <HelpCircle size={16} />}
+          </button>
+        </div>
       </div>
 
       {/* ── Full-screen landmark pin placement overlay ── */}
@@ -3374,6 +3476,9 @@ export default function App() {
                 userLocation={userLocation}
                 openGateIds={openGates}
                 onMapCentreChange={(lat, lng) => setCurrentMapCentre({ lat, lng })}
+                fieldNotes={fieldNotes}
+                showNotesOnMap={showNotesOnMap}
+                onSelectNote={(note) => setFieldNoteDetail(note)}
               />
             ) : (
               <PaddockMap
@@ -3877,10 +3982,38 @@ export default function App() {
                         e.stopPropagation();
                         const key = `${landmarkDetail.id}`;
                         const opening = !openGates.includes(key);
-                        setOpenGates(prev => opening ? [...prev, key] : prev.filter(g => g !== key));
+                        const nextGates = opening
+                          ? [...openGates, key]
+                          : openGates.filter(g => g !== key);
+                        setOpenGates(nextGates);
+                        // Also update the map ref directly and re-render landmarks immediately
+                        // This avoids the race condition where the inline-function MapScreen
+                        // re-evaluates and remounts GooglePaddockMap before state propagates
+                        const mapRef = livMapRef.current;
+                        if (mapRef) {
+                          mapRef.currentOpenGateIds = nextGates;
+                          if (mapRef.renderLandmarks && mapRef.map) {
+                            mapRef.renderLandmarks(mapRef.map.getZoom(), nextGates);
+                          }
+                          // Also update polygon strokes for gate-open visual
+                          if (mapRef.polygons && mapRef.map) {
+                            const g = window.google?.maps;
+                            if (g) {
+                              paddocks.forEach(p => {
+                                const isGateOpen = landmarks.some(l =>
+                                  l.type === "Gate" &&
+                                  nextGates.includes(String(l.id)) &&
+                                  (l.paddockA === p.name || l.paddockB === p.name)
+                                );
+                                const poly = mapRef.polygons[p.id];
+                                if (poly) poly.setOptions({ strokeColor: isGateOpen ? "#eab308" : "#ffffff", strokeWeight: isGateOpen ? 3 : 2 });
+                              });
+                            }
+                          }
+                        }
                         showToast(opening
                           ? `Gate opened${landmarkDetail.paddockA ? ` — ${landmarkDetail.paddockA} ↔ ${landmarkDetail.paddockB}` : ""}`
-                          : `Gate closed`
+                          : "Gate closed"
                         );
                       }}
                       className={`w-full rounded-2xl py-4 font-bold text-base mb-2 transition-colors ${isOpen
@@ -4076,6 +4209,27 @@ export default function App() {
                   <div className="text-left">
                     <div>Log Spray Treatment</div>
                     <div className="text-xs font-normal opacity-80">Chemical, rate, method, WHP/ESI, batch — single or multiple paddocks</div>
+                  </div>
+                </button>
+
+                {/* Field note shortcut from paddock detail */}
+                <button
+                  onClick={() => {
+                    const gps = userLocation;
+                    setFieldNoteForm({
+                      lat: gps?.lat || null, lng: gps?.lng || null,
+                      accuracyM: gps?.accuracy || null,
+                      locationApprox: !gps,
+                      paddock: paddockDetail.name,
+                      category: "General", body: "", priority: "normal",
+                    });
+                  }}
+                  className="w-full flex items-center gap-3 bg-slate-100 text-slate-700 rounded-2xl px-4 py-3 font-bold text-sm"
+                >
+                  <span className="text-lg">📍</span>
+                  <div className="text-left">
+                    <div>Add Field Note</div>
+                    <div className="text-xs font-normal text-slate-400">GPS-pinned observation for this paddock</div>
                   </div>
                 </button>
 
@@ -5057,6 +5211,18 @@ export default function App() {
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-sky-500"><Droplet size={16} /></div>
             <span className="font-semibold text-slate-700">Rainfall records</span>
           </button>
+          <button onClick={() => setShowFieldNotes(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+            <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 font-bold text-base">📍</div>
+            <div className="text-left flex-1">
+              <div className="font-semibold text-slate-700">Field Notes</div>
+              <div className="text-xs text-slate-400">GPS-pinned paddock observations</div>
+            </div>
+            {fieldNotes.filter(n => !n.resolvedAt).length > 0 && (
+              <span className="text-xs font-bold bg-amber-500 text-white px-2 py-0.5 rounded-full">
+                {fieldNotes.filter(n => !n.resolvedAt).length}
+              </span>
+            )}
+          </button>
           <button onClick={() => setShowPaddockList(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center text-green-600">▦</div>
             <div className="text-left">
@@ -5607,6 +5773,231 @@ export default function App() {
           </div>
         </div>
       )}
+
+      )}
+
+      {/* ── Field Notes List Screen ── */}
+      {showFieldNotes && (() => {
+        const open = fieldNotes.filter(n => !n.resolvedAt).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const resolved = fieldNotes.filter(n => n.resolvedAt).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const urgentCount = open.filter(n => n.priority === "urgent").length;
+        return (
+          <div className="fixed inset-0 bg-white z-[150] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 flex-shrink-0">
+              <button onClick={() => setShowFieldNotes(false)} className="text-slate-600 font-semibold text-sm flex items-center gap-1">← Back</button>
+              <div className="font-bold text-slate-800">Field Notes</div>
+              <button onClick={() => setFieldNoteForm({ lat: null, lng: null, locationApprox: true, paddock: null, category: "General", body: "", priority: "normal" })}
+                className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+            </div>
+            {urgentCount > 0 && (
+              <div className="bg-red-50 border-b border-red-100 px-4 py-2 text-sm text-red-700 font-semibold flex items-center gap-2 flex-shrink-0">
+                <span className="text-base">🚨</span>{urgentCount} urgent note{urgentCount > 1 ? "s" : ""} need attention
+              </div>
+            )}
+            <div className="flex-1 overflow-y-auto">
+              {open.length === 0 && resolved.length === 0 && (
+                <div className="text-center text-slate-400 py-16">
+                  <div className="text-4xl mb-3">📍</div>
+                  <div className="font-semibold">No field notes yet</div>
+                  <div className="text-sm mt-1">Tap + to record an observation</div>
+                </div>
+              )}
+              {open.length > 0 && (
+                <div>
+                  <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-50">Open — {open.length}</div>
+                  {open.map(note => {
+                    const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+                    return (
+                      <button key={note.id} onClick={() => setFieldNoteDetail(note)}
+                        className="w-full text-left px-4 py-3 border-b border-slate-50 active:bg-slate-50">
+                        <div className="flex items-start gap-3">
+                          <span className="text-xl flex-shrink-0 mt-0.5">{cat.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="text-xs font-bold" style={{ color: cat.colour }}>{note.category}</span>
+                              {note.priority === "urgent" && <span className="text-xs font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-full">URGENT</span>}
+                              {note.paddock && <span className="text-xs text-slate-400">{note.paddock}</span>}
+                            </div>
+                            <div className="text-sm text-slate-700 leading-snug line-clamp-2">{note.body}</div>
+                            <div className="text-xs text-slate-400 mt-1">{note.authorName} · {note.createdAt ? new Date(note.createdAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}</div>
+                          </div>
+                          <ChevronRight size={14} className="text-slate-300 flex-shrink-0 mt-1" />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {resolved.length > 0 && (
+                <div>
+                  <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-50">Resolved — {resolved.length}</div>
+                  {resolved.map(note => {
+                    const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+                    return (
+                      <button key={note.id} onClick={() => setFieldNoteDetail(note)}
+                        className="w-full text-left px-4 py-3 border-b border-slate-50 active:bg-slate-50 opacity-60">
+                        <div className="flex items-start gap-3">
+                          <span className="text-xl flex-shrink-0 mt-0.5">{cat.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="text-xs font-bold" style={{ color: cat.colour }}>{note.category}</span>
+                              <span className="text-xs text-green-600 font-semibold">✓ Resolved</span>
+                            </div>
+                            <div className="text-sm text-slate-500 line-clamp-1">{note.body}</div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Field Note Detail ── */}
+      {fieldNoteDetail && (() => {
+        const note = fieldNoteDetail;
+        const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES.at(-1);
+        const isResolved = !!note.resolvedAt;
+        return (
+          <Modal title="Field Note" onClose={() => setFieldNoteDetail(null)}>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-2xl">{cat.icon}</span>
+              <div>
+                <div className="font-bold text-sm" style={{ color: cat.colour }}>{note.category}</div>
+                {note.paddock && <div className="text-xs text-slate-400">{note.paddock} · {note.farmName}</div>}
+              </div>
+              {note.priority === "urgent" && <span className="ml-auto text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded-full">URGENT</span>}
+            </div>
+            <p className="text-slate-700 text-sm leading-relaxed mb-4 whitespace-pre-wrap">{note.body}</p>
+            <div className="text-xs text-slate-400 mb-4">
+              {note.locationApprox ? "📍 Location approximate" : `📍 ${Number(note.lat).toFixed(5)}, ${Number(note.lng).toFixed(5)}${note.accuracyM ? ` ±${Math.round(Number(note.accuracyM))}m` : ""}`}
+              <br />By {note.authorName} · {note.createdAt ? new Date(note.createdAt).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
+            </div>
+            <div className="space-y-2">
+              {!isResolved && (
+                <button onClick={async () => {
+                  const updated = await api.updateFieldNote(note.id, { resolvedAt: new Date().toISOString() });
+                  setFieldNotes(prev => prev.map(n => n.id === note.id ? { ...n, resolvedAt: updated.resolvedAt } : n));
+                  setFieldNoteDetail({ ...note, resolvedAt: updated.resolvedAt });
+                  showToast("Marked as resolved");
+                }} className="w-full bg-green-500 text-white rounded-2xl py-3 font-bold">✓ Mark Resolved</button>
+              )}
+              {!note.taskCreated && (
+                <button onClick={async () => {
+                  // Convert to workflow task — writes to workflow tasks via API
+                  showToast("Opening workflow to add task…");
+                  setFieldNoteDetail(null);
+                  setShowFieldNotes(false);
+                  setTab("workflow");
+                }} className="w-full bg-amber-500 text-white rounded-2xl py-3 font-bold">📋 Convert to Workflow Task</button>
+              )}
+              <div className="flex gap-2">
+                <button onClick={() => {
+                  setFieldNoteForm({ ...note });
+                  setFieldNoteDetail(null);
+                }} className="flex-1 bg-slate-100 text-slate-700 rounded-2xl py-3 font-semibold">Edit</button>
+                <button onClick={async () => {
+                  if (!window.confirm("Delete this field note?")) return;
+                  await api.deleteFieldNote(note.id);
+                  setFieldNotes(prev => prev.filter(n => n.id !== note.id));
+                  setFieldNoteDetail(null);
+                  showToast("Note deleted");
+                }} className="bg-rose-50 text-rose-500 rounded-2xl py-3 px-4 font-semibold">Delete</button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ── Field Note Create / Edit Form ── */}
+      {fieldNoteForm !== null && (() => {
+        const isEdit = !!fieldNoteForm.id;
+        const form = fieldNoteForm;
+        const setForm = (patch) => setFieldNoteForm(prev => ({ ...prev, ...patch }));
+        return (
+          <Modal title={isEdit ? "Edit Note" : "New Field Note"} onClose={() => setFieldNoteForm(null)}>
+            {/* GPS status */}
+            <div className={`flex items-center gap-2 text-xs rounded-xl px-3 py-2 mb-4 ${form.locationApprox ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700"}`}>
+              <span>{form.locationApprox ? "📍 Location approximate" : `📍 GPS: ${form.lat?.toFixed(5)}, ${form.lng?.toFixed(5)}${form.accuracyM ? ` ±${Math.round(form.accuracyM)}m` : ""}`}</span>
+            </div>
+            {/* Paddock */}
+            <div className="mb-3">
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Paddock</label>
+              <select value={form.paddock || ""} onChange={e => setForm({ paddock: e.target.value || null })}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm">
+                <option value="">— No paddock —</option>
+                {paddocks.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+              </select>
+            </div>
+            {/* Category */}
+            <div className="mb-3">
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Category</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {NOTE_CATEGORIES.map(cat => (
+                  <button key={cat.id} type="button" onClick={() => setForm({ category: cat.id })}
+                    className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold border-2 transition-colors ${form.category === cat.id ? "border-amber-400 bg-amber-50 text-amber-900" : "border-slate-200 bg-white text-slate-600"}`}>
+                    <span>{cat.icon}</span>{cat.id}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Priority */}
+            <div className="mb-3 flex gap-2">
+              {["normal", "urgent"].map(p => (
+                <button key={p} type="button" onClick={() => setForm({ priority: p })}
+                  className={`flex-1 rounded-xl py-2.5 text-sm font-bold border-2 transition-colors ${form.priority === p
+                    ? (p === "urgent" ? "border-red-400 bg-red-50 text-red-700" : "border-slate-300 bg-slate-100 text-slate-700")
+                    : "border-slate-200 bg-white text-slate-400"}`}>
+                  {p === "urgent" ? "🚨 Urgent" : "Normal"}
+                </button>
+              ))}
+            </div>
+            {/* Body */}
+            <div className="mb-4">
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Observation *</label>
+              <textarea value={form.body || ""} onChange={e => setForm({ body: e.target.value })} rows={4}
+                placeholder="Describe what you observed…"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm resize-none" />
+            </div>
+            <button onClick={async () => {
+              if (!form.body?.trim()) { showToast("Please add a description"); return; }
+              if (!form.lat && !form.locationApprox) {
+                // Try one more GPS grab
+                try {
+                  const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 }));
+                  form.lat = pos.coords.latitude; form.lng = pos.coords.longitude;
+                  form.accuracyM = pos.coords.accuracy; form.locationApprox = false;
+                } catch {
+                  form.lat = FARM_CENTERS[farmName]?.[0] || 0;
+                  form.lng = FARM_CENTERS[farmName]?.[1] || 0;
+                  form.locationApprox = true;
+                }
+              }
+              try {
+                if (isEdit) {
+                  const updated = await api.updateFieldNote(form.id, { body: form.body, category: form.category, priority: form.priority, paddock: form.paddock });
+                  setFieldNotes(prev => prev.map(n => n.id === form.id ? { ...n, ...updated } : n));
+                  showToast("Note updated");
+                } else {
+                  const created = await api.createFieldNote(farmName, {
+                    lat: form.lat, lng: form.lng, accuracyM: form.accuracyM,
+                    locationApprox: form.locationApprox, paddock: form.paddock,
+                    category: form.category, body: form.body.trim(), priority: form.priority,
+                  });
+                  setFieldNotes(prev => [created, ...prev]);
+                  showToast("Note saved");
+                }
+                setFieldNoteForm(null);
+              } catch (err) { showToast(err.message || "Couldn't save note"); }
+            }} className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold">
+              {isEdit ? "Save Changes" : "Save Note"}
+            </button>
+          </Modal>
+        );
+      })()}
 
       {showRainfall && (() => {
         const sortedRainfall = [...rainfall].sort((a, b) => (a.date < b.date ? 1 : -1));

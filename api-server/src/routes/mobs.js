@@ -18,7 +18,8 @@ router.get("/", requireAuth, async (req, res) => {
   const farmId = await farmIdByName(farmName);
   if (!farmId) return res.json([]);
   const all = await db.select().from(mobs).where(eq(mobs.farmId, farmId));
-  res.json(all);
+  // Flatten extra jsonb fields into each mob so frontend receives lastTreatDate, whpDays etc
+  res.json(all.map(m => ({ ...m, ...(m.extra || {}) })));
 });
 
 // POST /api/mobs  body: { farm, ...mobFields }
@@ -33,13 +34,37 @@ router.post("/", requireAuth, requireEditor, async (req, res) => {
 // PUT /api/mobs/:id  body: { ...fields to update }
 router.put("/:id", requireAuth, requireEditor, async (req, res) => {
   const { farm, ...fields } = req.body;
+
+  // Known DB columns on the mobs table
+  const KNOWN_COLS = new Set([
+    "name","desc","count","paddock","dse","species","type","breed","ageClass",
+    "mgmtGroup","tag","whp","lastWeight","lastWeightDate","assumedADG",
+    "daysInPaddock","wec","extra"
+  ]);
+
+  // Split into known columns and extra fields
+  const knownFields = {};
+  const extraFields = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (KNOWN_COLS.has(k)) knownFields[k] = v;
+    else extraFields[k] = v;
+  }
+
+  // Merge extra fields with existing extra blob
+  if (Object.keys(extraFields).length > 0) {
+    const [existing] = await db.select({ extra: mobs.extra })
+      .from(mobs).where(eq(mobs.id, Number(req.params.id)));
+    knownFields.extra = { ...(existing?.extra || {}), ...extraFields };
+  }
+
   const [updated] = await db
     .update(mobs)
-    .set({ ...fields, updatedAt: new Date() })
+    .set({ ...knownFields, updatedAt: new Date() })
     .where(eq(mobs.id, Number(req.params.id)))
     .returning();
   if (!updated) return res.status(404).json({ error: "Mob not found" });
-  res.json(updated);
+  // Flatten extra fields back into response so frontend gets them
+  res.json({ ...updated, ...(updated.extra || {}) });
 });
 
 // DELETE /api/mobs/:id

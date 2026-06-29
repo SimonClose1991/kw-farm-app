@@ -123,6 +123,12 @@ export const api = {
   getSheepHistory: () => request("/sheep/history"),
   addSheepHistory: (entry) => request("/sheep/history", { method: "POST", body: JSON.stringify(entry) }),
 
+  // --- Field Notes ---
+  listFieldNotes: (farm) => request(`/field-notes?farm=${encodeURIComponent(farm)}`),
+  createFieldNote: (farm, fields) => request("/field-notes", { method: "POST", body: JSON.stringify({ farm, ...fields }) }),
+  updateFieldNote: (id, fields) => request(`/field-notes/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
+  deleteFieldNote: (id) => request(`/field-notes/${id}`, { method: "DELETE" }),
+
   // --- Cattle Feedlot ---
   getCattleElements: () => request("/cattle/elements"),
   createCattleElement: (e) => request("/cattle/elements", { method: "POST", body: JSON.stringify(e) }),
