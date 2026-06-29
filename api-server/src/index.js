@@ -17,6 +17,8 @@ import workflowRoutes from "./routes/workflow.js";
 import sheepRoutes from "./routes/sheep.js";
 import cattleRoutes from "./routes/cattle.js";
 import fieldNotesRoutes from "./routes/fieldNotes.js";
+import { sql } from "drizzle-orm";
+import { db } from "./db/index.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -55,8 +57,6 @@ app.use("/api/cattle", cattleRoutes);
 app.use("/api/field-notes", fieldNotesRoutes);
 
 // ── Auto-create field_notes table if it doesn't exist ───────────────────────
-// Avoids needing a manual drizzle-kit push after first deploy of this feature
-import { sql } from "drizzle-orm";
 (async () => {
   try {
     await db.execute(sql`

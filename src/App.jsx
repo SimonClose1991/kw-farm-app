@@ -1036,6 +1036,7 @@ function GooglePaddockMap({
     });
   }, [fieldNotes, showNotesOnMap]);
 
+
   // Separate effect: update polygon fill colors AND labels when insight mode OR paddocks change
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
@@ -2572,6 +2573,48 @@ export default function App() {
   const [dragMobId, setDragMobId] = useState(null);
   const [draggingMob, setDraggingMob] = useState(null);
   const livMapRef = React.useRef(null); // exposes GooglePaddockMap internals for drag-to-paddock
+
+  // ── Field note pin-picking: when _pickingPin is true, next map click places pin ──
+  React.useEffect(() => {
+    if (!fieldNoteForm?._pickingPin) return;
+    // Try paddocks map ref first, then livestock map ref
+    const ref = livMapRef.current;
+    const mapInstance = ref?.map;
+    if (!mapInstance) {
+      showToast("Open the map tab first, then use Place on map");
+      return;
+    }
+    // Change cursor to crosshair
+    mapInstance.setOptions({ draggableCursor: "crosshair" });
+    const listener = mapInstance.addListener("click", (e) => {
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      // Detect which paddock was clicked
+      let detectedPaddock = null;
+      if (window.google?.maps?.geometry?.poly && ref.polygons) {
+        for (const [pid, poly] of Object.entries(ref.polygons)) {
+          if (window.google.maps.geometry.poly.containsLocation(e.latLng, poly)) {
+            const p = paddocks.find(x => String(x.id) === String(pid));
+            if (p) { detectedPaddock = p.name; break; }
+          }
+        }
+      }
+      setFieldNoteForm(prev => ({
+        ...prev,
+        lat, lng, accuracyM: null, locationApprox: false,
+        paddock: detectedPaddock || prev?.paddock,
+        _pickingPin: false,
+      }));
+      mapInstance.setOptions({ draggableCursor: null });
+      window.google.maps.event.removeListener(listener);
+    });
+    return () => {
+      try {
+        window.google?.maps?.event?.removeListener(listener);
+        mapInstance.setOptions({ draggableCursor: null });
+      } catch {}
+    };
+  }, [fieldNoteForm?._pickingPin]);
   const [dragOverPaddock, setDragOverPaddock] = useState(null);
   const [showPaddockPicker, setShowPaddockPicker] = useState(false); // bottom-sheet paddock picker in mob details
   const [showInsightPicker, setShowInsightPicker] = useState(false); // insight overlay picker on map
@@ -3190,6 +3233,15 @@ export default function App() {
       </div>
 
       {/* ── Full-screen landmark pin placement overlay ── */}
+      {/* ── Field note pin picking banner ── */}
+      {fieldNoteForm?._pickingPin && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[300] bg-amber-500 text-white text-sm font-bold px-5 py-3 rounded-full shadow-xl flex items-center gap-2">
+          <span>📍</span> Click the map to place your note
+          <button onClick={() => setFieldNoteForm(prev => ({ ...prev, _pickingPin: false }))}
+            className="ml-2 bg-white/20 rounded-full w-6 h-6 flex items-center justify-center text-xs">✕</button>
+        </div>
+      )}
+
       {landmarkPinPlacing && (
         <div className="fixed inset-0 z-50 flex flex-col">
           <div className="bg-amber-500 text-white px-4 py-3 flex items-center gap-3 flex-shrink-0">
@@ -6440,11 +6492,57 @@ export default function App() {
         const isEdit = !!fieldNoteForm.id;
         const form = fieldNoteForm;
         const setForm = (patch) => setFieldNoteForm(prev => ({ ...prev, ...patch }));
+        const hasLocation = form.lat && form.lng;
         return (
           <Modal title={isEdit ? "Edit Note" : "New Field Note"} onClose={() => setFieldNoteForm(null)}>
-            {/* GPS status */}
-            <div className={`flex items-center gap-2 text-xs rounded-xl px-3 py-2 mb-4 ${form.locationApprox ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700"}`}>
-              <span>{form.locationApprox ? "📍 Location approximate" : `📍 GPS: ${form.lat?.toFixed(5)}, ${form.lng?.toFixed(5)}${form.accuracyM ? ` ±${Math.round(form.accuracyM)}m` : ""}`}</span>
+            {/* Location picker */}
+            <div className="mb-4">
+              <label className="text-sm font-semibold text-slate-600 block mb-1.5">Location</label>
+              {hasLocation ? (
+                <div className="flex items-center gap-2">
+                  <div className={`flex-1 flex items-center gap-2 text-xs rounded-xl px-3 py-2.5 ${form.locationApprox ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-green-50 text-green-700 border border-green-200"}`}>
+                    <span className="text-base">📍</span>
+                    <span>{form.locationApprox ? "Farm centre (approximate)" : `${Number(form.lat).toFixed(4)}, ${Number(form.lng).toFixed(4)}${form.accuracyM ? ` ±${Math.round(form.accuracyM)}m` : ""}`}</span>
+                  </div>
+                  <button type="button" onClick={() => setForm({ lat: null, lng: null, locationApprox: true })}
+                    className="text-xs text-slate-400 hover:text-slate-600 px-2 py-2 rounded-lg border border-slate-200">✕</button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {/* GPS button — works on phone */}
+                  <button type="button" onClick={async () => {
+                    try {
+                      const pos = await new Promise((res, rej) =>
+                        navigator.geolocation.getCurrentPosition(res, rej, { timeout: 8000, enableHighAccuracy: true })
+                      );
+                      // Detect paddock from GPS
+                      let detectedPaddock = form.paddock;
+                      if (window.google?.maps?.geometry?.poly) {
+                        const latlng = new window.google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
+                        const polys = livMapRef.current?.polygons || {};
+                        for (const [pid, poly] of Object.entries(polys)) {
+                          if (window.google.maps.geometry.poly.containsLocation(latlng, poly)) {
+                            const p = paddocks.find(x => String(x.id) === String(pid));
+                            if (p) { detectedPaddock = p.name; break; }
+                          }
+                        }
+                      }
+                      setForm({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy, locationApprox: false, paddock: detectedPaddock });
+                    } catch {
+                      showToast("GPS unavailable — use map pin instead");
+                    }
+                  }} className="flex items-center justify-center gap-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl py-3 text-sm font-semibold">
+                    <span>📡</span> Use my GPS
+                  </button>
+                  {/* Map pin button — works on desktop */}
+                  <button type="button" onClick={() => {
+                    setForm({ _pickingPin: true });
+                    showToast("Click the map to place your note pin");
+                  }} className="flex items-center justify-center gap-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl py-3 text-sm font-semibold">
+                    <span>🗺</span> Place on map
+                  </button>
+                </div>
+              )}
             </div>
             {/* Paddock */}
             <div className="mb-3">
