@@ -592,6 +592,7 @@ function buildCard(t){
     // Admin view: just title + staff + drag handle. Click opens edit modal.
     inner+=`<div class="tc-title" style="${t.completed?"text-decoration:line-through;opacity:.5":""}">${esc(t.content)}</div>`;
     if(st) inner+=`<div class="tc-staff" style="color:${c.tx}">${esc(st)}</div>`;
+    if(t.paddock) inner+=`<div style="font-size:9px;color:#a8a29e;margin-top:1px">📍 ${esc(t.paddock)}</div>`;
     if(t.recur&&t.recur!=="none") inner+=`<div style="font-size:9px;color:#a8a29e;margin-top:2px">🔁 ${t.recur==="daily"?"Daily":"Weekly"}</div>`;
     if(t.comment) inner+=`<div class="tc-comment">💬 ${esc(t.comment)}</div>`;
     // Drag handle — always visible, triggers drag
@@ -835,6 +836,7 @@ function _showTaskModal(farm,day,content,notes,color,assigned){
       </select>
     </div>
     <div class="form-field"><label>Task *</label><textarea id="m-content" rows="3" placeholder="What needs doing…">${esc(content)}</textarea></div>
+    <div class="form-field"><label>Paddock / Location</label><input type="text" id="m-paddock" value="${esc(editingId ? (tasks.find(x=>x.id===editingId)?.paddock||'') : '')}" placeholder="e.g. Tank Paddock (optional)"/></div>
     <div class="form-field"><label>Notes</label><input type="text" id="m-notes" value="${esc(notes)}" placeholder="Extra info…"/></div>
     <div class="form-field"><label>Category</label><div class="pill-group" id="m-colors">${colorPills}</div></div>
     <div class="form-field"><label>Assign staff</label><div class="pill-group" id="m-pills">${pills}</div></div>
@@ -881,15 +883,16 @@ function saveTask(){
   const day=document.getElementById("m-day").value;
   const content=document.getElementById("m-content").value.trim();
   const notes=document.getElementById("m-notes").value.trim()||null;
+  const paddock=document.getElementById("m-paddock")?.value.trim()||null;
   const recur=(document.getElementById("m-recur")||{}).value||"none";
   if(!content){ document.getElementById("m-err").style.display="block"; return; }
   const date=toISO(addDays(weekStart,DAYS.indexOf(day)));
   if(editingId){
     const t=tasks.find(x=>x.id===editingId);
-    if(t) Object.assign(t,{farm,day,content,notes,color:selColor,recur,assignedStaff:[...selStaff],date});
+    if(t) Object.assign(t,{farm,day,content,notes,paddock,color:selColor,recur,assignedStaff:[...selStaff],date});
     closeModal(); saveState(); render(); return;
   }
-  const base={farm,content,notes,color:selColor,assignedStaff:[...selStaff],completed:false,createdAt:new Date().toISOString()};
+  const base={farm,content,notes,paddock,color:selColor,assignedStaff:[...selStaff],completed:false,createdAt:new Date().toISOString()};
   if(recur==="daily"||recur==="weekdays"){
     const series=uid(), idxs=recur==="weekdays"?[0,1,2,3,4]:[0,1,2,3,4,5,6];
     idxs.forEach(di=>tasks.push({...base,id:uid(),series,recur,day:DAYS[di],date:toISO(addDays(weekStart,di))}));

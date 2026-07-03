@@ -584,10 +584,10 @@ function GooglePaddockMap({
         const fillColour = mode === "paddocks" ? (colourForPaddock(p) || "#999999") : "transparent";
         const poly = new g.Polygon({
           paths: path,
-          strokeColor: isGateOpen ? "#eab308" : "#ffffff",
-          strokeWeight: isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5),
-          fillColor: mode === "paddocks" ? fillColour : "#38bdf8",
-          fillOpacity: mode === "paddocks" ? 0.45 : 0.15,
+          strokeColor: mode === "notes" ? "#94a3b8" : (isGateOpen ? "#eab308" : "#ffffff"),
+          strokeWeight: mode === "notes" ? 1 : (isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5)),
+          fillColor: mode === "paddocks" ? fillColour : (mode === "notes" ? "#e2e8f0" : "#38bdf8"),
+          fillOpacity: mode === "paddocks" ? 0.45 : (mode === "notes" ? 0.2 : 0.15),
           map,
         });
         // Individual polygon click still works on desktop
@@ -1023,32 +1023,39 @@ function GooglePaddockMap({
     if (!ref?.map || !window.google?.maps) return;
     const g = window.google.maps;
     const map = ref.map;
-    // Clear previous note markers
     (ref.noteMarkers || []).forEach(m => { try { m.setMap(null); } catch {} });
     ref.noteMarkers = [];
-    if (!showNotesOnMap || fieldNotes.length === 0) return;
-    fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng).forEach(note => {
+    // In Notes mode: show all open notes + faded resolved ones
+    // In other modes: only show when showNotesOnMap toggle is on
+    const isNotesMode = mode === "notes";
+    if (!isNotesMode && !showNotesOnMap) return;
+    const notesToShow = isNotesMode
+      ? fieldNotes.filter(n => n.lat && n.lng) // all notes including resolved
+      : fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng); // overlay: open only
+    notesToShow.forEach(note => {
       const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
       const isUrgent = note.priority === "urgent";
+      const isResolved = !!note.resolvedAt;
+      const hasTask = !!note.taskCreated;
       const m = new g.Marker({
         position: { lat: Number(note.lat), lng: Number(note.lng) },
         map,
-        label: { text: cat.icon, fontSize: "14px" },
+        label: { text: hasTask ? "📋" : cat.icon, fontSize: isNotesMode ? "16px" : "13px" },
         icon: {
           path: g.SymbolPath.CIRCLE,
-          scale: isUrgent ? 14 : 11,
-          fillColor: isUrgent ? "#ef4444" : cat.colour,
-          fillOpacity: 0.95,
-          strokeColor: "#ffffff",
+          scale: isUrgent ? (isNotesMode ? 18 : 14) : (isNotesMode ? 14 : 11),
+          fillColor: isResolved ? "#94a3b8" : (isUrgent ? "#ef4444" : cat.colour),
+          fillOpacity: isResolved ? 0.4 : 0.95,
+          strokeColor: isResolved ? "#cbd5e1" : "#ffffff",
           strokeWeight: 2,
         },
-        zIndex: 30,
+        zIndex: isUrgent ? 35 : (isResolved ? 20 : 30),
         title: note.body?.slice(0, 60),
       });
       m.addListener("click", () => onSelectNote?.(note));
       ref.noteMarkers.push(m);
     });
-  }, [fieldNotes, showNotesOnMap]);
+  }, [fieldNotes, showNotesOnMap, mode]);
 
 
   // Separate effect: update polygon fill colors AND labels when insight mode OR paddocks change
@@ -1076,8 +1083,9 @@ function GooglePaddockMap({
       const poly = ref.polygons[p.id];
       if (!poly) return;
       if (mode === "livestock") {
-        // Livestock mode: always light blue outlines so mob markers stand out
         poly.setOptions({ fillColor: "#38bdf8", fillOpacity: 0.15 });
+      } else if (mode === "notes") {
+        poly.setOptions({ fillColor: "#e2e8f0", fillOpacity: 0.2, strokeColor: "#94a3b8", strokeWeight: 1 });
       } else {
         const fill = colourForPaddock(p);
         if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
@@ -3197,7 +3205,7 @@ export default function App() {
           <Settings size={16} />
         </button>
         <div className="flex-1 flex bg-slate-100 rounded-full p-1">
-          {["Livestock", "Paddocks"].map((m) => (
+          {["Livestock", "Paddocks", "Notes"].map((m) => (
             <button
               key={m}
               onClick={() => setMapMode(m)}
@@ -3208,18 +3216,11 @@ export default function App() {
           ))}
         </div>
         <div className="flex items-center gap-1.5">
-          {/* Field notes layer toggle */}
-          <button
-            onClick={() => setShowNotesOnMap(v => !v)}
-            className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0 ${showNotesOnMap ? "bg-amber-400 text-white" : "bg-slate-100 text-slate-500"}`}
-            title="Field notes"
-          >📍</button>
-          {/* Add note button — only when notes layer is on */}
-          {showNotesOnMap && (
+          {/* In Notes mode: add note button always visible */}
+          {mapMode === "Notes" && (
             <button
               onClick={() => {
                 const gps = userLocation ? { lat: userLocation.lat, lng: userLocation.lng, accuracyM: userLocation.accuracy } : null;
-                // Derive paddock from GPS
                 let detectedPaddock = null;
                 if (gps && window.google?.maps?.geometry?.poly) {
                   const latlng = new window.google.maps.LatLng(gps.lat, gps.lng);
@@ -3236,6 +3237,37 @@ export default function App() {
               className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold flex-shrink-0"
               title="Add field note"
             >+</button>
+          )}
+          {/* In Livestock/Paddocks: field notes overlay toggle */}
+          {mapMode !== "Notes" && (
+            <>
+              <button
+                onClick={() => setShowNotesOnMap(v => !v)}
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0 ${showNotesOnMap ? "bg-amber-400 text-white" : "bg-slate-100 text-slate-500"}`}
+                title="Field notes overlay"
+              >📍</button>
+              {showNotesOnMap && (
+                <button
+                  onClick={() => {
+                    const gps = userLocation ? { lat: userLocation.lat, lng: userLocation.lng, accuracyM: userLocation.accuracy } : null;
+                    let detectedPaddock = null;
+                    if (gps && window.google?.maps?.geometry?.poly) {
+                      const latlng = new window.google.maps.LatLng(gps.lat, gps.lng);
+                      const polys = livMapRef.current?.polygons || {};
+                      for (const [pid, poly] of Object.entries(polys)) {
+                        if (window.google.maps.geometry.poly.containsLocation(latlng, poly)) {
+                          const p = paddocks.find(x => String(x.id) === String(pid));
+                          if (p) { detectedPaddock = p.name; break; }
+                        }
+                      }
+                    }
+                    setFieldNoteForm({ lat: gps?.lat || null, lng: gps?.lng || null, accuracyM: gps?.accuracyM || null, locationApprox: !gps, paddock: detectedPaddock, category: "General", body: "", priority: "normal" });
+                  }}
+                  className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold flex-shrink-0"
+                  title="Add field note"
+                >+</button>
+              )}
+            </>
           )}
           <button
             onClick={() => mapMode === "Paddocks" ? setShowInsightPicker(true) : setShowHelp(true)}
@@ -3674,6 +3706,49 @@ export default function App() {
               reader.readAsText(file);
               e.target.value = "";
             }} />
+          </div>
+        );
+      })()}
+
+      {/* ── Notes Map Mode ── */}
+      {mapMode === "Notes" && (() => {
+        const openNotes = fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng);
+        const resolvedNotes = fieldNotes.filter(n => n.resolvedAt && n.lat && n.lng);
+        const urgentCount = openNotes.filter(n => n.priority === "urgent").length;
+        return (
+          <div className="h-[78vh] relative">
+            {urgentCount > 0 && (
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">
+                🚨 {urgentCount} urgent
+              </div>
+            )}
+            {openNotes.length === 0 && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none">
+                <div className="bg-white/90 rounded-2xl px-6 py-5 text-center shadow-sm">
+                  <div className="text-3xl mb-2">📍</div>
+                  <div className="font-semibold text-slate-700">No open field notes</div>
+                  <div className="text-sm text-slate-400 mt-1">Tap + to record an observation</div>
+                </div>
+              </div>
+            )}
+            {googleMapsKey && !mapLoadError ? (
+              <GooglePaddockMap
+                paddocks={paddocks}
+                mobs={[]}
+                mode="notes"
+                center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
+                onSelect={setPaddockDetail}
+                apiKey={googleMapsKey}
+                onError={() => setMapLoadError(true)}
+                userLocation={userLocation}
+                instanceRef={livMapRef}
+                fieldNotes={fieldNotes}
+                showNotesOnMap={true}
+                onSelectNote={(note) => setFieldNoteDetail(note)}
+              />
+            ) : (
+              <div className="h-full flex items-center justify-center text-slate-400 text-sm">Map unavailable</div>
+            )}
           </div>
         );
       })()}
@@ -5845,8 +5920,12 @@ export default function App() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 flex-shrink-0">
               <button onClick={() => setShowFieldNotes(false)} className="text-slate-600 font-semibold text-sm flex items-center gap-1">← Back</button>
               <div className="font-bold text-slate-800">Field Notes</div>
-              <button onClick={() => setFieldNoteForm({ lat: null, lng: null, locationApprox: true, paddock: null, category: "General", body: "", priority: "normal" })}
-                className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => { setShowFieldNotes(false); setMapMode("Notes"); setTab("map"); }}
+                  className="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg">🗺 Map</button>
+                <button onClick={() => setFieldNoteForm({ lat: null, lng: null, locationApprox: true, paddock: null, category: "General", body: "", priority: "normal" })}
+                  className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+              </div>
             </div>
             {urgentCount > 0 && (
               <div className="bg-red-50 border-b border-red-100 px-4 py-2 text-sm text-red-700 font-semibold flex items-center gap-2 flex-shrink-0">
@@ -5946,12 +6025,57 @@ export default function App() {
               )}
               {!note.taskCreated && (
                 <button onClick={async () => {
-                  // Convert to workflow task — writes to workflow tasks via API
-                  showToast("Opening workflow to add task…");
-                  setFieldNoteDetail(null);
-                  setShowFieldNotes(false);
-                  setTab("workflow");
+                  // Build a workflow task pre-filled from the note
+                  const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
+                  const taskContent = note.paddock
+                    ? `${cat.icon} ${note.category} — ${note.paddock}: ${note.body.slice(0, 80)}`
+                    : `${cat.icon} ${note.category}: ${note.body.slice(0, 80)}`;
+                  // Get tomorrow's date
+                  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+                  const dueDate = tomorrow.toISOString().slice(0, 10);
+                  const dueDay = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][tomorrow.getDay()];
+                  // Create task in workflow localStorage-based system
+                  // We post a message to the workflow iframe if embedded, otherwise store in a pending queue
+                  const newTask = {
+                    id: `fn-${note.id}-${Date.now()}`,
+                    farm: note.farmName || farmName,
+                    content: taskContent,
+                    notes: note.body,
+                    color: note.priority === "urgent" ? "red" : "default",
+                    assignedStaff: [],
+                    completed: false,
+                    createdAt: new Date().toISOString(),
+                    day: dueDay,
+                    date: dueDate,
+                    recur: "none",
+                    // Location inherited from field note
+                    lat: note.lat,
+                    lng: note.lng,
+                    paddock: note.paddock,
+                    fieldNoteId: note.id,
+                  };
+                  // Save to workflow tasks — use the same localStorage key as workflow.html
+                  try {
+                    const raw = localStorage.getItem("kwp-workflow-cache");
+                    const cache = raw ? JSON.parse(raw) : {};
+                    const existingTasks = cache.tasks || [];
+                    existingTasks.push(newTask);
+                    cache.tasks = existingTasks;
+                    localStorage.setItem("kwp-workflow-cache", JSON.stringify(cache));
+                  } catch {}
+                  // Mark the field note as having a task
+                  try {
+                    const updated = await api.updateFieldNote(note.id, { taskCreated: true });
+                    setFieldNotes(prev => prev.map(n => n.id === note.id ? { ...n, taskCreated: true } : n));
+                    setFieldNoteDetail({ ...note, taskCreated: true });
+                    showToast("Task added to Workflow");
+                  } catch {
+                    showToast("Task created — note couldn't be updated");
+                  }
                 }} className="w-full bg-amber-500 text-white rounded-2xl py-3 font-bold">📋 Convert to Workflow Task</button>
+              )}
+              {note.taskCreated && (
+                <div className="w-full bg-slate-100 text-slate-500 rounded-2xl py-3 font-semibold text-center text-sm">📋 Task already created</div>
               )}
               <div className="flex gap-2">
                 <button onClick={() => {
