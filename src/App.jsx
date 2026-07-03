@@ -2696,6 +2696,7 @@ export default function App() {
   const [mapMode, setMapMode] = useState("Livestock");
   const [showSwitchFarm, setShowSwitchFarm] = useState(false);
   const [actionForm, setActionForm] = useState(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [formValues, setFormValues] = useState({});
   const [toast, setToast] = useState(null);
   const [syncing, setSyncing] = useState(false);
@@ -2988,6 +2989,7 @@ export default function App() {
     if (name === "Score") prefill["_scores"] = []; // fresh counter each time
     setFormValues(prefill);
     setActionForm(name);
+    if (name === "Delete") setDeleteConfirmText("");
   };
 
   const submitAction = async () => {
@@ -2997,7 +2999,25 @@ export default function App() {
     if (!mob) return;
 
     let patch = {};
-    if (name === "Recount" && formValues["New head count"]) patch.count = Number(formValues["New head count"]);
+    if (name === "Recount" && formValues["New head count"] !== undefined) {
+      const newCount = Number(formValues["New head count"]);
+      patch.count = newCount;
+      // Recount to 0 — treat same as delete
+      if (newCount === 0) {
+        setMobs((prev) => prev.filter((m) => m.id !== mobId));
+        setSelectedMobId(null);
+        setActionForm(null);
+        markChanged();
+        try {
+          await api.addMobHistory(mobId, { action: "Recount", detail: "Recounted to 0 — mob removed", date: formValues["Date"] || todayStr() });
+          await api.deleteMob(mobId);
+          showToast(`${mob.name} removed — recounted to 0`);
+        } catch (err) {
+          showToast(err.message || "Couldn't remove mob from server");
+        }
+        return;
+      }
+    }
     if (name === "Move" && formValues["Move to paddock"]) { patch.paddock = formValues["Move to paddock"]; patch.daysInPaddock = 0; }
     if (name === "Death" && formValues["Number of deaths"]) patch.count = Math.max(0, mob.count - Number(formValues["Number of deaths"]));
     if (name === "Sale" && formValues["Number sold"]) patch.count = Math.max(0, mob.count - Number(formValues["Number sold"]));
@@ -5309,7 +5329,13 @@ export default function App() {
                 <p className="text-center font-bold text-slate-800 mb-1">Delete "{selectedMob?.name}"?</p>
                 <p className="text-center text-sm text-slate-500 mb-4">This will permanently remove the mob and all its history. This cannot be undone.</p>
                 <p className="text-center text-xs font-semibold text-rose-500 bg-rose-50 rounded-xl py-2 px-3">Type the mob name to confirm deletion</p>
-                <input className="w-full border-2 border-rose-200 rounded-xl px-3 py-2.5 mt-3 text-center font-semibold focus:border-rose-400 outline-none" placeholder={selectedMob?.name} id="mob-delete-confirm-input" autoFocus />
+                <input
+                  className="w-full border-2 border-rose-200 rounded-xl px-3 py-2.5 mt-3 text-center font-semibold focus:border-rose-400 outline-none"
+                  placeholder={selectedMob?.name}
+                  value={deleteConfirmText}
+                  onChange={e => setDeleteConfirmText(e.target.value)}
+                  autoFocus
+                />
               </div>
             ) : (
               <div className="space-y-3 mb-4">
@@ -5323,8 +5349,9 @@ export default function App() {
             )}
             {actionForm === "Delete" ? (
               <button onClick={() => {
-                const typed = document.getElementById("mob-delete-confirm-input")?.value?.trim();
-                if (typed !== selectedMob?.name) { showToast("Name doesn't match — mob not deleted"); return; }
+                const typed = deleteConfirmText.trim().toLowerCase();
+                const expected = (selectedMob?.name || "").trim().toLowerCase();
+                if (!typed || typed !== expected) { showToast("Name doesn't match — mob not deleted"); return; }
                 submitAction();
               }} className="w-full rounded-2xl py-3.5 font-bold text-white bg-rose-500">
                 Yes, permanently delete mob
