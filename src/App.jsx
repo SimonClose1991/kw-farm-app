@@ -3772,6 +3772,8 @@ export default function App() {
                 onSelectNote={(note) => setFieldNoteDetail(note)}
                 onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
               />
+            ) : (
+              <div className="h-full flex items-center justify-center text-slate-400 text-sm">Map unavailable</div>
             )}
           </div>
         );
