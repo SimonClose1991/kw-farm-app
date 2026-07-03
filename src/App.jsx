@@ -419,6 +419,7 @@ function GooglePaddockMap({
   onMapCentreChange = null,
   instanceRef = null,
   fieldNotes = [], showNotesOnMap = false, onSelectNote,
+  onPickPin = null, // callback(lat, lng, paddockName) when user places a pin
 }) {
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -434,6 +435,8 @@ function GooglePaddockMap({
   // Store callbacks on refs so effects always use current values without stale closures
   const onSelectPinRef = useRef(onSelectPin);
   React.useEffect(() => { onSelectPinRef.current = onSelectPin; }, [onSelectPin]);
+  const onPickPinRef = useRef(onPickPin);
+  React.useEffect(() => { onPickPinRef.current = onPickPin; }, [onPickPin]);
 
   const colourForPaddock = (p) => {
     // Custom paddock colour always takes priority if set
@@ -590,8 +593,18 @@ function GooglePaddockMap({
           fillOpacity: mode === "paddocks" ? 0.45 : (mode === "notes" ? 0.2 : 0.15),
           map,
         });
-        // Individual polygon click still works on desktop
-        if (!drawMode) poly.addListener("click", () => onSelect(p));
+        // Individual polygon click — routes to pin-picking if active, otherwise normal select
+        if (!drawMode) {
+          poly.addListener("click", (e) => {
+            if (onPickPinRef.current) {
+              // Pin-picking mode: place pin at click location, detect paddock
+              const lat = e.latLng.lat(), lng = e.latLng.lng();
+              onPickPinRef.current(lat, lng, p.name);
+            } else {
+              onSelect(p);
+            }
+          });
+        }
         polygons[p.id] = poly;  // keyed by ID
         overlays.push(poly);
 
@@ -625,14 +638,19 @@ function GooglePaddockMap({
       });
 
       // ── Map-level tap handler (mobile-reliable) ──────────────────────────────
-      // Google Maps fires map 'click' reliably on iPhone even when overlay clicks fail.
-      // We do our own point-in-polygon check so a tap anywhere inside OR near a paddock works.
       if (!drawMode) {
         map.addListener("click", (e) => {
-          if (!window.google?.maps?.geometry?.poly) return;
           const latLng = e.latLng;
           const ref = mapInstanceRef.current;
           if (!ref) return;
+
+          // Pin-picking mode: place pin here (outside all polygons)
+          if (onPickPinRef.current) {
+            onPickPinRef.current(latLng.lat(), latLng.lng(), null);
+            return;
+          }
+
+          if (!window.google?.maps?.geometry?.poly) return;
           // Check exact containment first
           for (const [pid, poly] of Object.entries(ref.polygons || {})) {
             if (window.google.maps.geometry.poly.containsLocation(latLng, poly)) {
@@ -640,11 +658,11 @@ function GooglePaddockMap({
               if (p) { onSelect(p); return; }
             }
           }
-          // Near-miss tolerance: if no exact hit, find nearest paddock centroid within ~80m
-          const tol = 0.0008; // ~80m in degrees
+          // Near-miss tolerance: find nearest paddock centroid within ~80m
+          const tol = 0.0008;
           let nearest = null, nearestDist = Infinity;
           for (const [pid, cen] of Object.entries(ref.centroids || {})) {
-            if (typeof pid !== "string" || isNaN(Number(pid))) continue; // skip name-keyed aliases
+            if (typeof pid !== "string" || isNaN(Number(pid))) continue;
             const dist = Math.hypot(latLng.lat() - cen.lat, latLng.lng() - cen.lng);
             if (dist < nearestDist) { nearestDist = dist; nearest = pid; }
           }
@@ -2857,47 +2875,30 @@ export default function App() {
   // Keep paddocksRef in sync so effects declared early can use current paddocks
   paddocksRef.current = paddocks;
 
-  // ── Field note pin-picking: when _pickingPin is true, next map click places pin ──
+  // ── Field note pin-picking ────────────────────────────────────────────────
+  // When _pickingPin is true, onPickPin is passed to GooglePaddockMap which wires it
+  // into BOTH polygon clicks AND map clicks — so tapping inside a paddock works.
+  const handlePickPin = React.useCallback((lat, lng, paddockName) => {
+    const mapInstance = livMapRef.current?.map;
+    if (mapInstance) mapInstance.setOptions({ draggableCursor: null });
+    setFieldNoteForm(prev => ({
+      ...prev,
+      lat, lng, accuracyM: null, locationApprox: false,
+      paddock: paddockName || prev?.paddock,
+      _pickingPin: false,
+    }));
+  }, []);
+
+  // Set crosshair cursor when pin-picking activates
   React.useEffect(() => {
-    if (!fieldNoteForm?._pickingPin) return;
-    const ref = livMapRef.current;
-    const mapInstance = ref?.map;
-    if (!mapInstance) {
-      // No map available — just re-open the form without a location
-      setFieldNoteForm(prev => ({ ...prev, _pickingPin: false }));
-      showToast("Open the map first, then use Place on map");
-      return;
-    }
-    mapInstance.setOptions({ draggableCursor: "crosshair" });
-    const listener = mapInstance.addListener("click", (e) => {
-      const lat = e.latLng.lat();
-      const lng = e.latLng.lng();
-      let detectedPaddock = null;
-      if (window.google?.maps?.geometry?.poly && ref.polygons) {
-        for (const [pid, poly] of Object.entries(ref.polygons)) {
-          if (window.google.maps.geometry.poly.containsLocation(e.latLng, poly)) {
-            const p = (paddocksRef.current || []).find(x => String(x.id) === String(pid));
-            if (p) { detectedPaddock = p.name; break; }
-          }
-        }
-      }
+    const mapInstance = livMapRef.current?.map;
+    if (!mapInstance) return;
+    if (fieldNoteForm?._pickingPin) {
+      mapInstance.setOptions({ draggableCursor: "crosshair" });
+    } else {
       mapInstance.setOptions({ draggableCursor: null });
-      window.google.maps.event.removeListener(listener);
-      // Re-open modal with location filled in
-      setFieldNoteForm(prev => ({
-        ...prev,
-        lat, lng, accuracyM: null, locationApprox: false,
-        paddock: detectedPaddock || prev?.paddock,
-        _pickingPin: false,
-      }));
-    });
-    return () => {
-      try {
-        window.google?.maps?.event?.removeListener(listener);
-        mapInstance.setOptions({ draggableCursor: null });
-      } catch {}
-    };
-  }, [fieldNoteForm?._pickingPin]); // eslint-disable-line
+    }
+  }, [fieldNoteForm?._pickingPin]);
 
   const handleSync = async () => {
     if (!isOnline) { showToast("You're offline — changes will sync when you reconnect"); return; }
@@ -3614,10 +3615,8 @@ export default function App() {
                 fieldNotes={fieldNotes}
                 showNotesOnMap={showNotesOnMap}
                 onSelectNote={(note) => setFieldNoteDetail(note)}
+                onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
               />
-            ) : (
-              <PaddockMap
-                paddocks={paddocks}
                 center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
                 onSelect={setPaddockDetail}
                 landmarks={landmarks}
@@ -3768,9 +3767,8 @@ export default function App() {
                 fieldNotes={fieldNotes}
                 showNotesOnMap={true}
                 onSelectNote={(note) => setFieldNoteDetail(note)}
+                onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
               />
-            ) : (
-              <div className="h-full flex items-center justify-center text-slate-400 text-sm">Map unavailable</div>
             )}
           </div>
         );
