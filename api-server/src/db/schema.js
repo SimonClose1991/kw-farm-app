@@ -61,6 +61,7 @@ export const mobHistory = pgTable("mob_history", {
   date: text("date").notNull(),
   action: text("action").notNull(),
   detail: text("detail"),
+  authorName: text("author_name"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

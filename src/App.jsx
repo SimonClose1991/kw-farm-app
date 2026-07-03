@@ -948,8 +948,22 @@ function GooglePaddockMap({
         base = { lat: center[0] + Math.cos(angle) * 0.012, lng: center[1] + Math.sin(angle) * 0.012 };
       }
       gi++;
-      const speciesOffset = species === "Cattle" || species === "Bulls" ? 0 : (species === "Sheep" ? 0.0008 : 0.0004);
-      const pos = { lat: base.lat + speciesOffset, lng: base.lng + speciesOffset * 0.5 };
+      // Spread multiple species tiles around the centroid so they don't overlap
+      const speciesInPaddock = Object.keys(groups)
+        .filter(k => k.startsWith(paddockName + "::"))
+        .map(k => k.split("::")[1])
+        .sort(); // consistent order
+      const speciesCount = speciesInPaddock.length;
+      const speciesIndex = speciesInPaddock.indexOf(species);
+      let latOff = 0, lngOff = 0;
+      if (speciesCount > 1) {
+        // Spread in an arc — 0.0018° ≈ 180m, clearly visible at farm zoom
+        const angle = (speciesIndex / speciesCount) * 2 * Math.PI - Math.PI / 2;
+        const radius = 0.0018;
+        latOff = Math.cos(angle) * radius;
+        lngOff = Math.sin(angle) * radius * 0.7;
+      }
+      const pos = { lat: base.lat + latOff, lng: base.lng + lngOff };
       const totalCount = groupMobs.reduce((s, m) => s + m.count, 0);
       const tagColour = TAG_COLOUR_HEX[groupMobs[0]?.tag] || "#cbd5e1";
       const emoji = species === "Cattle" ? "🐄" : species === "Sheep" ? "🐑" : species === "Rams" ? "🐏" : species === "Bulls" ? "🐂" : "🐾";
@@ -2693,7 +2707,7 @@ export default function App() {
     if (history[selectedMobId] && notes[selectedMobId]) return; // already loaded
     Promise.all([api.listMobHistory(selectedMobId), api.listMobNotes(selectedMobId)])
       .then(([h, n]) => {
-        setHistory((prev) => ({ ...prev, [selectedMobId]: h.map((row) => ({ action: row.action, detail: row.detail, date: row.date })).reverse() }));
+        setHistory((prev) => ({ ...prev, [selectedMobId]: h.map((row) => ({ action: row.action, detail: row.detail, date: row.date, authorName: row.authorName })).reverse() }));
         setNotes((prev) => ({ ...prev, [selectedMobId]: n.map((row) => ({ id: row.id, text: row.text, author: row.authorName, date: row.createdAt })) }));
       })
       .catch(() => {});
@@ -3078,7 +3092,7 @@ export default function App() {
       const list = prev[mobId] || [];
       return {
         ...prev,
-        [mobId]: [{ action: name, detail: summary || "Recorded", date: historyDate }, ...list],
+        [mobId]: [{ action: name, detail: summary || "Recorded", date: historyDate, authorName: currentUser?.name || null }, ...list],
       };
     });
     try {
@@ -5127,7 +5141,8 @@ export default function App() {
               : mobHistory.map((h, i) => (
                 <div key={i} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-3">
                   <div className="flex justify-between font-bold text-slate-800"><span>{h.action}</span><span className="text-slate-400 text-xs">{h.date}</span></div>
-                  {h.detail && <div className="text-sm text-slate-400 mt-1">{h.detail}</div>}
+                  {h.detail && <div className="text-sm text-slate-500 mt-1">{h.detail}</div>}
+                  {h.authorName && <div className="text-xs text-slate-400 mt-1">by {h.authorName}</div>}
                 </div>
               ))
           )}

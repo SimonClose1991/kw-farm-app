@@ -79,6 +79,10 @@ app.use("/api/field-notes", fieldNotesRoutes);
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    // Add author_name to mob_history if missing (safe — uses IF NOT EXISTS)
+    await db.execute(sql`
+      ALTER TABLE mob_history ADD COLUMN IF NOT EXISTS author_name TEXT
+    `);
     console.log("field_notes table ready");
   } catch (err) {
     console.error("field_notes table setup error:", err.message);

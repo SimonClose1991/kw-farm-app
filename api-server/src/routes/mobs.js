@@ -118,9 +118,10 @@ router.get("/:id/history", requireAuth, async (req, res) => {
 // POST /api/mobs/:id/history  body: { date, action, detail }
 router.post("/:id/history", requireAuth, requireEditor, async (req, res) => {
   const { date, action, detail } = req.body;
+  const authorName = req.user?.name || null;
   const [created] = await db
     .insert(mobHistory)
-    .values({ mobId: Number(req.params.id), date: date || new Date().toISOString().slice(0, 10), action, detail })
+    .values({ mobId: Number(req.params.id), date: date || new Date().toISOString().slice(0, 10), action, detail, authorName })
     .returning();
   res.status(201).json(created);
 });
