@@ -3617,6 +3617,9 @@ export default function App() {
                 onSelectNote={(note) => setFieldNoteDetail(note)}
                 onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
               />
+            ) : (
+              <PaddockMap
+                paddocks={paddocks}
                 center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
                 onSelect={setPaddockDetail}
                 landmarks={landmarks}
