@@ -3740,7 +3740,7 @@ export default function App() {
                 mobs={[]}
                 mode="notes"
                 center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-                onSelect={setPaddockDetail}
+                onSelect={() => {}}
                 apiKey={googleMapsKey}
                 onError={() => setMapLoadError(true)}
                 userLocation={userLocation}
