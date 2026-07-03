@@ -129,6 +129,11 @@ export const api = {
   updateFieldNote: (id, fields) => request(`/field-notes/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteFieldNote: (id) => request(`/field-notes/${id}`, { method: "DELETE" }),
 
+  // --- Workflow ---
+  getWorkflow: () => request("/workflow"),
+  saveWorkflow: (payload) => request("/workflow", { method: "PUT", body: JSON.stringify(payload) }),
+  appendWorkflowTask: (task) => request("/workflow/tasks", { method: "POST", body: JSON.stringify(task) }),
+
   // --- Cattle Feedlot ---
   getCattleElements: () => request("/cattle/elements"),
   createCattleElement: (e) => request("/cattle/elements", { method: "POST", body: JSON.stringify(e) }),

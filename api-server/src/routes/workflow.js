@@ -66,6 +66,25 @@ router.get("/staff", requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/workflow/tasks — append a single task (used by field notes "Convert to Task")
+router.post("/tasks", requireAuth, async (req, res) => {
+  try {
+    const newTask = req.body;
+    if (!newTask?.id || !newTask?.content) return res.status(400).json({ error: "Task must have id and content" });
+    const [existing] = await db.select().from(workflowState).where(eq(workflowState.id, "singleton"));
+    const tasks = [...(existing?.tasks || []), newTask];
+    if (existing) {
+      await db.update(workflowState).set({ tasks, updatedAt: new Date() }).where(eq(workflowState.id, "singleton"));
+    } else {
+      await db.insert(workflowState).values({ id: "singleton", tasks, published: [], staff: [], prefs: {} });
+    }
+    res.status(201).json({ ok: true, taskId: newTask.id });
+  } catch (err) {
+    console.error("Workflow task append error:", err);
+    res.status(500).json({ error: "Couldn't add task" });
+  }
+});
+
 // GET /api/workflow/published — returns only the published snapshot
 // Used by the personal dashboard to show a staff member their tasks
 router.get("/published", requireAuth, async (req, res) => {

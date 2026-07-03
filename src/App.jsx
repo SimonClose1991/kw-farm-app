@@ -2862,6 +2862,8 @@ export default function App() {
     const ref = livMapRef.current;
     const mapInstance = ref?.map;
     if (!mapInstance) {
+      // No map available — just re-open the form without a location
+      setFieldNoteForm(prev => ({ ...prev, _pickingPin: false }));
       showToast("Open the map first, then use Place on map");
       return;
     }
@@ -2878,14 +2880,15 @@ export default function App() {
           }
         }
       }
+      mapInstance.setOptions({ draggableCursor: null });
+      window.google.maps.event.removeListener(listener);
+      // Re-open modal with location filled in
       setFieldNoteForm(prev => ({
         ...prev,
         lat, lng, accuracyM: null, locationApprox: false,
         paddock: detectedPaddock || prev?.paddock,
         _pickingPin: false,
       }));
-      mapInstance.setOptions({ draggableCursor: null });
-      window.google.maps.event.removeListener(listener);
     });
     return () => {
       try {
@@ -6054,15 +6057,18 @@ export default function App() {
                     paddock: note.paddock,
                     fieldNoteId: note.id,
                   };
-                  // Save to workflow tasks — use the same localStorage key as workflow.html
+                  // Add task to workflow via API — POST appends directly to the workflow singleton
                   try {
-                    const raw = localStorage.getItem("kwp-workflow-cache");
-                    const cache = raw ? JSON.parse(raw) : {};
-                    const existingTasks = cache.tasks || [];
-                    existingTasks.push(newTask);
-                    cache.tasks = existingTasks;
-                    localStorage.setItem("kwp-workflow-cache", JSON.stringify(cache));
-                  } catch {}
+                    await api.appendWorkflowTask(newTask);
+                  } catch (err) {
+                    // Fallback to localStorage if API fails
+                    try {
+                      const raw = localStorage.getItem("kwp-workflow-cache");
+                      const cache = raw ? JSON.parse(raw) : {};
+                      cache.tasks = [...(cache.tasks || []), newTask];
+                      localStorage.setItem("kwp-workflow-cache", JSON.stringify(cache));
+                    } catch {}
+                  }
                   // Mark the field note as having a task
                   try {
                     const updated = await api.updateFieldNote(note.id, { taskCreated: true });
@@ -6628,7 +6634,7 @@ export default function App() {
 
       {/* ── Field Note Form — outside MapScreen/MenuScreen so tap works first time ── */}
       {/* ── Field Note Create / Edit Form ── */}
-      {fieldNoteForm !== null && (() => {
+      {fieldNoteForm !== null && !fieldNoteForm._pickingPin && (() => {
         const isEdit = !!fieldNoteForm.id;
         const form = fieldNoteForm;
         const setForm = (patch) => setFieldNoteForm(prev => ({ ...prev, ...patch }));
@@ -6674,10 +6680,12 @@ export default function App() {
                   }} className="flex items-center justify-center gap-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl py-3 text-sm font-semibold">
                     <span>📡</span> Use my GPS
                   </button>
-                  {/* Map pin button — works on desktop */}
+                  {/* Map pin button — works on desktop and phone */}
                   <button type="button" onClick={() => {
-                    setForm({ _pickingPin: true });
-                    showToast("Click the map to place your note pin");
+                    // Save current form state, close modal, enter pin-picking mode
+                    // The effect will re-open the modal with location filled when user clicks map
+                    const saved = { ...fieldNoteForm };
+                    setFieldNoteForm({ ...saved, _pickingPin: true, _modalOpen: false });
                   }} className="flex items-center justify-center gap-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl py-3 text-sm font-semibold">
                     <span>🗺</span> Place on map
                   </button>
