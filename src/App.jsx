@@ -6713,7 +6713,6 @@ export default function App() {
                 </label>
               )}
             </div>
-            </div>
             <button onClick={async () => {
               const current = fieldNoteForm;
               if (!current?.body?.trim()) { showToast("Please add a description"); return; }
