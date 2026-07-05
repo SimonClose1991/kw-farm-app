@@ -76,12 +76,16 @@ app.use("/api/field-notes", fieldNotesRoutes);
         author_name TEXT,
         resolved_at TIMESTAMP,
         task_created BOOLEAN DEFAULT false,
+        photos TEXT DEFAULT '[]',
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
     // Add author_name to mob_history if missing (safe — uses IF NOT EXISTS)
     await db.execute(sql`
       ALTER TABLE mob_history ADD COLUMN IF NOT EXISTS author_name TEXT
+    `);
+    await db.execute(sql`
+      ALTER TABLE field_notes ADD COLUMN IF NOT EXISTS photos TEXT DEFAULT '[]'
     `);
     console.log("field_notes table ready");
   } catch (err) {

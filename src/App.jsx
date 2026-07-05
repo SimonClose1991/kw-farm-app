@@ -543,7 +543,12 @@ function GooglePaddockMap({
       const g = window.google.maps;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
-        // Also clear label markers — no longer stored in overlays
+        // Clear ALL label markers using flat array — guaranteed no stragglers
+        if (mapInstanceRef.current.allLabelMarkersArr) {
+          mapInstanceRef.current.allLabelMarkersArr.forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
+          mapInstanceRef.current.allLabelMarkersArr.length = 0;
+        }
+        // Also sweep dict as fallback
         if (mapInstanceRef.current.labelMarkers) {
           Object.values(mapInstanceRef.current.labelMarkers).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
         }
@@ -571,7 +576,8 @@ function GooglePaddockMap({
       const bounds = new g.LatLngBounds();
       const overlays = [];
       const centroids = {};
-      const labelMarkers = {}; // paddock name → label marker
+      const labelMarkers = {}; // paddock id → label marker (for lookup)
+      const allLabelMarkersArr = []; // flat array of ALL label markers (for guaranteed cleanup)
       const polygons = {};
 
       // ── Draw paddock polygons (both modes) ──
@@ -608,33 +614,45 @@ function GooglePaddockMap({
         polygons[p.id] = poly;  // keyed by ID
         overlays.push(poly);
 
-        // Initial label at current zoom — NOT pushed to overlays array
-        // Labels are managed exclusively via ref.labelMarkers and cleared explicitly on zoom
+        // Initial label at current zoom
+        // Store in BOTH the dict (for lookup) AND the ref array (for guaranteed cleanup)
         const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, map.getZoom(), insightMode, paddockStats);
         labelMarkers[p.id] = lm || null;  // keyed by ID
+        if (lm) allLabelMarkersArr.push(lm); // flat array for guaranteed cleanup
       });
 
-      // Zoom-aware label update
+      // Zoom-aware label update — debounced 150ms so pinch zoom doesn't trigger 20+ redraws
+      let zoomDebounceTimer = null;
       map.addListener("zoom_changed", () => {
-        const z = map.getZoom();
-        const ref = mapInstanceRef.current;
-        const freshInsightMode = ref?.currentInsightMode || insightMode;
-        const freshPaddockStats = ref?.currentPaddockStats || paddockStats;
-        const freshCentroids = ref?.centroids || centroids;
-        // Step 1: remove ALL currently visible label markers
-        const currentLabels = ref?.labelMarkers || labelMarkers;
-        Object.values(currentLabels).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
-        // Step 2: reset the dict
-        const newLabels = {};
-        if (ref) ref.labelMarkers = newLabels;
-        // Step 3: create fresh labels for new zoom level (keyed by ID, not name)
-        paddocks.forEach((p) => {
-          const cen = freshCentroids[p.id];
-          if (!cen) return;
-          const newLm = updateLabelForZoom(g, map, cen, p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
-          newLabels[p.id] = newLm || null;
-          labelMarkers[p.id] = newLm || null;
-        });
+        if (zoomDebounceTimer) clearTimeout(zoomDebounceTimer);
+        zoomDebounceTimer = setTimeout(() => {
+          const z = map.getZoom();
+          if (!z) return; // guard against undefined during gesture
+          const ref = mapInstanceRef.current;
+          const freshInsightMode = ref?.currentInsightMode || insightMode;
+          const freshPaddockStats = ref?.currentPaddockStats || paddockStats;
+          const freshCentroids = ref?.centroids || centroids;
+          // Step 1: clear ALL label markers — use the flat array so nothing is missed
+          // regardless of which dict they were keyed under
+          allLabelMarkersArr.forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
+          allLabelMarkersArr.length = 0; // clear in place
+          // Also clear ref.labelMarkers dict values in case insight effect added extras
+          if (ref?.labelMarkers) {
+            Object.values(ref.labelMarkers).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
+          }
+          // Step 2: reset dicts
+          const newLabels = {};
+          if (ref) ref.labelMarkers = newLabels;
+          // Step 3: create fresh labels for new zoom level
+          paddocks.forEach((p) => {
+            const cen = freshCentroids[p.id];
+            if (!cen) return;
+            const newLm = updateLabelForZoom(g, map, cen, p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
+            newLabels[p.id] = newLm || null;
+            labelMarkers[p.id] = newLm || null;
+            if (newLm) allLabelMarkersArr.push(newLm);
+          });
+        }, 150);
       });
 
       // ── Map-level tap handler (mobile-reliable) ──────────────────────────────
@@ -789,7 +807,8 @@ function GooglePaddockMap({
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
-        fittedBounds: true, // always true — fitBounds is now managed by fittedBoundsRef
+        allLabelMarkersArr, // flat array for guaranteed label cleanup
+        fittedBounds: true,
         landmarks, renderLandmarks: renderAllLandmarks,
         centroids, center, bounds,
         paddockList: paddocks,
@@ -1020,15 +1039,26 @@ function GooglePaddockMap({
         if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
       }
     });
-    // Redraw all labels with fresh data (keyed by ID)
+    // Redraw all labels — clear via flat array first (guaranteed no ghosts), then redraw
     if (ref.map) {
       const z = ref.map.getZoom();
       const g = window.google.maps;
+      // Clear via flat array — catches every marker regardless of key
+      if (ref.allLabelMarkersArr) {
+        ref.allLabelMarkersArr.forEach(lm => { try { lm?.setMap?.(null); } catch {} });
+        ref.allLabelMarkersArr.length = 0;
+      }
+      // Also sweep dict as fallback
+      if (ref.labelMarkers) {
+        Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
+        ref.labelMarkers = {};
+      }
       paddocks.forEach((p) => {
         const cen = ref.centroids?.[p.id];
         if (!cen) return;
         const newLm = updateLabelForZoom(g, ref.map, cen, p, { setMap: () => {} }, z, insightMode, paddockStats);
         if (ref.labelMarkers) ref.labelMarkers[p.id] = newLm || null;
+        if (newLm && ref.allLabelMarkersArr) ref.allLabelMarkersArr.push(newLm);
       });
     }
   }, [insightMode, paddockStats, paddocks]);
@@ -5939,108 +5969,6 @@ export default function App() {
       })()}
 
       {/* ── Field Note Detail ── */}
-      {fieldNoteDetail && (() => {
-        const note = fieldNoteDetail;
-        const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
-        const isResolved = !!note.resolvedAt;
-        return (
-          <Modal title="Field Note" onClose={() => setFieldNoteDetail(null)}>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-2xl">{cat.icon}</span>
-              <div>
-                <div className="font-bold text-sm" style={{ color: cat.colour }}>{note.category}</div>
-                {note.paddock && <div className="text-xs text-slate-400">{note.paddock} · {note.farmName}</div>}
-              </div>
-              {note.priority === "urgent" && <span className="ml-auto text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded-full">URGENT</span>}
-            </div>
-            <p className="text-slate-700 text-sm leading-relaxed mb-4 whitespace-pre-wrap">{note.body}</p>
-            <div className="text-xs text-slate-400 mb-4">
-              {note.locationApprox ? "📍 Location approximate" : `📍 ${Number(note.lat).toFixed(5)}, ${Number(note.lng).toFixed(5)}${note.accuracyM ? ` ±${Math.round(Number(note.accuracyM))}m` : ""}`}
-              <br />By {note.authorName} · {note.createdAt ? new Date(note.createdAt).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
-            </div>
-            <div className="space-y-2">
-              {!isResolved && (
-                <button onClick={async () => {
-                  const updated = await api.updateFieldNote(note.id, { resolvedAt: new Date().toISOString() });
-                  setFieldNotes(prev => prev.map(n => n.id === note.id ? { ...n, resolvedAt: updated.resolvedAt } : n));
-                  setFieldNoteDetail({ ...note, resolvedAt: updated.resolvedAt });
-                  showToast("Marked as resolved");
-                }} className="w-full bg-green-500 text-white rounded-2xl py-3 font-bold">✓ Mark Resolved</button>
-              )}
-              {!note.taskCreated && (
-                <button onClick={async () => {
-                  // Build a workflow task pre-filled from the note
-                  const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
-                  const taskContent = note.paddock
-                    ? `${cat.icon} ${note.category} — ${note.paddock}: ${note.body.slice(0, 80)}`
-                    : `${cat.icon} ${note.category}: ${note.body.slice(0, 80)}`;
-                  // Get tomorrow's date
-                  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-                  const dueDate = tomorrow.toISOString().slice(0, 10);
-                  const dueDay = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][tomorrow.getDay()];
-                  // Create task in workflow localStorage-based system
-                  // We post a message to the workflow iframe if embedded, otherwise store in a pending queue
-                  const newTask = {
-                    id: `fn-${note.id}-${Date.now()}`,
-                    farm: note.farmName || farmName,
-                    content: taskContent,
-                    notes: note.body,
-                    color: note.priority === "urgent" ? "red" : "default",
-                    assignedStaff: [],
-                    completed: false,
-                    createdAt: new Date().toISOString(),
-                    day: dueDay,
-                    date: dueDate,
-                    recur: "none",
-                    // Location inherited from field note
-                    lat: note.lat,
-                    lng: note.lng,
-                    paddock: note.paddock,
-                    fieldNoteId: note.id,
-                  };
-                  // Add task to workflow via API — POST appends directly to the workflow singleton
-                  try {
-                    await api.appendWorkflowTask(newTask);
-                  } catch (err) {
-                    // Fallback to localStorage if API fails
-                    try {
-                      const raw = localStorage.getItem("kwp-workflow-cache");
-                      const cache = raw ? JSON.parse(raw) : {};
-                      cache.tasks = [...(cache.tasks || []), newTask];
-                      localStorage.setItem("kwp-workflow-cache", JSON.stringify(cache));
-                    } catch {}
-                  }
-                  // Mark the field note as having a task
-                  try {
-                    const updated = await api.updateFieldNote(note.id, { taskCreated: true });
-                    setFieldNotes(prev => prev.map(n => n.id === note.id ? { ...n, taskCreated: true } : n));
-                    setFieldNoteDetail({ ...note, taskCreated: true });
-                    showToast("Task added to Workflow");
-                  } catch {
-                    showToast("Task created — note couldn't be updated");
-                  }
-                }} className="w-full bg-amber-500 text-white rounded-2xl py-3 font-bold">📋 Convert to Workflow Task</button>
-              )}
-              {note.taskCreated && (
-                <div className="w-full bg-slate-100 text-slate-500 rounded-2xl py-3 font-semibold text-center text-sm">📋 Task already created</div>
-              )}
-              <div className="flex gap-2">
-                <button onClick={() => {
-                  setFieldNoteForm({ ...note });
-                  setFieldNoteDetail(null);
-                }} className="flex-1 bg-slate-100 text-slate-700 rounded-2xl py-3 font-semibold">Edit</button>
-                <button onClick={async () => {
-                  if (!window.confirm("Delete this field note?")) return;
-                  await api.deleteFieldNote(note.id);
-                  setFieldNotes(prev => prev.filter(n => n.id !== note.id));
-                  setFieldNoteDetail(null);
-                  showToast("Note deleted");
-                }} className="bg-rose-50 text-rose-500 rounded-2xl py-3 px-4 font-semibold">Delete</button>
-              </div>
-            </div>
-          </Modal>
-        );
-      })()}
 
       {showRainfall && (() => {
         const sortedRainfall = [...rainfall].sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -6550,6 +6478,78 @@ export default function App() {
       {selectedMob && MobDetails()}
       {showMenu && MenuScreen()}
 
+      {/* ── Field Note Detail — outside MapScreen so tap-on-pin works first time ── */}
+      {fieldNoteDetail && (() => {
+        const note = fieldNoteDetail;
+        const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
+        const isResolved = !!note.resolvedAt;
+        const photos = Array.isArray(note.photos) ? note.photos : [];
+        return (
+          <Modal title="Field Note" onClose={() => setFieldNoteDetail(null)}>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-2xl">{cat.icon}</span>
+              <div>
+                <div className="font-bold text-sm" style={{ color: cat.colour }}>{note.category}</div>
+                {note.paddock && <div className="text-xs text-slate-400">{note.paddock} · {note.farmName}</div>}
+              </div>
+              <div className="ml-auto flex gap-1">
+                {note.priority === "urgent" && <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded-full">URGENT</span>}
+                {isResolved && <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">✓ Resolved</span>}
+              </div>
+            </div>
+            <p className="text-slate-700 text-sm leading-relaxed mb-3 whitespace-pre-wrap">{note.body}</p>
+            {photos.length > 0 && (
+              <div className="flex gap-2 flex-wrap mb-3">
+                {photos.map((src, i) => (
+                  <img key={i} src={src} alt={`Photo ${i+1}`}
+                    className="w-24 h-24 object-cover rounded-xl border border-slate-200 cursor-pointer"
+                    onClick={() => window.open(src, "_blank")}
+                  />
+                ))}
+              </div>
+            )}
+            <div className="text-xs text-slate-400 mb-4">
+              {note.locationApprox ? "📍 Location approximate" : `📍 ${Number(note.lat).toFixed(5)}, ${Number(note.lng).toFixed(5)}${note.accuracyM ? ` ±${Math.round(Number(note.accuracyM))}m` : ""}`}
+              <br />By {note.authorName} · {note.createdAt ? new Date(note.createdAt).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
+            </div>
+            <div className="space-y-2">
+              {!isResolved && (
+                <button onClick={async () => {
+                  const updated = await api.updateFieldNote(note.id, { resolvedAt: new Date().toISOString() });
+                  setFieldNotes(prev => prev.map(n => n.id === note.id ? { ...n, resolvedAt: updated.resolvedAt } : n));
+                  setFieldNoteDetail({ ...note, resolvedAt: updated.resolvedAt });
+                  showToast("Marked as resolved");
+                }} className="w-full bg-green-500 text-white rounded-2xl py-3 font-bold">✓ Mark Resolved</button>
+              )}
+              {!note.taskCreated && (
+                <button onClick={async () => {
+                  const cat2 = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
+                  const taskContent = note.paddock ? `${cat2.icon} ${note.category} — ${note.paddock}: ${note.body.slice(0, 80)}` : `${cat2.icon} ${note.category}: ${note.body.slice(0, 80)}`;
+                  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+                  const dueDate = tomorrow.toISOString().slice(0, 10);
+                  const dueDay = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][tomorrow.getDay()];
+                  const newTask = { id: `fn-${note.id}-${Date.now()}`, farm: note.farmName || farmName, content: taskContent, notes: note.body, color: note.priority === "urgent" ? "red" : "default", assignedStaff: [], completed: false, createdAt: new Date().toISOString(), day: dueDay, date: dueDate, recur: "none", lat: note.lat, lng: note.lng, paddock: note.paddock, fieldNoteId: note.id };
+                  try { await api.appendWorkflowTask(newTask); } catch { try { const raw = localStorage.getItem("kwp-workflow-cache"); const cache = raw ? JSON.parse(raw) : {}; cache.tasks = [...(cache.tasks || []), newTask]; localStorage.setItem("kwp-workflow-cache", JSON.stringify(cache)); } catch {} }
+                  try { await api.updateFieldNote(note.id, { taskCreated: true }); setFieldNotes(prev => prev.map(n => n.id === note.id ? { ...n, taskCreated: true } : n)); setFieldNoteDetail({ ...note, taskCreated: true }); showToast("Task added to Workflow"); } catch { showToast("Task created"); }
+                }} className="w-full bg-amber-500 text-white rounded-2xl py-3 font-bold">📋 Convert to Workflow Task</button>
+              )}
+              {note.taskCreated && <div className="w-full bg-slate-100 text-slate-500 rounded-2xl py-3 font-semibold text-center text-sm">📋 Task already created</div>}
+              <div className="flex gap-2">
+                <button onClick={() => { setFieldNoteForm({ ...note, photos: Array.isArray(note.photos) ? note.photos : [] }); setFieldNoteDetail(null); }}
+                  className="flex-1 bg-slate-100 text-slate-700 rounded-2xl py-3 font-semibold">✏️ Edit</button>
+                <button onClick={async () => {
+                  if (!window.confirm("Delete this field note?")) return;
+                  await api.deleteFieldNote(note.id);
+                  setFieldNotes(prev => prev.filter(n => n.id !== note.id));
+                  setFieldNoteDetail(null);
+                  showToast("Note deleted");
+                }} className="bg-rose-50 text-rose-500 rounded-2xl py-3 px-4 font-semibold">Delete</button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
       {/* ── Map Overlay picker — outside MapScreen/MenuScreen so tap works first time ── */}
       {showInsightPicker && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[200]" onClick={() => setShowInsightPicker(false)}>
@@ -6666,11 +6666,53 @@ export default function App() {
               ))}
             </div>
             {/* Body */}
-            <div className="mb-4">
+            <div className="mb-3">
               <label className="text-sm font-semibold text-slate-600 block mb-1">Observation *</label>
               <textarea value={form.body || ""} onChange={e => setForm({ body: e.target.value })} rows={4}
                 placeholder="Describe what you observed…"
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm resize-none" />
+            </div>
+            {/* Photos */}
+            <div className="mb-4">
+              <label className="text-sm font-semibold text-slate-600 block mb-1.5">Photos (up to 3)</label>
+              {/* Existing photos */}
+              {(form.photos || []).length > 0 && (
+                <div className="flex gap-2 flex-wrap mb-2">
+                  {(form.photos || []).map((src, i) => (
+                    <div key={i} className="relative">
+                      <img src={src} alt={`Photo ${i+1}`} className="w-20 h-20 object-cover rounded-xl border border-slate-200" />
+                      <button type="button" onClick={() => setForm({ photos: (form.photos || []).filter((_, j) => j !== i) })}
+                        className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-500 text-white rounded-full text-xs flex items-center justify-center">✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(form.photos || []).length < 3 && (
+                <label className="flex items-center justify-center gap-2 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl py-3 text-sm text-slate-500 cursor-pointer hover:border-amber-300 hover:bg-amber-50 transition-colors">
+                  <span>📷</span> {(form.photos || []).length === 0 ? "Add photo" : "Add another"}
+                  <input type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      // Compress to canvas at max 1200px, quality 0.7
+                      const img = new Image();
+                      img.onload = () => {
+                        const MAX = 1200;
+                        const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+                        const canvas = document.createElement("canvas");
+                        canvas.width = Math.round(img.width * scale);
+                        canvas.height = Math.round(img.height * scale);
+                        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+                        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+                        setForm({ photos: [...(form.photos || []), dataUrl] });
+                      };
+                      img.src = URL.createObjectURL(file);
+                      e.target.value = ""; // allow re-selecting same file
+                    }}
+                  />
+                </label>
+              )}
+            </div>
             </div>
             <button onClick={async () => {
               const current = fieldNoteForm;
@@ -6691,7 +6733,7 @@ export default function App() {
               }
               try {
                 if (isEdit) {
-                  const updated = await api.updateFieldNote(current.id, { body: current.body, category: current.category, priority: current.priority, paddock: current.paddock });
+                  const updated = await api.updateFieldNote(current.id, { body: current.body, category: current.category, priority: current.priority, paddock: current.paddock, photos: current.photos || [] });
                   setFieldNotes(prev => prev.map(n => n.id === current.id ? { ...n, ...updated } : n));
                   showToast("Note updated");
                 } else {
@@ -6701,6 +6743,7 @@ export default function App() {
                     category: current.category,
                     body: current.body.trim(),
                     priority: current.priority,
+                    photos: current.photos || [],
                   });
                   setFieldNotes(prev => [created, ...prev]);
                   showToast("Note saved");

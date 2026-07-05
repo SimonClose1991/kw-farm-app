@@ -23,7 +23,8 @@ router.get("/", requireAuth, async (req, res) => {
       .from(fieldNotes)
       .where(eq(fieldNotes.farmId, farmId))
       .orderBy(desc(fieldNotes.createdAt));
-    res.json(notes);
+    // Parse photos JSON array
+    res.json(notes.map(n => ({ ...n, photos: (() => { try { return JSON.parse(n.photos || "[]"); } catch { return []; } })() })));
   } catch (err) {
     // Table may not exist yet if migration hasn't been run
     if (err.message?.includes("field_notes") || err.code === "42P01") {
@@ -41,11 +42,14 @@ router.post("/", requireAuth, async (req, res) => {
     if (!farmId) return res.status(400).json({ error: "Unknown farm" });
     fields.authorId = req.user?.id || null;
     fields.authorName = req.user?.name || fields.authorName || "Unknown";
+    if (fields.photos && Array.isArray(fields.photos)) {
+      fields.photos = JSON.stringify(fields.photos);
+    }
     const [created] = await db
       .insert(fieldNotes)
       .values({ ...fields, farmId, farmName: farm })
       .returning();
-    res.status(201).json(created);
+    res.status(201).json({ ...created, photos: (() => { try { return JSON.parse(created.photos || "[]"); } catch { return []; } })() });
   } catch (err) {
     if (err.message?.includes("field_notes") || err.code === "42P01") {
       return res.status(503).json({ error: "Field notes table not ready — run: npx drizzle-kit push" });
@@ -58,13 +62,17 @@ router.post("/", requireAuth, async (req, res) => {
 router.put("/:id", requireAuth, async (req, res) => {
   try {
     const { farm, ...fields } = req.body;
+    // Stringify photos array if provided
+    if (fields.photos && Array.isArray(fields.photos)) {
+      fields.photos = JSON.stringify(fields.photos);
+    }
     const [updated] = await db
       .update(fieldNotes)
       .set(fields)
       .where(eq(fieldNotes.id, Number(req.params.id)))
       .returning();
     if (!updated) return res.status(404).json({ error: "Note not found" });
-    res.json(updated);
+    res.json({ ...updated, photos: (() => { try { return JSON.parse(updated.photos || "[]"); } catch { return []; } })() });
   } catch (err) {
     if (err.message?.includes("field_notes") || err.code === "42P01") {
       return res.status(503).json({ error: "Field notes table not ready" });

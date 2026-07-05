@@ -289,6 +289,7 @@ export const fieldNotes = pgTable("field_notes", {
   authorName: text("author_name"),
   resolvedAt: timestamp("resolved_at"),  // null = open, set = resolved
   taskCreated: boolean("task_created").default(false), // true if converted to workflow task
+  photos: text("photos").default("[]"), // JSON array of base64 data URLs
   createdAt: timestamp("created_at").defaultNow(),
 });
 
