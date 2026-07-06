@@ -434,8 +434,6 @@ function GooglePaddockMap({
   }, []);
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  const centerRef = useRef(center); // always current center, never stale in async callbacks
-  React.useEffect(() => { centerRef.current = center; }, [center]);
   const fittedBoundsRef = useRef(false);
   const fittedBoundsCenterRef = useRef(null);
   // Sync internal ref to external ref so parent can access map/polygons/centroids
@@ -566,7 +564,7 @@ function GooglePaddockMap({
         if (mapDivRef.current) mapDivRef.current.innerHTML = "";
       }
       const map = new g.Map(mapDivRef.current, {
-        center: { lat: centerRef.current[0], lng: centerRef.current[1] },
+        center: { lat: center[0], lng: center[1] },
         zoom: initialZoom || 13,
         mapTypeId: "satellite",
         streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
@@ -798,7 +796,7 @@ function GooglePaddockMap({
       // which can be thrown off by bad coordinates or stale state.
       const centerKey = `${center[0]},${center[1]}`;
       const sameCenter = fittedBoundsCenterRef.current === centerKey;
-      const [cLat, cLng] = centerRef.current;
+      const [cLat, cLng] = center;
       if (!fittedBoundsRef.current || !sameCenter) {
         map.setCenter({ lat: cLat, lng: cLng });
         map.setZoom(13);
