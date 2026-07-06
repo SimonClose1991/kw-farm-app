@@ -800,11 +800,16 @@ function GooglePaddockMap({
       const [cLat, cLng] = center;
       console.log("[MAP DEBUG] center:", center, "sameCenter:", sameCenter, "fittedBoundsRef:", fittedBoundsRef.current, "mode:", mode);
       if (!fittedBoundsRef.current || !sameCenter) {
-        map.setCenter({ lat: cLat, lng: cLng });
-        map.setZoom(13);
+        // Use requestAnimationFrame to ensure the div is laid out before centering
+        // Google Maps may default to world view if div has no dimensions yet
+        const doCenter = () => {
+          map.setCenter({ lat: cLat, lng: cLng });
+          map.setZoom(13);
+          console.log("[MAP DEBUG] setCenter called with:", cLat, cLng);
+        };
+        requestAnimationFrame(() => requestAnimationFrame(doCenter));
         fittedBoundsRef.current = true;
         fittedBoundsCenterRef.current = centerKey;
-        console.log("[MAP DEBUG] setCenter called with:", cLat, cLng);
       } else {
         console.log("[MAP DEBUG] setCenter SKIPPED");
       }
