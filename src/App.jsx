@@ -800,13 +800,23 @@ function GooglePaddockMap({
       if (!fittedBoundsRef.current || !sameCenter) {
         const idleListener = map.addListener("idle", () => {
           g.event.removeListener(idleListener);
+          // Use current bounds from ref (updated as paddocks load) not stale closure
+          const currentBounds = mapInstanceRef.current?.bounds;
+          try {
+            if (currentBounds && !currentBounds.isEmpty?.()) {
+              const ne = currentBounds.getNorthEast();
+              const sw = currentBounds.getSouthWest();
+              const midLat = (ne.lat() + sw.lat()) / 2;
+              const midLng = (ne.lng() + sw.lng()) / 2;
+              const dist = Math.hypot(midLat - cLat, midLng - cLng);
+              if (dist < 0.5 && ne.lat() !== sw.lat()) {
+                map.fitBounds(currentBounds, 40);
+                return;
+              }
+            }
+          } catch {}
           map.setCenter({ lat: cLat, lng: cLng });
           map.setZoom(13);
-          // Log what the map center actually is after we set it
-          setTimeout(() => {
-            const c = map.getCenter();
-            console.log("[CENTER CHECK] after setCenter:", c?.lat(), c?.lng(), "expected:", cLat, cLng);
-          }, 500);
         });
         fittedBoundsRef.current = true;
         fittedBoundsCenterRef.current = centerKey;
