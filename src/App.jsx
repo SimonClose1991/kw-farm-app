@@ -789,17 +789,16 @@ function GooglePaddockMap({
         overlays.push(dot);
       }
 
-      // If a map is already initialised and we're just updating paddocks (e.g. rename),
-      // reuse the existing map instance rather than destroying and recreating it.
-      // Only recreate if center/mode/apiKey changed (true map config change).
-      if (mapInstanceRef.current?.map && !drawMode) {
-        // Map already exists — let the insight effect handle polygon/label updates.
-        // Just update the ref's paddockList so lookups stay current.
+      // If a map is already initialised AND we're on the same farm/mode,
+      // just update paddockList and let the insight effect handle polygons/labels.
+      // But if center changed (farm switch) or mode changed, fall through to full rebuild.
+      const centerKey = `${center[0]},${center[1]}`;
+      const sameCenter = fittedBoundsCenterRef.current === centerKey;
+      if (mapInstanceRef.current?.map && !drawMode && sameCenter && mapInstanceRef.current._mode === mode) {
         mapInstanceRef.current.paddockList = paddocks;
         return;
       }
-      const centerKey = `${center[0]},${center[1]}`;
-      if (fittedBoundsCenterRef.current !== centerKey) {
+      if (!sameCenter) {
         fittedBoundsRef.current = false;
         fittedBoundsCenterRef.current = centerKey;
       }
