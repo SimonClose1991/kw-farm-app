@@ -563,6 +563,7 @@ function GooglePaddockMap({
         // Clear the div so Google Maps doesn't see an existing map in it
         if (mapDivRef.current) mapDivRef.current.innerHTML = "";
       }
+      console.log("[MAP DEBUG] Creating map, mode:", mode, "center:", center[0], center[1]);
       const map = new g.Map(mapDivRef.current, {
         center: { lat: center[0], lng: center[1] },
         zoom: initialZoom || 13,
