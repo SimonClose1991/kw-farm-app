@@ -797,11 +797,15 @@ function GooglePaddockMap({
       const centerKey = `${center[0]},${center[1]}`;
       const sameCenter = fittedBoundsCenterRef.current === centerKey;
       const [cLat, cLng] = center;
+      console.log("[MAP DEBUG] center:", center, "sameCenter:", sameCenter, "fittedBoundsRef:", fittedBoundsRef.current, "mode:", mode);
       if (!fittedBoundsRef.current || !sameCenter) {
         map.setCenter({ lat: cLat, lng: cLng });
         map.setZoom(13);
         fittedBoundsRef.current = true;
         fittedBoundsCenterRef.current = centerKey;
+        console.log("[MAP DEBUG] setCenter called with:", cLat, cLng);
+      } else {
+        console.log("[MAP DEBUG] setCenter SKIPPED");
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
