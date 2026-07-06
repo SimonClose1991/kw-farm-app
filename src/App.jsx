@@ -434,6 +434,8 @@ function GooglePaddockMap({
   }, []);
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  const centerRef = useRef(center); // always current center, never stale in async callbacks
+  React.useEffect(() => { centerRef.current = center; }, [center]);
   const fittedBoundsRef = useRef(false);
   const fittedBoundsCenterRef = useRef(null);
   // Sync internal ref to external ref so parent can access map/polygons/centroids
@@ -569,6 +571,16 @@ function GooglePaddockMap({
         streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
         gestureHandling: "greedy",
         zoomControl: true,
+      });
+      // Force center after tiles load using centerRef (always current, never stale)
+      // This handles the case where the map was created mid-farm-switch
+      const tileListener = map.addListener("tilesloaded", () => {
+        g.event.removeListener(tileListener);
+        if (!initialZoom) {
+          const [lat, lng] = centerRef.current;
+          map.setCenter({ lat, lng });
+          map.setZoom(13);
+        }
       });
       // Report centre changes via ref to avoid triggering re-renders
       if (onMapCentreChange) {
@@ -800,7 +812,7 @@ function GooglePaddockMap({
       }
       // Always center on the known farm coordinates — never rely on fitBounds
       // which can be thrown off by bad coordinates or stale state.
-      const [cLat, cLng] = center;
+      const [cLat, cLng] = centerRef.current;
       if (!fittedBoundsRef.current || !sameCenter) {
         map.setCenter({ lat: cLat, lng: cLng });
         map.setZoom(13);
