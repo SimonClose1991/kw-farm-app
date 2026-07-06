@@ -798,19 +798,14 @@ function GooglePaddockMap({
         mapInstanceRef.current.paddockList = paddocks;
         return;
       }
-      if (!sameCenter) {
-        fittedBoundsRef.current = false;
-        fittedBoundsCenterRef.current = centerKey;
-      }
-      const alreadyFitted = fittedBoundsRef.current;
-      if (!alreadyFitted && !drawMode && !initialZoom) {
-        const [cLat, cLng] = center;
-        // Always use the known farm center + fixed zoom rather than fitBounds.
-        // fitBounds is unreliable if any polygon has a bad coordinate (e.g. from a bad GeoJSON import),
-        // which pulls the bounding box far off-farm.
+      // Always center on the known farm coordinates — never rely on fitBounds
+      // which can be thrown off by bad coordinates or stale state.
+      const [cLat, cLng] = center;
+      if (!fittedBoundsRef.current || !sameCenter) {
         map.setCenter({ lat: cLat, lng: cLng });
         map.setZoom(13);
         fittedBoundsRef.current = true;
+        fittedBoundsCenterRef.current = centerKey;
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
