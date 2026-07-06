@@ -85,9 +85,11 @@ export const api = {
   // --- Inventory ---
   listTreatments: (farm) => request(`/inventory/treatments?farm=${encodeURIComponent(farm)}`),
   addTreatment: (farm, fields) => request("/inventory/treatments", { method: "POST", body: JSON.stringify({ farm, ...fields }) }),
+  updateTreatment: (id, fields) => request(`/inventory/treatments/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteTreatment: (id) => request(`/inventory/treatments/${id}`, { method: "DELETE" }),
   listSprayInventory: (farm) => request(`/inventory/spray?farm=${encodeURIComponent(farm)}`),
   addSprayInventory: (farm, fields) => request("/inventory/spray", { method: "POST", body: JSON.stringify({ farm, ...fields }) }),
+  updateSprayInventory: (id, fields) => request(`/inventory/spray/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteSprayInventory: (id) => request(`/inventory/spray/${id}`, { method: "DELETE" }),
 
   // --- Feed on Offer ---

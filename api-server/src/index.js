@@ -84,10 +84,14 @@ app.use("/api/field-notes", fieldNotesRoutes);
     await db.execute(sql`
       ALTER TABLE mob_history ADD COLUMN IF NOT EXISTS author_name TEXT
     `);
-    await db.execute(sql`
-      ALTER TABLE field_notes ADD COLUMN IF NOT EXISTS photos TEXT DEFAULT '[]'
-    `);
-    console.log("field_notes table ready");
+    await db.execute(sql`ALTER TABLE field_notes ADD COLUMN IF NOT EXISTS photos TEXT DEFAULT '[]'`);
+    await db.execute(sql`ALTER TABLE treatment_inventory ADD COLUMN IF NOT EXISTS container_size TEXT`);
+    await db.execute(sql`ALTER TABLE treatment_inventory ADD COLUMN IF NOT EXISTS starting_stock NUMERIC`);
+    await db.execute(sql`ALTER TABLE treatment_inventory ADD COLUMN IF NOT EXISTS quantity_used NUMERIC DEFAULT 0`);
+    await db.execute(sql`ALTER TABLE spray_inventory ADD COLUMN IF NOT EXISTS container_size TEXT`);
+    await db.execute(sql`ALTER TABLE spray_inventory ADD COLUMN IF NOT EXISTS starting_stock NUMERIC`);
+    await db.execute(sql`ALTER TABLE spray_inventory ADD COLUMN IF NOT EXISTS quantity_used NUMERIC DEFAULT 0`);
+    console.log("schema migrations complete");
   } catch (err) {
     console.error("field_notes table setup error:", err.message);
   }

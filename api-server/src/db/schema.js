@@ -113,7 +113,10 @@ export const treatmentInventory = pgTable("treatment_inventory", {
   withholdingESI: text("withholding_esi"),
   dosage: text("dosage"),
   containerUnit: text("container_unit"),
+  containerSize: text("container_size"),   // size of each container e.g. "5" (in containerUnit)
   numContainers: text("num_containers"),
+  startingStock: numeric("starting_stock"), // total on hand when first entered (containers × size)
+  quantityUsed: numeric("quantity_used").default("0"), // accumulated usage
   batchNumber: text("batch_number"),
   manufactureDate: text("manufacture_date"),
   expiryDate: text("expiry_date"),
@@ -121,7 +124,6 @@ export const treatmentInventory = pgTable("treatment_inventory", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// --- Inventory: Spray chemicals ---
 export const sprayInventory = pgTable("spray_inventory", {
   id: serial("id").primaryKey(),
   farmId: integer("farm_id").notNull().references(() => farms.id, { onDelete: "cascade" }),
@@ -136,7 +138,10 @@ export const sprayInventory = pgTable("spray_inventory", {
   esi: text("esi"),
   batchNumber: text("batch_number"),
   containerUnit: text("container_unit"),
+  containerSize: text("container_size"),   // size of each container
   numContainers: text("num_containers"),
+  startingStock: numeric("starting_stock"),
+  quantityUsed: numeric("quantity_used").default("0"),
   expiryDate: text("expiry_date"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),

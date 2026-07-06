@@ -32,6 +32,15 @@ router.delete("/treatments/:id", requireAuth, requireEditor, async (req, res) =>
   res.json({ ok: true });
 });
 
+// PUT /api/inventory/treatments/:id — update fields including quantityUsed
+router.put("/treatments/:id", requireAuth, requireEditor, async (req, res) => {
+  const { farm, ...fields } = req.body;
+  const [updated] = await db.update(treatmentInventory).set(fields)
+    .where(eq(treatmentInventory.id, Number(req.params.id))).returning();
+  if (!updated) return res.status(404).json({ error: "Not found" });
+  res.json(updated);
+});
+
 // GET /api/inventory/spray?farm=Arundale
 router.get("/spray", requireAuth, async (req, res) => {
   const farmId = await farmIdByName(req.query.farm);
@@ -51,6 +60,15 @@ router.post("/spray", requireAuth, requireEditor, async (req, res) => {
 router.delete("/spray/:id", requireAuth, requireEditor, async (req, res) => {
   await db.delete(sprayInventory).where(eq(sprayInventory.id, Number(req.params.id)));
   res.json({ ok: true });
+});
+
+// PUT /api/inventory/spray/:id
+router.put("/spray/:id", requireAuth, requireEditor, async (req, res) => {
+  const { farm, ...fields } = req.body;
+  const [updated] = await db.update(sprayInventory).set(fields)
+    .where(eq(sprayInventory.id, Number(req.params.id))).returning();
+  if (!updated) return res.status(404).json({ error: "Not found" });
+  res.json(updated);
 });
 
 export default router;

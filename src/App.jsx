@@ -421,12 +421,21 @@ function GooglePaddockMap({
   fieldNotes = [], showNotesOnMap = false, onSelectNote,
   onPickPin = null, // callback(lat, lng, paddockName) when user places a pin
 }) {
+  // Single persistent Set for ALL active label markers — survives closure differences between effects
+  const labelMarkersSet = useRef(new Set());
+  // Clear every known label marker off the map
+  const clearAllLabels = React.useCallback(() => {
+    labelMarkersSet.current.forEach(lm => { try { lm?.setMap(null); } catch {} });
+    labelMarkersSet.current.clear();
+  }, []);
+  // Add a label marker and track it
+  const trackLabel = React.useCallback((lm) => {
+    if (lm) labelMarkersSet.current.add(lm);
+  }, []);
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  // Tracks whether fitBounds has run for the current farm+center combination.
-  // Stored outside mapInstanceRef so it survives map remounts (which null mapInstanceRef).
   const fittedBoundsRef = useRef(false);
-  const fittedBoundsCenterRef = useRef(null); // reset when farm changes
+  const fittedBoundsCenterRef = useRef(null);
   // Sync internal ref to external ref so parent can access map/polygons/centroids
   React.useEffect(() => {
     if (instanceRef) instanceRef.current = mapInstanceRef.current;
@@ -543,14 +552,10 @@ function GooglePaddockMap({
       const g = window.google.maps;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
-        // Clear ALL label markers using flat array — guaranteed no stragglers
-        if (mapInstanceRef.current.allLabelMarkersArr) {
-          mapInstanceRef.current.allLabelMarkersArr.forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
-          mapInstanceRef.current.allLabelMarkersArr.length = 0;
-        }
-        // Also sweep dict as fallback
+        // Clear ALL label markers via persistent Set — no closure issues
+        clearAllLabels();
         if (mapInstanceRef.current.labelMarkers) {
-          Object.values(mapInstanceRef.current.labelMarkers).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
+          mapInstanceRef.current.labelMarkers = {};
         }
         // Clear note pin markers
         if (mapInstanceRef.current.noteMarkers) {
@@ -577,7 +582,6 @@ function GooglePaddockMap({
       const overlays = [];
       const centroids = {};
       const labelMarkers = {}; // paddock id → label marker (for lookup)
-      const allLabelMarkersArr = []; // flat array of ALL label markers (for guaranteed cleanup)
       const polygons = {};
 
       // ── Draw paddock polygons (both modes) ──
@@ -615,10 +619,9 @@ function GooglePaddockMap({
         overlays.push(poly);
 
         // Initial label at current zoom
-        // Store in BOTH the dict (for lookup) AND the ref array (for guaranteed cleanup)
         const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, map.getZoom(), insightMode, paddockStats);
-        labelMarkers[p.id] = lm || null;  // keyed by ID
-        if (lm) allLabelMarkersArr.push(lm); // flat array for guaranteed cleanup
+        labelMarkers[p.id] = lm || null;
+        trackLabel(lm); // register in persistent Set
       });
 
       // Zoom-aware label update — debounced 150ms so pinch zoom doesn't trigger 20+ redraws
@@ -627,30 +630,22 @@ function GooglePaddockMap({
         if (zoomDebounceTimer) clearTimeout(zoomDebounceTimer);
         zoomDebounceTimer = setTimeout(() => {
           const z = map.getZoom();
-          if (!z) return; // guard against undefined during gesture
+          if (!z) return;
           const ref = mapInstanceRef.current;
           const freshInsightMode = ref?.currentInsightMode || insightMode;
           const freshPaddockStats = ref?.currentPaddockStats || paddockStats;
           const freshCentroids = ref?.centroids || centroids;
-          // Step 1: clear ALL label markers — use the flat array so nothing is missed
-          // regardless of which dict they were keyed under
-          allLabelMarkersArr.forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
-          allLabelMarkersArr.length = 0; // clear in place
-          // Also clear ref.labelMarkers dict values in case insight effect added extras
-          if (ref?.labelMarkers) {
-            Object.values(ref.labelMarkers).forEach(lm => { try { if(lm) lm.setMap(null); } catch {} });
-          }
-          // Step 2: reset dicts
+          // Clear ALL labels via persistent Set — no closure staleness possible
+          clearAllLabels();
           const newLabels = {};
           if (ref) ref.labelMarkers = newLabels;
-          // Step 3: create fresh labels for new zoom level
           paddocks.forEach((p) => {
             const cen = freshCentroids[p.id];
             if (!cen) return;
             const newLm = updateLabelForZoom(g, map, cen, p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
             newLabels[p.id] = newLm || null;
             labelMarkers[p.id] = newLm || null;
-            if (newLm) allLabelMarkersArr.push(newLm);
+            trackLabel(newLm);
           });
         }, 150);
       });
@@ -802,12 +797,29 @@ function GooglePaddockMap({
       }
       const alreadyFitted = fittedBoundsRef.current;
       if (!alreadyFitted && (paddocks.length || landmarks.length) && !drawMode && !initialZoom) {
-        try { map.fitBounds(bounds, 40); } catch {}
+        try {
+          // Sanity check: if bounds extend more than 0.3° (~33km) from farm center, skip fitBounds
+          // This catches bad coordinates that would throw the map 20km off
+          const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
+          const latSpan = ne.lat() - sw.lat();
+          const lngSpan = ne.lng() - sw.lng();
+          const [cLat, cLng] = center;
+          const midLat = (ne.lat() + sw.lat()) / 2;
+          const midLng = (ne.lng() + sw.lng()) / 2;
+          const distFromCenter = Math.hypot(midLat - cLat, midLng - cLng);
+          if (latSpan < 0.8 && lngSpan < 0.8 && distFromCenter < 0.4) {
+            map.fitBounds(bounds, 40);
+          } else {
+            // Bad coordinates — fall back to farm center at sensible zoom
+            console.warn("fitBounds sanity check failed — using FARM_CENTERS fallback", { latSpan, lngSpan, distFromCenter });
+            map.setCenter({ lat: cLat, lng: cLng });
+            map.setZoom(13);
+          }
+        } catch {}
         fittedBoundsRef.current = true;
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
-        allLabelMarkersArr, // flat array for guaranteed label cleanup
         fittedBounds: true,
         landmarks, renderLandmarks: renderAllLandmarks,
         centroids, center, bounds,
@@ -1039,26 +1051,18 @@ function GooglePaddockMap({
         if (fill) poly.setOptions({ fillColor: fill, fillOpacity: 0.45 });
       }
     });
-    // Redraw all labels — clear via flat array first (guaranteed no ghosts), then redraw
+    // Redraw all labels via persistent Set — guaranteed no ghosts regardless of which effect drew them
     if (ref.map) {
       const z = ref.map.getZoom();
       const g = window.google.maps;
-      // Clear via flat array — catches every marker regardless of key
-      if (ref.allLabelMarkersArr) {
-        ref.allLabelMarkersArr.forEach(lm => { try { lm?.setMap?.(null); } catch {} });
-        ref.allLabelMarkersArr.length = 0;
-      }
-      // Also sweep dict as fallback
-      if (ref.labelMarkers) {
-        Object.values(ref.labelMarkers).forEach(lm => { try { lm?.setMap?.(null); } catch {} });
-        ref.labelMarkers = {};
-      }
+      clearAllLabels(); // clears every marker ever registered
+      if (ref.labelMarkers) ref.labelMarkers = {};
       paddocks.forEach((p) => {
         const cen = ref.centroids?.[p.id];
         if (!cen) return;
         const newLm = updateLabelForZoom(g, ref.map, cen, p, { setMap: () => {} }, z, insightMode, paddockStats);
         if (ref.labelMarkers) ref.labelMarkers[p.id] = newLm || null;
-        if (newLm && ref.allLabelMarkersArr) ref.allLabelMarkersArr.push(newLm);
+        trackLabel(newLm);
       });
     }
   }, [insightMode, paddockStats, paddocks]);
@@ -1195,6 +1199,7 @@ const TREATMENT_FIELDS = [
   { key: "withholdingESI", label: "WHP - ESI", type: "text", placeholder: "e.g. 7 days" },
   { key: "dosage", label: "Dosage", type: "text", placeholder: "e.g. 1mL per 10kg" },
   { key: "containerUnit", label: "Container unit", type: "select", options: ["L", "mL", "kg", "g", "Doses", "Units"] },
+  { key: "containerSize", label: "Container size", type: "number", placeholder: "e.g. 5 (per container)" },
   { key: "numContainers", label: "Number of containers", type: "number", placeholder: "e.g. 4" },
   { key: "batchNumber", label: "Batch number", type: "text", placeholder: "e.g. B12345" },
   { key: "manufactureDate", label: "Manufacture date", type: "date" },
@@ -1214,6 +1219,7 @@ const SPRAY_FIELDS = [
   { key: "esi", label: "ESI (days)", type: "text", placeholder: "e.g. 7 days" },
   { key: "batchNumber", label: "Batch number", type: "text", placeholder: "e.g. B12345" },
   { key: "containerUnit", label: "Container unit", type: "select", options: ["L", "mL", "kg", "g", "Units"] },
+  { key: "containerSize", label: "Container size", type: "number", placeholder: "e.g. 5 (per container)" },
   { key: "numContainers", label: "Number of containers", type: "number", placeholder: "e.g. 2" },
   { key: "expiryDate", label: "Expiry date", type: "date" },
   { key: "notes", label: "Notes", type: "textarea", placeholder: "Any additional notes..." },
@@ -2973,6 +2979,23 @@ export default function App() {
       patch.lastTreatDate = treatDate;
       patch.whpDays = Number(formValues["_whpDays"] || 0);
       patch.esiDays = Number(formValues["_esiDays"] || 0);
+      // Deduct from inventory — use mob count as proxy for usage
+      const selected = formValues["_selectedTreatments"] || [];
+      selected.forEach(async (t) => {
+        const invItem = inventory.find(i => i.id === t.id);
+        if (!invItem || !invItem.dosage) return;
+        // Try to parse dosage like "1mL per 10kg" — approximate based on mob count
+        const mobCount = mob?.count || 0;
+        const doseMatch = invItem.dosage.match(/^([\d.]+)/);
+        if (!doseMatch || !mobCount) return;
+        const dosePerHead = Number(doseMatch[1]);
+        const totalDose = dosePerHead * mobCount;
+        const newUsed = (Number(invItem.quantityUsed) || 0) + totalDose;
+        try {
+          await api.updateTreatment(t.id, { quantityUsed: newUsed.toString() });
+          setInventory(prev => prev.map(i => i.id === t.id ? { ...i, quantityUsed: newUsed.toString() } : i));
+        } catch {}
+      });
     }
     if (name === "Weigh" && formValues["Average weight (kg)"]) {
       patch.lastWeight = Number(formValues["Average weight (kg)"]);
@@ -5463,16 +5486,37 @@ export default function App() {
               ))}
             </div>
             <div className="space-y-2 mb-4">
-              {activeList.map((it) => (
-                <button key={it.id} onClick={() => setInventoryView(it.id)} className="w-full flex items-center justify-between py-3 border-b border-slate-100 text-left">
-                  <div>
-                    <div className="font-bold text-slate-800">{it.title}</div>
-                    {it.treatmentDate && <div className="text-xs text-amber-600">{it.treatmentDate} · {it.location}</div>}
-                    {it.expiryDate && !it.treatmentDate && <div className="text-xs text-slate-400">Expires {it.expiryDate}</div>}
-                  </div>
-                  <span className="text-slate-500 text-sm font-semibold">{it.numContainers} {it.containerUnit}</span>
-                </button>
-              ))}
+              {activeList.map((it) => {
+                const starting = Number(it.startingStock) || 0;
+                const used = Number(it.quantityUsed) || 0;
+                const remaining = Math.max(0, starting - used);
+                const pct = starting > 0 ? Math.round((remaining / starting) * 100) : null;
+                const barColour = pct === null ? "bg-slate-200" : pct > 50 ? "bg-green-500" : pct > 20 ? "bg-amber-400" : "bg-red-500";
+                const unit = it.containerUnit || "";
+                return (
+                  <button key={it.id} onClick={() => setInventoryView(it.id)} className="w-full py-3 border-b border-slate-100 text-left">
+                    <div className="flex items-start justify-between mb-1">
+                      <div className="font-bold text-slate-800 text-sm">{it.title}</div>
+                      <div className="text-xs text-slate-500 ml-2 flex-shrink-0">
+                        {starting > 0
+                          ? <span className={pct !== null && pct < 20 ? "text-red-500 font-bold" : ""}>{remaining.toFixed(1)}/{starting.toFixed(1)} {unit}</span>
+                          : it.numContainers ? <span>{it.numContainers} × {it.containerSize || "?"} {unit}</span> : null
+                        }
+                      </div>
+                    </div>
+                    {starting > 0 && (
+                      <div className="w-full bg-slate-100 rounded-full h-1.5 mb-1">
+                        <div className={`${barColour} h-1.5 rounded-full transition-all`} style={{ width: `${pct}%` }} />
+                      </div>
+                    )}
+                    <div className="flex gap-3 text-xs text-slate-400">
+                      {it.expiryDate && <span>Exp {it.expiryDate}</span>}
+                      {it.dosage && <span>{it.dosage}</span>}
+                      {it.treatmentDate && <span>{it.treatmentDate} · {it.location}</span>}
+                    </div>
+                  </button>
+                );
+              })}
               {activeList.length === 0 && <p className="text-slate-400 text-sm py-4">No {isTreatment ? "animal treatments" : "spray chemical records"} yet.</p>}
             </div>
             {canEdit && (
@@ -5494,12 +5538,18 @@ export default function App() {
             <button
               onClick={async () => {
                 if (!inventoryForm.title) { showToast("Please enter a name"); return; }
+                // Auto-calculate startingStock from containers × size
+                const saveForm = { ...inventoryForm };
+                if (saveForm.numContainers && saveForm.containerSize) {
+                  saveForm.startingStock = (Number(saveForm.numContainers) * Number(saveForm.containerSize)).toString();
+                  saveForm.quantityUsed = "0";
+                }
                 try {
                   if (isTreatment) {
-                    const created = await api.addTreatment(farmName, inventoryForm);
+                    const created = await api.addTreatment(farmName, saveForm);
                     setInventory((prev) => [...prev, created]);
                   } else {
-                    const created = await api.addSprayInventory(farmName, inventoryForm);
+                    const created = await api.addSprayInventory(farmName, saveForm);
                     setSprayInventory((prev) => [...prev, created]);
                   }
                   setInventoryView(null);
@@ -5524,6 +5574,53 @@ export default function App() {
         if (!item) return null;
         return (
           <Modal title={item.title} onClose={() => setInventoryView(null)}>
+            {/* Stock level bar */}
+            {(() => {
+              const starting = Number(item.startingStock) || 0;
+              const used = Number(item.quantityUsed) || 0;
+              const remaining = Math.max(0, starting - used);
+              const pct = starting > 0 ? Math.round((remaining / starting) * 100) : null;
+              const unit = item.containerUnit || "";
+              const barColour = pct === null ? "bg-slate-200" : pct > 50 ? "bg-green-500" : pct > 20 ? "bg-amber-400" : "bg-red-500";
+              if (!starting) return null;
+              return (
+                <div className="bg-slate-50 rounded-2xl p-4 mb-4">
+                  <div className="flex justify-between items-baseline mb-2">
+                    <span className="text-sm font-semibold text-slate-700">Stock level</span>
+                    <span className={`text-sm font-bold ${pct < 20 ? "text-red-500" : "text-slate-700"}`}>{remaining.toFixed(1)} / {starting.toFixed(1)} {unit}</span>
+                  </div>
+                  <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
+                    <div className={`${barColour} h-3 rounded-full`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="flex justify-between text-xs text-slate-400">
+                    <span>{pct}% remaining</span>
+                    <span>{used.toFixed(1)} {unit} used</span>
+                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2 mt-3">
+                      <button onClick={async () => {
+                        const adj = window.prompt(`Adjust stock (${unit})\nEnter amount to add (+) or remove (−):\ne.g. 5 to add, -2 to remove`);
+                        if (adj === null || adj === "") return;
+                        const delta = Number(adj);
+                        if (isNaN(delta)) { showToast("Enter a number"); return; }
+                        const newUsed = Math.max(0, used - delta);
+                        const newStarting = delta > 0 ? starting + delta : starting;
+                        const fields = { quantityUsed: newUsed.toString(), startingStock: newStarting.toString() };
+                        try {
+                          let updated;
+                          if (isTreatment) { updated = await api.updateTreatment(item.id, fields); setInventory(prev => prev.map(i => i.id === item.id ? { ...i, ...fields } : i)); }
+                          else { updated = await api.updateSprayInventory(item.id, fields); setSprayInventory(prev => prev.map(i => i.id === item.id ? { ...i, ...fields } : i)); }
+                          showToast(`Stock adjusted: ${remaining.toFixed(1)} → ${Math.max(0, newStarting - newUsed).toFixed(1)} ${unit}`);
+                          setInventoryView(null);
+                        } catch (err) { showToast(err.message || "Couldn't update stock"); }
+                      }} className="flex-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl py-2 text-sm font-semibold">
+                        ± Adjust stock
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div className="space-y-2 mb-4">
               {fields.filter((f) => f.key !== "title" && item[f.key]).map((f) => (
                 <div key={f.key} className="flex justify-between border-b border-slate-100 py-2 text-sm">
