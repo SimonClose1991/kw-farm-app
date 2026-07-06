@@ -797,10 +797,17 @@ function GooglePaddockMap({
       const centerKey = `${center[0]},${center[1]}`;
       const sameCenter = fittedBoundsCenterRef.current === centerKey;
       const [cLat, cLng] = center;
-      if (!fittedBoundsRef.current || !sameCenter) {
+      // Only fit bounds on first load for this farm, or when switching farms.
+      // Paddock renames/updates must NOT re-trigger fitBounds or the map jumps back.
+      if (!sameCenter) {
+        // Farm changed — reset so we fit the new farm
+        fittedBoundsRef.current = false;
+        fittedBoundsCenterRef.current = centerKey;
+      }
+      if (!fittedBoundsRef.current) {
+        fittedBoundsRef.current = true; // set immediately so subsequent paddock-change re-renders skip this
         const idleListener = map.addListener("idle", () => {
           g.event.removeListener(idleListener);
-          // Use current bounds from ref (updated as paddocks load) not stale closure
           const currentBounds = mapInstanceRef.current?.bounds;
           try {
             if (currentBounds && !currentBounds.isEmpty?.()) {
@@ -818,8 +825,6 @@ function GooglePaddockMap({
           map.setCenter({ lat: cLat, lng: cLng });
           map.setZoom(13);
         });
-        fittedBoundsRef.current = true;
-        fittedBoundsCenterRef.current = centerKey;
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
