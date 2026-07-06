@@ -798,12 +798,15 @@ function GooglePaddockMap({
       const sameCenter = fittedBoundsCenterRef.current === centerKey;
       const [cLat, cLng] = center;
       if (!fittedBoundsRef.current || !sameCenter) {
-        // Use 'idle' event — fires once map has fully initialised and settled
-        // This guarantees setCenter fires AFTER Google Maps finishes its own init sequence
         const idleListener = map.addListener("idle", () => {
           g.event.removeListener(idleListener);
           map.setCenter({ lat: cLat, lng: cLng });
           map.setZoom(13);
+          // Log what the map center actually is after we set it
+          setTimeout(() => {
+            const c = map.getCenter();
+            console.log("[CENTER CHECK] after setCenter:", c?.lat(), c?.lng(), "expected:", cLat, cLng);
+          }, 500);
         });
         fittedBoundsRef.current = true;
         fittedBoundsCenterRef.current = centerKey;
