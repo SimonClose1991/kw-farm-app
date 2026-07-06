@@ -565,22 +565,12 @@ function GooglePaddockMap({
         }
       }
       const map = new g.Map(mapDivRef.current, {
-        center: { lat: center[0], lng: center[1] },
+        center: { lat: centerRef.current[0], lng: centerRef.current[1] },
         zoom: initialZoom || 13,
         mapTypeId: "satellite",
         streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
         gestureHandling: "greedy",
         zoomControl: true,
-      });
-      // Force center after tiles load using centerRef (always current, never stale)
-      // This handles the case where the map was created mid-farm-switch
-      const tileListener = map.addListener("tilesloaded", () => {
-        g.event.removeListener(tileListener);
-        if (!initialZoom) {
-          const [lat, lng] = centerRef.current;
-          map.setCenter({ lat, lng });
-          map.setZoom(13);
-        }
       });
       // Report centre changes via ref to avoid triggering re-renders
       if (onMapCentreChange) {
@@ -801,17 +791,12 @@ function GooglePaddockMap({
         overlays.push(dot);
       }
 
-      // If a map is already initialised AND we're on the same farm/mode,
-      // just update paddockList and let the insight effect handle polygons/labels.
-      // But if center changed (farm switch) or mode changed, fall through to full rebuild.
-      const centerKey = `${center[0]},${center[1]}`;
-      const sameCenter = fittedBoundsCenterRef.current === centerKey;
-      if (mapInstanceRef.current?.map && !drawMode && sameCenter && mapInstanceRef.current._mode === mode) {
-        mapInstanceRef.current.paddockList = paddocks;
-        return;
-      }
+      // Note: we always rebuild when paddocks change so polygons stay in sync.
+      // setCenter is only called when the farm center changes (new farm).
       // Always center on the known farm coordinates — never rely on fitBounds
       // which can be thrown off by bad coordinates or stale state.
+      const centerKey = `${center[0]},${center[1]}`;
+      const sameCenter = fittedBoundsCenterRef.current === centerKey;
       const [cLat, cLng] = centerRef.current;
       if (!fittedBoundsRef.current || !sameCenter) {
         map.setCenter({ lat: cLat, lng: cLng });
@@ -858,18 +843,6 @@ function GooglePaddockMap({
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
-      // Only destroy the map when farm/mode/apiKey truly changes, not on paddock updates.
-      // Destroying on every paddock change (e.g. rename) causes the map to lose its position.
-      if (mapInstanceRef.current && mapInstanceRef.current.center) {
-        const [eLat, eLng] = mapInstanceRef.current.center;
-        const [nLat, nLng] = center;
-        const sameCenter = Math.abs(eLat - nLat) < 0.001 && Math.abs(eLng - nLng) < 0.001;
-        const sameMode = mapInstanceRef.current._mode === mode;
-        if (sameCenter && sameMode) {
-          // Paddock-only change — don't destroy the map
-          return;
-        }
-      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
         clearAllLabels();
