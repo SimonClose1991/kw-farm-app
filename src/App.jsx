@@ -789,33 +789,28 @@ function GooglePaddockMap({
         overlays.push(dot);
       }
 
-      // Reset fittedBounds if the farm center changed (user switched farms)
+      // If a map is already initialised and we're just updating paddocks (e.g. rename),
+      // reuse the existing map instance rather than destroying and recreating it.
+      // Only recreate if center/mode/apiKey changed (true map config change).
+      if (mapInstanceRef.current?.map && !drawMode) {
+        // Map already exists — let the insight effect handle polygon/label updates.
+        // Just update the ref's paddockList so lookups stay current.
+        mapInstanceRef.current.paddockList = paddocks;
+        return;
+      }
       const centerKey = `${center[0]},${center[1]}`;
       if (fittedBoundsCenterRef.current !== centerKey) {
         fittedBoundsRef.current = false;
         fittedBoundsCenterRef.current = centerKey;
       }
       const alreadyFitted = fittedBoundsRef.current;
-      if (!alreadyFitted && (paddocks.length || landmarks.length) && !drawMode && !initialZoom) {
-        try {
-          // Sanity check: if bounds extend more than 0.3° (~33km) from farm center, skip fitBounds
-          // This catches bad coordinates that would throw the map 20km off
-          const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
-          const latSpan = ne.lat() - sw.lat();
-          const lngSpan = ne.lng() - sw.lng();
-          const [cLat, cLng] = center;
-          const midLat = (ne.lat() + sw.lat()) / 2;
-          const midLng = (ne.lng() + sw.lng()) / 2;
-          const distFromCenter = Math.hypot(midLat - cLat, midLng - cLng);
-          if (latSpan < 0.8 && lngSpan < 0.8 && distFromCenter < 0.4) {
-            map.fitBounds(bounds, 40);
-          } else {
-            // Bad coordinates — fall back to farm center at sensible zoom
-            console.warn("fitBounds sanity check failed — using FARM_CENTERS fallback", { latSpan, lngSpan, distFromCenter });
-            map.setCenter({ lat: cLat, lng: cLng });
-            map.setZoom(13);
-          }
-        } catch {}
+      if (!alreadyFitted && !drawMode && !initialZoom) {
+        const [cLat, cLng] = center;
+        // Always use the known farm center + fixed zoom rather than fitBounds.
+        // fitBounds is unreliable if any polygon has a bad coordinate (e.g. from a bad GeoJSON import),
+        // which pulls the bounding box far off-farm.
+        map.setCenter({ lat: cLat, lng: cLng });
+        map.setZoom(13);
         fittedBoundsRef.current = true;
       }
       mapInstanceRef.current = {
@@ -825,6 +820,7 @@ function GooglePaddockMap({
         centroids, center, bounds,
         paddockList: paddocks,
         renderMobs: null,
+        _mode: mode, // stored so cleanup can detect true config changes vs paddock-only updates
         currentInsightMode: insightMode,
         currentPaddockStats: paddockStats,
         currentOpenGateIds: openGateIds,
@@ -856,8 +852,21 @@ function GooglePaddockMap({
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
+      // Only destroy the map when farm/mode/apiKey truly changes, not on paddock updates.
+      // Destroying on every paddock change (e.g. rename) causes the map to lose its position.
+      if (mapInstanceRef.current && mapInstanceRef.current.center) {
+        const [eLat, eLng] = mapInstanceRef.current.center;
+        const [nLat, nLng] = center;
+        const sameCenter = Math.abs(eLat - nLat) < 0.001 && Math.abs(eLng - nLng) < 0.001;
+        const sameMode = mapInstanceRef.current._mode === mode;
+        if (sameCenter && sameMode) {
+          // Paddock-only change — don't destroy the map
+          return;
+        }
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
+        clearAllLabels();
         mapInstanceRef.current = null;
       }
     };
