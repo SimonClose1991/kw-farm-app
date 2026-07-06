@@ -554,15 +554,16 @@ function GooglePaddockMap({
       const g = window.google.maps;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
-        // Clear ALL label markers via persistent Set — no closure issues
         clearAllLabels();
-        if (mapInstanceRef.current.labelMarkers) {
-          mapInstanceRef.current.labelMarkers = {};
-        }
-        // Clear note pin markers
         if (mapInstanceRef.current.noteMarkers) {
           mapInstanceRef.current.noteMarkers.forEach(m => { try { m.setMap(null); } catch {} });
         }
+        // Properly destroy the old map so the new one gets a clean div
+        // Without this, new g.Map() on the same div may inherit the old viewport
+        try { g.event.clearInstanceListeners(mapInstanceRef.current.map); } catch {}
+        mapInstanceRef.current = null;
+        // Clear the div so Google Maps doesn't see an existing map in it
+        if (mapDivRef.current) mapDivRef.current.innerHTML = "";
       }
       const map = new g.Map(mapDivRef.current, {
         center: { lat: centerRef.current[0], lng: centerRef.current[1] },
