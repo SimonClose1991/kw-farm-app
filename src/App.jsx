@@ -563,7 +563,6 @@ function GooglePaddockMap({
         // Clear the div so Google Maps doesn't see an existing map in it
         if (mapDivRef.current) mapDivRef.current.innerHTML = "";
       }
-      console.log("[MAP DEBUG] Creating map, mode:", mode, "center:", center[0], center[1]);
       const map = new g.Map(mapDivRef.current, {
         center: { lat: center[0], lng: center[1] },
         zoom: initialZoom || 13,
@@ -798,20 +797,16 @@ function GooglePaddockMap({
       const centerKey = `${center[0]},${center[1]}`;
       const sameCenter = fittedBoundsCenterRef.current === centerKey;
       const [cLat, cLng] = center;
-      console.log("[MAP DEBUG] center:", center, "sameCenter:", sameCenter, "fittedBoundsRef:", fittedBoundsRef.current, "mode:", mode);
       if (!fittedBoundsRef.current || !sameCenter) {
-        // Use requestAnimationFrame to ensure the div is laid out before centering
-        // Google Maps may default to world view if div has no dimensions yet
-        const doCenter = () => {
+        // Use 'idle' event — fires once map has fully initialised and settled
+        // This guarantees setCenter fires AFTER Google Maps finishes its own init sequence
+        const idleListener = map.addListener("idle", () => {
+          g.event.removeListener(idleListener);
           map.setCenter({ lat: cLat, lng: cLng });
           map.setZoom(13);
-          console.log("[MAP DEBUG] setCenter called with:", cLat, cLng);
-        };
-        requestAnimationFrame(() => requestAnimationFrame(doCenter));
+        });
         fittedBoundsRef.current = true;
         fittedBoundsCenterRef.current = centerKey;
-      } else {
-        console.log("[MAP DEBUG] setCenter SKIPPED");
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
