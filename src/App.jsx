@@ -436,6 +436,7 @@ function GooglePaddockMap({
   const mapInstanceRef = useRef(null);
   const fittedBoundsRef = useRef(false);
   const fittedBoundsCenterRef = useRef(null);
+  const lastZoomTierRef = useRef(null); // track zoom tier to skip unnecessary label redraws
   // Sync internal ref to external ref so parent can access map/polygons/centroids
   React.useEffect(() => {
     if (instanceRef) instanceRef.current = mapInstanceRef.current;
@@ -632,6 +633,10 @@ function GooglePaddockMap({
         zoomDebounceTimer = setTimeout(() => {
           const z = map.getZoom();
           if (!z) return;
+          // Determine zoom tier — only redraw labels when crossing a tier boundary
+          const tier = z < 12 ? 0 : z < 14 ? 1 : 2;
+          if (tier === lastZoomTierRef.current) return; // same tier — labels are still correct, skip redraw
+          lastZoomTierRef.current = tier;
           const ref = mapInstanceRef.current;
           const freshInsightMode = ref?.currentInsightMode || insightMode;
           const freshPaddockStats = ref?.currentPaddockStats || paddockStats;
@@ -806,25 +811,28 @@ function GooglePaddockMap({
       }
       if (!fittedBoundsRef.current) {
         fittedBoundsRef.current = true;
-        const idleListener = map.addListener("idle", () => {
-          g.event.removeListener(idleListener);
+        // Wait for map div to be fully painted before fitting bounds
+        setTimeout(() => {
           const currentBounds = mapInstanceRef.current?.bounds;
+          if (!currentBounds) {
+            map.setCenter({ lat: cLat, lng: cLng });
+            map.setZoom(13);
+            return;
+          }
           try {
-            if (currentBounds && !currentBounds.isEmpty?.()) {
-              const ne = currentBounds.getNorthEast();
-              const sw = currentBounds.getSouthWest();
-              const midLat = (ne.lat() + sw.lat()) / 2;
-              const midLng = (ne.lng() + sw.lng()) / 2;
-              const dist = Math.hypot(midLat - cLat, midLng - cLng);
-              if (dist < 0.5 && ne.lat() !== sw.lat()) {
-                map.fitBounds(currentBounds, 40);
-                return;
-              }
+            const ne = currentBounds.getNorthEast();
+            const sw = currentBounds.getSouthWest();
+            const midLat = (ne.lat() + sw.lat()) / 2;
+            const midLng = (ne.lng() + sw.lng()) / 2;
+            const dist = Math.hypot(midLat - cLat, midLng - cLng);
+            if (dist < 0.5 && ne.lat() !== sw.lat()) {
+              map.fitBounds(currentBounds, 40);
+              return;
             }
           } catch {}
           map.setCenter({ lat: cLat, lng: cLng });
           map.setZoom(13);
-        });
+        }, 300);
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
@@ -838,6 +846,7 @@ function GooglePaddockMap({
         currentPaddockStats: paddockStats,
         currentOpenGateIds: openGateIds,
       };
+      lastZoomTierRef.current = null; // reset so labels redraw correctly on first zoom
     };
 
     if (window.google?.maps) {
@@ -1028,25 +1037,20 @@ function GooglePaddockMap({
   }, [fieldNotes, showNotesOnMap, mode]);
 
 
-  // Effect: create polygons when paddocks load/change, without rebuilding the whole map
-  // This replaces paddocks being in the main effect deps — prevents zoom reset on rename
+  // Effect: update polygons when paddocks change — in-place updates, never destroy/recreate
+  // Destroying polygons causes Google Maps to reset viewport — so we only setOptions() on existing ones
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
     if (!ref?.map || !window.google?.maps) return;
     const g = window.google.maps;
     const map = ref.map;
-    // Save current viewport BEFORE touching polygons so we can restore it after
-    // fittedBoundsRef.current is true once the initial fitBounds has run
-    const savedCenter = fittedBoundsRef.current ? map.getCenter() : null;
-    const savedZoom = fittedBoundsRef.current ? map.getZoom() : null;
-    // Remove old polygons
-    if (ref.polygons) {
-      Object.values(ref.polygons).forEach(p => { try { p.setMap(null); } catch {} });
-    }
-    ref.polygons = {};
     ref.centroids = ref.centroids || {};
+    ref.polygons = ref.polygons || {};
     const newBounds = new g.LatLngBounds();
+    const seenIds = new Set();
+
     paddocks.forEach((p, i) => {
+      seenIds.add(p.id);
       const latlngs = geometryToLatLngs(p.geojson) || fallbackPolygon(ref.center, i, Number(p.ha) || 10);
       const path = latlngs.map(([lat, lng]) => ({ lat, lng }));
       path.forEach(pt => newBounds.extend(pt));
@@ -1056,29 +1060,36 @@ function GooglePaddockMap({
       const isGateOpen = (ref.landmarks || []).some(l => l.type === "Gate" && (ref.currentOpenGateIds || []).includes(String(l.id)) && (l.paddockA === p.name || l.paddockB === p.name));
       const fillColour = mode === "paddocks" ? (colourForPaddock(p) || "#999999") : (mode === "notes" ? "#e2e8f0" : "#38bdf8");
       const fillOpacity = mode === "paddocks" ? 0.45 : (mode === "notes" ? 0.2 : 0.15);
-      const poly = new g.Polygon({
-        paths: path,
-        strokeColor: mode === "notes" ? "#94a3b8" : (isGateOpen ? "#eab308" : "#ffffff"),
-        strokeWeight: mode === "notes" ? 1 : (isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5)),
-        fillColor: fillColour,
-        fillOpacity,
-        map,
-      });
-      if (!drawMode) {
-        poly.addListener("click", (e) => {
-          if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), p.name); }
-          else { onSelect(p); }
-        });
+      const strokeColor = mode === "notes" ? "#94a3b8" : (isGateOpen ? "#eab308" : "#ffffff");
+      const strokeWeight = mode === "notes" ? 1 : (isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5));
+
+      if (ref.polygons[p.id]) {
+        // Polygon exists — just update its visual properties, never touch geometry or recreate
+        // This is the key: setOptions() does NOT affect the map viewport at all
+        ref.polygons[p.id].setOptions({ fillColor: fillColour, fillOpacity, strokeColor, strokeWeight });
+      } else {
+        // New paddock — create polygon for the first time
+        const poly = new g.Polygon({ paths: path, strokeColor, strokeWeight, fillColor: fillColour, fillOpacity, map });
+        if (!drawMode) {
+          poly.addListener("click", (e) => {
+            if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), p.name); }
+            else { onSelect(p); }
+          });
+        }
+        ref.polygons[p.id] = poly;
       }
-      ref.polygons[p.id] = poly;
     });
+
+    // Remove polygons for deleted paddocks only
+    Object.keys(ref.polygons).forEach(pid => {
+      if (!seenIds.has(Number(pid))) {
+        try { ref.polygons[pid].setMap(null); } catch {}
+        delete ref.polygons[pid];
+      }
+    });
+
     ref.bounds = newBounds;
     ref.paddockList = paddocks;
-    // Restore viewport after polygon swap — prevents zoom jumping back to fitBounds view
-    if (savedCenter && savedZoom !== null) {
-      map.setCenter(savedCenter);
-      map.setZoom(savedZoom);
-    }
   }, [paddocks, mode]);
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
@@ -2742,7 +2753,7 @@ export default function App() {
     if (history[selectedMobId] && notes[selectedMobId]) return; // already loaded
     Promise.all([api.listMobHistory(selectedMobId), api.listMobNotes(selectedMobId)])
       .then(([h, n]) => {
-        setHistory((prev) => ({ ...prev, [selectedMobId]: h.map((row) => ({ action: row.action, detail: row.detail, date: row.date, authorName: row.authorName })).reverse() }));
+        setHistory((prev) => ({ ...prev, [selectedMobId]: h.map((row) => ({ id: row.id, action: row.action, detail: row.detail, date: row.date, authorName: row.authorName })).reverse() }));
         setNotes((prev) => ({ ...prev, [selectedMobId]: n.map((row) => ({ id: row.id, text: row.text, author: row.authorName, date: row.createdAt })) }));
       })
       .catch(() => {});
@@ -3171,9 +3182,15 @@ export default function App() {
       };
     });
     try {
-      await api.addMobHistory(mobId, { action: name, detail: summary || "Recorded", date: historyDate });
+      const created = await api.addMobHistory(mobId, { action: name, detail: summary || "Recorded", date: historyDate });
+      // Update local entry with server-assigned id so it can be deleted later
+      if (created?.id) {
+        setHistory(prev => ({
+          ...prev,
+          [mobId]: (prev[mobId] || []).map((h, idx) => idx === 0 ? { ...h, id: created.id } : h),
+        }));
+      }
     } catch (err) {
-      // history is supplementary — don't block the main action on this failing
       console.error("Couldn't save history entry:", err);
     }
 
@@ -5283,10 +5300,53 @@ export default function App() {
             mobHistory.length === 0
               ? <p className="text-slate-400 text-sm">No history records yet. Actions you perform will appear here.</p>
               : mobHistory.map((h, i) => (
-                <div key={i} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-3">
-                  <div className="flex justify-between font-bold text-slate-800"><span>{h.action}</span><span className="text-slate-400 text-xs">{h.date}</span></div>
-                  {h.detail && <div className="text-sm text-slate-500 mt-1">{h.detail}</div>}
-                  {h.authorName && <div className="text-xs text-slate-400 mt-1">by {h.authorName}</div>}
+                <div key={h.id ?? i} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-3">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex justify-between font-bold text-slate-800"><span>{h.action}</span><span className="text-slate-400 text-xs">{h.date}</span></div>
+                      {h.detail && <div className="text-sm text-slate-500 mt-1">{h.detail}</div>}
+                      {h.authorName && <div className="text-xs text-slate-400 mt-1">by {h.authorName}</div>}
+                    </div>
+                    {canEdit && h.id && (
+                      <button onClick={async () => {
+                        if (!window.confirm(`Delete this ${h.action} record?`)) return;
+                        try {
+                          await api.deleteMobHistory(selectedMob.id, h.id);
+                          // Remove from local history
+                          setHistory(prev => ({
+                            ...prev,
+                            [selectedMob.id]: (prev[selectedMob.id] || []).filter(r => r.id !== h.id),
+                          }));
+                          // If it was a Treat, reverse the inventory deduction
+                          if (h.action === "Treat" && h.detail) {
+                            const treatMatch = h.detail.match(/Treated: ([^·]+)/);
+                            if (treatMatch) {
+                              const treatedNames = treatMatch[1].trim().split(", ");
+                              treatedNames.forEach(tName => {
+                                const invItem = inventory.find(it => it.title === tName.trim());
+                                if (invItem) {
+                                  const mobCount = selectedMob?.count || 0;
+                                  const doseMatch = (invItem.dosage || "").match(/^([\d.]+)/);
+                                  if (doseMatch && mobCount) {
+                                    const totalDose = Number(doseMatch[1]) * mobCount;
+                                    const newUsed = Math.max(0, (Number(invItem.quantityUsed) || 0) - totalDose);
+                                    api.updateTreatment(invItem.id, { quantityUsed: newUsed.toString() })
+                                      .then(() => setInventory(prev => prev.map(it => it.id === invItem.id ? { ...it, quantityUsed: newUsed.toString() } : it)))
+                                      .catch(() => {});
+                                  }
+                                }
+                              });
+                            }
+                          }
+                          showToast("History entry deleted");
+                        } catch (err) {
+                          showToast(err.message || "Couldn't delete history entry");
+                        }
+                      }} className="ml-2 mt-0.5 text-rose-400 hover:text-rose-600 flex-shrink-0" title="Delete this record">
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))
           )}

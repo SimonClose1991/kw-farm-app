@@ -109,8 +109,15 @@ router.post("/:id/transfer", requireAuth, requireEditor, async (req, res) => {
 });
 
 // --- History ---
-// GET /api/mobs/:id/history
-router.get("/:id/history", requireAuth, async (req, res) => {
+// DELETE /api/mobs/:id/history/:historyId
+router.delete("/:id/history/:historyId", requireAuth, requireEditor, async (req, res) => {
+  const [deleted] = await db
+    .delete(mobHistory)
+    .where(eq(mobHistory.id, Number(req.params.historyId)))
+    .returning();
+  if (!deleted) return res.status(404).json({ error: "History entry not found" });
+  res.json({ ok: true, deleted });
+});
   const all = await db.select().from(mobHistory).where(eq(mobHistory.mobId, Number(req.params.id)));
   res.json(all);
 });
