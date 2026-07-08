@@ -118,6 +118,9 @@ router.delete("/:id/history/:historyId", requireAuth, requireEditor, async (req,
   if (!deleted) return res.status(404).json({ error: "History entry not found" });
   res.json({ ok: true, deleted });
 });
+
+// GET /api/mobs/:id/history
+router.get("/:id/history", requireAuth, async (req, res) => {
   const all = await db.select().from(mobHistory).where(eq(mobHistory.mobId, Number(req.params.id)));
   res.json(all);
 });
