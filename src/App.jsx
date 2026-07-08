@@ -1035,6 +1035,10 @@ function GooglePaddockMap({
     if (!ref?.map || !window.google?.maps) return;
     const g = window.google.maps;
     const map = ref.map;
+    // Save current viewport BEFORE touching polygons so we can restore it after
+    // fittedBoundsRef.current is true once the initial fitBounds has run
+    const savedCenter = fittedBoundsRef.current ? map.getCenter() : null;
+    const savedZoom = fittedBoundsRef.current ? map.getZoom() : null;
     // Remove old polygons
     if (ref.polygons) {
       Object.values(ref.polygons).forEach(p => { try { p.setMap(null); } catch {} });
@@ -1070,7 +1074,11 @@ function GooglePaddockMap({
     });
     ref.bounds = newBounds;
     ref.paddockList = paddocks;
-    // Update map-level click handler's polygon reference is automatic via ref.polygons
+    // Restore viewport after polygon swap — prevents zoom jumping back to fitBounds view
+    if (savedCenter && savedZoom !== null) {
+      map.setCenter(savedCenter);
+      map.setZoom(savedZoom);
+    }
   }, [paddocks, mode]);
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
