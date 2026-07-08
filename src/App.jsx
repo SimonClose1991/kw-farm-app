@@ -2768,6 +2768,7 @@ export default function App() {
     if (!loggedInEmail) return;
     api.listRainfall(farmName).then(setRainfall).catch(() => {});
     api.listFieldNotes(farmName).then(setFieldNotes).catch(() => {}); // silent fail if table not ready
+  }, [farmName, loggedInEmail]);
 
   // Load inventory from ALL accessible farms — inventory is shared across farms
   React.useEffect(() => {
@@ -2775,7 +2776,6 @@ export default function App() {
     Promise.all(accessibleFarms.map(f => api.listTreatments(f).catch(() => [])))
       .then(results => {
         const merged = results.flat();
-        // Deduplicate by id, sort alphabetically by title
         const seen = new Set();
         const unique = merged.filter(i => { if (seen.has(i.id)) return false; seen.add(i.id); return true; });
         setInventory(unique.sort((a, b) => (a.title || "").localeCompare(b.title || "")));
@@ -2788,7 +2788,6 @@ export default function App() {
         setSprayInventory(unique.sort((a, b) => (a.title || "").localeCompare(b.title || "")));
       });
   }, [loggedInEmail]); // eslint-disable-line
-  }, [farmName, loggedInEmail]);
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState("");
 
