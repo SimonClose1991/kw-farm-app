@@ -2768,6 +2768,26 @@ export default function App() {
     if (!loggedInEmail) return;
     api.listRainfall(farmName).then(setRainfall).catch(() => {});
     api.listFieldNotes(farmName).then(setFieldNotes).catch(() => {}); // silent fail if table not ready
+
+  // Load inventory from ALL accessible farms — inventory is shared across farms
+  React.useEffect(() => {
+    if (!loggedInEmail) return;
+    Promise.all(accessibleFarms.map(f => api.listTreatments(f).catch(() => [])))
+      .then(results => {
+        const merged = results.flat();
+        // Deduplicate by id, sort alphabetically by title
+        const seen = new Set();
+        const unique = merged.filter(i => { if (seen.has(i.id)) return false; seen.add(i.id); return true; });
+        setInventory(unique.sort((a, b) => (a.title || "").localeCompare(b.title || "")));
+      });
+    Promise.all(accessibleFarms.map(f => api.listSprayInventory(f).catch(() => [])))
+      .then(results => {
+        const merged = results.flat();
+        const seen = new Set();
+        const unique = merged.filter(i => { if (seen.has(i.id)) return false; seen.add(i.id); return true; });
+        setSprayInventory(unique.sort((a, b) => (a.title || "").localeCompare(b.title || "")));
+      });
+  }, [loggedInEmail]); // eslint-disable-line
   }, [farmName, loggedInEmail]);
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState("");
@@ -2784,18 +2804,13 @@ export default function App() {
       api.listMobs(loadingFarm),
       api.listPaddocks(loadingFarm),
       api.listLandmarks(loadingFarm),
-      api.listTreatments(loadingFarm),
-      api.listSprayInventory(loadingFarm),
       api.listFoo(loadingFarm),
     ])
-      .then(([mobsRes, paddocksRes, landmarksRes, treatmentsRes, sprayRes, fooRes]) => {
+      .then(([mobsRes, paddocksRes, landmarksRes, fooRes]) => {
         if (cancelled) return;
-        // Only write to the farm we were loading for — never overwrites other farms
         setFarmsMobs((prev) => ({ ...prev, [loadingFarm]: mobsRes }));
         setFarmsPaddocks((prev) => ({ ...prev, [loadingFarm]: paddocksRes }));
         setFarmsLandmarks((prev) => ({ ...prev, [loadingFarm]: landmarksRes }));
-        setInventory(treatmentsRes);
-        setSprayInventory(sprayRes);
         setFooHistory((prev) => [...prev.filter((r) => r._farm !== loadingFarm), ...fooRes.map((r) => ({ ...r, _farm: loadingFarm }))]);
       })
       .catch((err) => {
@@ -2905,12 +2920,10 @@ export default function App() {
     if (syncing) return;
     setSyncing(true);
     try {
-      const [mobsRes, paddocksRes, landmarksRes, treatmentsRes, sprayRes, fooRes, rainfallRes] = await Promise.all([
+      const [mobsRes, paddocksRes, landmarksRes, fooRes, rainfallRes] = await Promise.all([
         api.listMobs(farmName),
         api.listPaddocks(farmName),
         api.listLandmarks(farmName),
-        api.listTreatments(farmName),
-        api.listSprayInventory(farmName),
         api.listFoo(farmName),
         api.listRainfall(farmName),
       ]);
@@ -2918,10 +2931,16 @@ export default function App() {
       setFarmsMobs((prev) => ({ ...prev, [loadingFarm]: mobsRes }));
       setFarmsPaddocks((prev) => ({ ...prev, [loadingFarm]: paddocksRes }));
       setFarmsLandmarks((prev) => ({ ...prev, [loadingFarm]: landmarksRes }));
-      setInventory(treatmentsRes);
-      setSprayInventory(sprayRes);
       setFooHistory((prev) => [...prev.filter((r) => r._farm !== loadingFarm), ...fooRes.map((r) => ({ ...r, _farm: loadingFarm }))]);
       setRainfall(rainfallRes);
+      // Refresh inventory from all farms
+      const [allTreatments, allSpray] = await Promise.all([
+        Promise.all(accessibleFarms.map(f => api.listTreatments(f).catch(() => []))).then(r => r.flat()),
+        Promise.all(accessibleFarms.map(f => api.listSprayInventory(f).catch(() => []))).then(r => r.flat()),
+      ]);
+      const dedup = (arr) => { const s = new Set(); return arr.filter(i => { if (s.has(i.id)) return false; s.add(i.id); return true; }).sort((a, b) => (a.title||"").localeCompare(b.title||"")); };
+      setInventory(dedup(allTreatments));
+      setSprayInventory(dedup(allSpray));
       setSyncCount(0);
       setPendingChanges(0);
       showToast("✓ All data refreshed from server");
@@ -3235,7 +3254,9 @@ export default function App() {
     { id: "outline",  label: "Outline Only",        icon: "⬜" },
   ];
 
-  const MapScreen = () => (
+  const MapScreen = React.memo(({
+    _paddocks, _mobs, _farmName, _mapMode, _landmarks, _openGates, _googleMapsKey,
+  }) => (
     <div className="pb-24 relative">
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
@@ -4254,27 +4275,27 @@ export default function App() {
               <div className="space-y-3 mb-4">
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Name</label>
-                  <input value={paddockEditForm.name ?? paddockDetail.name} onChange={(e) => setPaddockEditForm((f) => ({ ...f, name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  <input defaultValue={paddockEditForm.name ?? paddockDetail.name} id="pedit-name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Land use</label>
-                  <select value={paddockEditForm.landUse ?? paddockDetail.landUse} onChange={(e) => setPaddockEditForm((f) => ({ ...f, landUse: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                  <select defaultValue={paddockEditForm.landUse ?? paddockDetail.landUse} id="pedit-landuse" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
                     {LAND_USES.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Pasture/crop type</label>
-                  <select value={paddockEditForm.pasture ?? paddockDetail.pasture} onChange={(e) => setPaddockEditForm((f) => ({ ...f, pasture: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                  <select defaultValue={paddockEditForm.pasture ?? paddockDetail.pasture} id="pedit-pasture" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
                     {PASTURE_TYPES.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Total area (ha)</label>
-                  <input type="number" value={paddockEditForm.ha ?? paddockDetail.ha} onChange={(e) => setPaddockEditForm((f) => ({ ...f, ha: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  <input type="number" defaultValue={paddockEditForm.ha ?? paddockDetail.ha} id="pedit-ha" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Paddock colour</label>
-                  <select value={paddockEditForm.colour ?? paddockDetail.colour} onChange={(e) => setPaddockEditForm((f) => ({ ...f, colour: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                  <select defaultValue={paddockEditForm.colour ?? paddockDetail.colour} id="pedit-colour" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
                     {PADDOCK_COLOURS.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
@@ -4283,11 +4304,11 @@ export default function App() {
                   <button
                     onClick={async () => {
                       const fields = {
-                        name: paddockEditForm.name ?? paddockDetail.name,
-                        landUse: paddockEditForm.landUse ?? paddockDetail.landUse,
-                        pasture: paddockEditForm.pasture ?? paddockDetail.pasture,
-                        ha: paddockEditForm.ha !== undefined ? Number(paddockEditForm.ha) : paddockDetail.ha,
-                        colour: paddockEditForm.colour ?? paddockDetail.colour,
+                        name: document.getElementById("pedit-name")?.value ?? paddockDetail.name,
+                        landUse: document.getElementById("pedit-landuse")?.value ?? paddockDetail.landUse,
+                        pasture: document.getElementById("pedit-pasture")?.value ?? paddockDetail.pasture,
+                        ha: document.getElementById("pedit-ha")?.value !== undefined ? Number(document.getElementById("pedit-ha").value) : paddockDetail.ha,
+                        colour: document.getElementById("pedit-colour")?.value ?? paddockDetail.colour,
                       };
                       try {
                         const updated = await api.updatePaddock(paddockDetail.id, fields);
@@ -4616,7 +4637,7 @@ export default function App() {
               const fields = { ...sprayForm, location: sprayFormPaddock?.name || sprayForm.location || "" };
               try {
                 const created = await api.addSprayInventory(farmName, fields);
-                setSprayInventory((prev) => [...prev, created]);
+                setSprayInventory((prev) => [...prev, created].sort((a,b) => (a.title||'').localeCompare(b.title||'')));
                 setShowSprayForm(false);
                 setSprayForm({});
                 markChanged();
@@ -4714,7 +4735,7 @@ export default function App() {
               };
               try {
                 const created = await api.addSprayInventory(farmName, fields);
-                setSprayInventory((prev) => [...prev, created]);
+                setSprayInventory((prev) => [...prev, created].sort((a,b) => (a.title||'').localeCompare(b.title||'')));
                 setShowBulkSpray(false);
                 setSprayForm({});
                 setSpraySelectedPaddocks([]);
@@ -4732,9 +4753,9 @@ export default function App() {
         </Modal>
       )}
     </div>
-  );
+  ));
 
-  // ── Workflow Screen — embeds the workflow HTML via iframe ─────────────────
+  // ── Workflow Screen ─────────────────────────────────────────────────────────
   // Passes the JWT token to the iframe via postMessage so it can call our API
   // [extracted to top-level component]
 
@@ -5599,10 +5620,10 @@ export default function App() {
                 try {
                   if (isTreatment) {
                     const created = await api.addTreatment(farmName, saveForm);
-                    setInventory((prev) => [...prev, created]);
+                    setInventory((prev) => [...prev, created].sort((a,b) => (a.title||'').localeCompare(b.title||'')));
                   } else {
                     const created = await api.addSprayInventory(farmName, saveForm);
-                    setSprayInventory((prev) => [...prev, created]);
+                    setSprayInventory((prev) => [...prev, created].sort((a,b) => (a.title||'').localeCompare(b.title||'')));
                   }
                   setInventoryView(null);
                   markChanged();
@@ -6616,7 +6637,11 @@ export default function App() {
         paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
         currentUser={currentUser} homeFarm={homeFarm} setHomeFarm={setHomeFarm}
       />}
-      {tab === "map" && <MapScreen />}
+      {tab === "map" && <MapScreen
+        _paddocks={paddocks} _mobs={mobs} _farmName={farmName}
+        _mapMode={mapMode} _landmarks={landmarks} _openGates={openGates}
+        _googleMapsKey={googleMapsKey}
+      />}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
       {tab === "mobactivity" && MobActivityScreen()}
