@@ -3507,7 +3507,7 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none", position: mapMode === "Livestock" ? "relative" : "absolute", width: "100%" }} className="h-[78vh]">
+      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none" }} className="h-[78vh] relative">
 
           {googleMapsKey && !mapLoadError ? (
             <>
@@ -3673,8 +3673,8 @@ export default function App() {
           </div>
       </div>
 
-      {/* Paddocks map — always mounted so GooglePaddockMap refs (fittedBoundsRef etc) never reset */}
-      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none", position: mapMode === "Paddocks" ? "relative" : "absolute", width: "100%" }} className="h-[78vh]">
+      {/* Paddocks map — always mounted so refs never reset */}
+      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none" }} className="h-[78vh] relative">
         {dataLoading && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm z-10 bg-white">Loading paddocks...</div>}
         {dataError && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-rose-500 text-sm p-4 text-center z-10 bg-white">{dataError}</div>}
         {googleMapsKey && !mapLoadError ? (
@@ -3700,6 +3700,9 @@ export default function App() {
             onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
             instanceRef={padMapRef}
           />
+        ) : (
+          <PaddockMap
+            paddocks={paddocks}
             center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
             onSelect={setPaddockDetail}
             landmarks={landmarks}
@@ -3812,7 +3815,7 @@ export default function App() {
       </div>
 
       {/* Notes map — always mounted so refs never reset */}
-      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none", position: mapMode === "Notes" ? "relative" : "absolute", width: "100%" }} className="h-[78vh]">
+      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none" }} className="h-[78vh] relative">
         {(() => {
           const openNotes = fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng);
           const urgentCount = openNotes.filter(n => n.priority === "urgent").length;
