@@ -548,18 +548,6 @@ function GooglePaddockMap({
   React.useEffect(() => {
     let cancelled = false;
     let timeoutId;
-    // iOS Safari: pinch zoom causes browser chrome to hide/show, triggering a window resize
-    // that resets the Google Maps viewport. Debounce the resize event and retrigger Maps.
-    let resizeTimer = null;
-    const handleResize = () => {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        if (mapInstanceRef.current?.map && window.google?.maps) {
-          window.google.maps.event.trigger(mapInstanceRef.current.map, "resize");
-        }
-      }, 200);
-    };
-    window.addEventListener("resize", handleResize, { passive: true });
     const render = () => {
       if (cancelled || !mapDivRef.current || !window.google?.maps) return;
       const g = window.google.maps;
@@ -885,7 +873,6 @@ function GooglePaddockMap({
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
-      window.removeEventListener("resize", handleResize);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
         clearAllLabels();
@@ -2659,7 +2646,9 @@ export default function App() {
   const [homeFarm, setHomeFarm] = useState(null); // which farm dashboard is open on home screen
   const [dragMobId, setDragMobId] = useState(null);
   const [draggingMob, setDraggingMob] = useState(null);
-  const livMapRef = React.useRef(null); // exposes GooglePaddockMap internals for drag-to-paddock
+  const livMapRef = React.useRef(null); // livestock map
+  const padMapRef = React.useRef(null); // paddocks map
+  const notesMapRef = React.useRef(null); // notes map
   const paddocksRef = React.useRef([]); // stable ref for use in effects declared before paddocks state
   const [dragOverPaddock, setDragOverPaddock] = useState(null);
   const [showPaddockPicker, setShowPaddockPicker] = useState(false); // bottom-sheet paddock picker in mob details
@@ -3334,7 +3323,17 @@ export default function App() {
           {["Livestock", "Paddocks", "Notes"].map((m) => (
             <button
               key={m}
-              onClick={() => setMapMode(m)}
+              onClick={() => {
+                setMapMode(m);
+                // After visibility change, tell Google Maps to recalculate its dimensions
+                setTimeout(() => {
+                  const g = window.google?.maps;
+                  if (!g?.event) return;
+                  [livMapRef, padMapRef, notesMapRef].forEach(ref => {
+                    if (ref.current?.map) g.event.trigger(ref.current.map, "resize");
+                  });
+                }, 50);
+              }}
               className={`flex-1 py-1.5 text-sm rounded-full font-semibold transition-colors ${mapMode === m ? "bg-amber-500 text-white shadow-sm" : "text-slate-400"}`}
             >
               {m}
@@ -3508,8 +3507,7 @@ export default function App() {
         </div>
       )}
 
-      {mapMode === "Livestock" && (
-        <div className="h-[78vh] relative">
+      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none", position: mapMode === "Livestock" ? "relative" : "absolute", width: "100%" }} className="h-[78vh]">
 
           {googleMapsKey && !mapLoadError ? (
             <>
@@ -3673,11 +3671,10 @@ export default function App() {
               {locating ? "…" : "◎"}
             </button>
           </div>
-        </div>
-      )}
+      </div>
 
       {/* Paddocks map — always mounted so GooglePaddockMap refs (fittedBoundsRef etc) never reset */}
-      <div style={{ display: mapMode === "Paddocks" ? "block" : "none" }} className="h-[78vh] relative">
+      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none", position: mapMode === "Paddocks" ? "relative" : "absolute", width: "100%" }} className="h-[78vh]">
         {dataLoading && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm z-10 bg-white">Loading paddocks...</div>}
         {dataError && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-rose-500 text-sm p-4 text-center z-10 bg-white">{dataError}</div>}
         {googleMapsKey && !mapLoadError ? (
@@ -3701,10 +3698,8 @@ export default function App() {
             showNotesOnMap={showNotesOnMap}
             onSelectNote={(note) => setFieldNoteDetail(note)}
             onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
+            instanceRef={padMapRef}
           />
-        ) : (
-          <PaddockMap
-            paddocks={paddocks}
             center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
             onSelect={setPaddockDetail}
             landmarks={landmarks}
@@ -3817,7 +3812,7 @@ export default function App() {
       </div>
 
       {/* Notes map — always mounted so refs never reset */}
-      <div style={{ display: mapMode === "Notes" ? "block" : "none" }} className="h-[78vh] relative">
+      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none", position: mapMode === "Notes" ? "relative" : "absolute", width: "100%" }} className="h-[78vh]">
         {(() => {
           const openNotes = fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng);
           const urgentCount = openNotes.filter(n => n.priority === "urgent").length;
@@ -3851,6 +3846,7 @@ export default function App() {
                 showNotesOnMap={true}
                 onSelectNote={(note) => setFieldNoteDetail(note)}
                 onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
+                instanceRef={notesMapRef}
               />
             ) : (
               <div className="h-full flex items-center justify-center text-slate-400 text-sm">Map unavailable</div>
