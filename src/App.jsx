@@ -638,7 +638,7 @@ function GooglePaddockMap({
         trackLabel(lm); // register in persistent Set
       });
 
-      // Zoom-aware label update — debounced 150ms so pinch zoom doesn't trigger 20+ redraws
+      // Zoom-aware label update — debounced 500ms so pinch zoom fully settles before any redraw
       let zoomDebounceTimer = null;
       map.addListener("zoom_changed", () => {
         if (zoomDebounceTimer) clearTimeout(zoomDebounceTimer);
@@ -647,9 +647,12 @@ function GooglePaddockMap({
           if (!z) return;
           // Determine zoom tier — only redraw labels when crossing a tier boundary
           const tier = z < 12 ? 0 : z < 14 ? 1 : 2;
-          if (tier === lastZoomTierRef.current) return; // same tier — labels are still correct, skip redraw
+          if (tier === lastZoomTierRef.current) return; // same tier — labels correct, skip redraw
           lastZoomTierRef.current = tier;
           const ref = mapInstanceRef.current;
+          if (!ref?.map) return;
+          // Double-check zoom hasn't changed again while we were waiting
+          if (ref.map.getZoom() !== z) return;
           const freshInsightMode = ref?.currentInsightMode || insightMode;
           const freshPaddockStats = ref?.currentPaddockStats || paddockStats;
           const freshCentroids = ref?.centroids || centroids;
@@ -3653,27 +3656,21 @@ export default function App() {
         </div>
       )}
 
-      {mapMode === "Paddocks" && (() => {
-        if (dataLoading) return (
-          <div className="h-[78vh] flex items-center justify-center text-slate-400 text-sm">Loading paddocks...</div>
-        );
-        if (dataError) return (
-          <div className="h-[78vh] flex items-center justify-center text-rose-500 text-sm p-4 text-center">{dataError}</div>
-        );
+      {/* Paddocks map — computed paddockStats outside IIFE so GooglePaddockMap has stable identity */}
+      {(() => {
         const paddockStats = {};
         paddocks.forEach((p) => {
           const paddockMobs = mobs.filter((m) => m.paddock === p.name);
           const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
-          // Only calculate DSE/ha for grazing land — non-grazing shows 0
           const isGrazing = !NON_GRAZING_LAND_USES.has(p.landUse);
           const dsePerHa = (isGrazing && p.ha) ? dseTotal / Number(p.ha) : 0;
           const lastFooEntry = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
           const daysSinceGrazed = paddockMobs.length > 0 ? Math.min(...paddockMobs.map((m) => m.daysInPaddock ?? 999)) : null;
           paddockStats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing };
         });
-
-        return (
-          <div className="h-[78vh] relative">
+        return mapMode === "Paddocks" ? (
+          dataLoading ? <div className="h-[78vh] flex items-center justify-center text-slate-400 text-sm">Loading paddocks...</div> :
+          dataError ? <div className="h-[78vh] flex items-center justify-center text-rose-500 text-sm p-4 text-center">{dataError}</div> :
             {googleMapsKey && !mapLoadError ? (
               <GooglePaddockMap
                 paddocks={paddocks}
@@ -3811,7 +3808,7 @@ export default function App() {
               e.target.value = "";
             }} />
           </div>
-        );
+        ) : null;
       })()}
 
       {/* ── Notes Map Mode ── */}
