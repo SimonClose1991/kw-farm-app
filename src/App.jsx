@@ -805,7 +805,7 @@ function GooglePaddockMap({
         fittedBoundsCenterRef.current = centerKey;
       }
       if (!fittedBoundsRef.current) {
-        fittedBoundsRef.current = true; // set immediately so subsequent paddock-change re-renders skip this
+        fittedBoundsRef.current = true;
         const idleListener = map.addListener("idle", () => {
           g.event.removeListener(idleListener);
           const currentBounds = mapInstanceRef.current?.bounds;
@@ -871,7 +871,7 @@ function GooglePaddockMap({
         mapInstanceRef.current = null;
       }
     };
-  }, [paddocks, center, apiKey, mode, drawMode, userLocation, landmarkPinMode]); // mobs, landmarks, openGateIds, insightMode, drawPoints handled by separate effects
+  }, [center, apiKey, mode, drawMode, userLocation, landmarkPinMode]); // paddocks handled by insight effect; mobs/landmarks/openGateIds/insightMode/drawPoints by separate effects
 
   // Separate effect: update gate open/close without rebuilding map
   // Just updates polygon stroke colour and gate marker symbols
@@ -1028,7 +1028,50 @@ function GooglePaddockMap({
   }, [fieldNotes, showNotesOnMap, mode]);
 
 
-  // Separate effect: update polygon fill colors AND labels when insight mode OR paddocks change
+  // Effect: create polygons when paddocks load/change, without rebuilding the whole map
+  // This replaces paddocks being in the main effect deps — prevents zoom reset on rename
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.map || !window.google?.maps) return;
+    const g = window.google.maps;
+    const map = ref.map;
+    // Remove old polygons
+    if (ref.polygons) {
+      Object.values(ref.polygons).forEach(p => { try { p.setMap(null); } catch {} });
+    }
+    ref.polygons = {};
+    ref.centroids = ref.centroids || {};
+    const newBounds = new g.LatLngBounds();
+    paddocks.forEach((p, i) => {
+      const latlngs = geometryToLatLngs(p.geojson) || fallbackPolygon(ref.center, i, Number(p.ha) || 10);
+      const path = latlngs.map(([lat, lng]) => ({ lat, lng }));
+      path.forEach(pt => newBounds.extend(pt));
+      const centroid = path.reduce((acc, pt) => ({ lat: acc.lat + pt.lat / path.length, lng: acc.lng + pt.lng / path.length }), { lat: 0, lng: 0 });
+      ref.centroids[p.id] = centroid;
+      ref.centroids[p.name] = centroid;
+      const isGateOpen = (ref.landmarks || []).some(l => l.type === "Gate" && (ref.currentOpenGateIds || []).includes(String(l.id)) && (l.paddockA === p.name || l.paddockB === p.name));
+      const fillColour = mode === "paddocks" ? (colourForPaddock(p) || "#999999") : (mode === "notes" ? "#e2e8f0" : "#38bdf8");
+      const fillOpacity = mode === "paddocks" ? 0.45 : (mode === "notes" ? 0.2 : 0.15);
+      const poly = new g.Polygon({
+        paths: path,
+        strokeColor: mode === "notes" ? "#94a3b8" : (isGateOpen ? "#eab308" : "#ffffff"),
+        strokeWeight: mode === "notes" ? 1 : (isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5)),
+        fillColor: fillColour,
+        fillOpacity,
+        map,
+      });
+      if (!drawMode) {
+        poly.addListener("click", (e) => {
+          if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), p.name); }
+          else { onSelect(p); }
+        });
+      }
+      ref.polygons[p.id] = poly;
+    });
+    ref.bounds = newBounds;
+    ref.paddockList = paddocks;
+    // Update map-level click handler's polygon reference is automatic via ref.polygons
+  }, [paddocks, mode]);
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
     if (!ref?.polygons || !window.google?.maps) return;
@@ -4941,7 +4984,6 @@ export default function App() {
 
     // ── Treatment multi-picker ─────────────────────────────────────────────────
     if (field.type === "treatment_picker") {
-      const inventory = treatmentInventory || [];
       const selected = formValues["_selectedTreatments"] || [];
       const toggle = (item) => {
         const already = selected.find(x => x.id === item.id);
@@ -6574,7 +6616,7 @@ export default function App() {
         paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
         currentUser={currentUser} homeFarm={homeFarm} setHomeFarm={setHomeFarm}
       />}
-      {tab === "map" && MapScreen()}
+      {tab === "map" && <MapScreen />}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
       {tab === "mobactivity" && MobActivityScreen()}
