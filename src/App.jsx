@@ -548,6 +548,18 @@ function GooglePaddockMap({
   React.useEffect(() => {
     let cancelled = false;
     let timeoutId;
+    // iOS Safari: pinch zoom causes browser chrome to hide/show, triggering a window resize
+    // that resets the Google Maps viewport. Debounce the resize event and retrigger Maps.
+    let resizeTimer = null;
+    const handleResize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (mapInstanceRef.current?.map && window.google?.maps) {
+          window.google.maps.event.trigger(mapInstanceRef.current.map, "resize");
+        }
+      }, 200);
+    };
+    window.addEventListener("resize", handleResize, { passive: true });
     const render = () => {
       if (cancelled || !mapDivRef.current || !window.google?.maps) return;
       const g = window.google.maps;
@@ -784,17 +796,6 @@ function GooglePaddockMap({
         }
       }
 
-      // ── User location blue dot ──
-      if (userLocation) {
-        const dot = new g.Marker({
-          position: { lat: userLocation.lat, lng: userLocation.lng },
-          map,
-          icon: { path: g.SymbolPath.CIRCLE, scale: 8, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 },
-          zIndex: 999,
-        });
-        overlays.push(dot);
-      }
-
       // Note: we always rebuild when paddocks change so polygons stay in sync.
       // setCenter is only called when the farm center changes (new farm).
       // Always center on the known farm coordinates — never rely on fitBounds
@@ -874,13 +875,14 @@ function GooglePaddockMap({
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
+      window.removeEventListener("resize", handleResize);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.overlays?.forEach((o) => { try { o.setMap(null); } catch {} });
         clearAllLabels();
         mapInstanceRef.current = null;
       }
     };
-  }, [center, apiKey, mode, drawMode, userLocation, landmarkPinMode]); // paddocks handled by insight effect; mobs/landmarks/openGateIds/insightMode/drawPoints by separate effects
+  }, [center, apiKey, mode, drawMode, landmarkPinMode]); // userLocation handled by separate effect; paddocks/mobs/landmarks handled by their own effects
 
   // Separate effect: update gate open/close without rebuilding map
   // Just updates polygon stroke colour and gate marker symbols
@@ -995,6 +997,22 @@ function GooglePaddockMap({
     // Pass current openGateIds directly so renderLandmarks doesn't use stale closure
     if (ref.renderLandmarks) ref.renderLandmarks(ref.map.getZoom(), openGateIds);
   }, [landmarks, openGateIds]);
+
+  // ── User location blue dot — separate effect so GPS updates don't rebuild the map ──
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.map || !window.google?.maps) return;
+    const g = window.google.maps;
+    // Remove old dot
+    if (ref.userLocationDot) { try { ref.userLocationDot.setMap(null); } catch {} ref.userLocationDot = null; }
+    if (!userLocation) return;
+    ref.userLocationDot = new g.Marker({
+      position: { lat: userLocation.lat, lng: userLocation.lng },
+      map: ref.map,
+      icon: { path: g.SymbolPath.CIRCLE, scale: 8, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 },
+      zIndex: 999,
+    });
+  }, [userLocation]);
 
   // ── Field note pins effect ─────────────────────────────────────────────────
   React.useEffect(() => {
