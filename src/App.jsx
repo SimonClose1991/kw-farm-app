@@ -645,6 +645,8 @@ function GooglePaddockMap({
         zoomDebounceTimer = setTimeout(() => {
           const z = map.getZoom();
           if (!z) return;
+          // Skip if map container is hidden (display:none) — avoids iOS viewport reset
+          if (mapDivRef.current && mapDivRef.current.closest('[style*="display: none"]')) return;
           // Determine zoom tier — only redraw labels when crossing a tier boundary
           const tier = z < 12 ? 0 : z < 14 ? 1 : 2;
           if (tier === lastZoomTierRef.current) return; // same tier — labels correct, skip redraw
@@ -815,8 +817,13 @@ function GooglePaddockMap({
       }
       if (!fittedBoundsRef.current) {
         fittedBoundsRef.current = true;
+        let userInteracted = false;
+        const interactionListener = map.addListener("zoom_changed", () => { userInteracted = true; });
         // Wait for map div to be fully painted before fitting bounds
         setTimeout(() => {
+          g.event.removeListener(interactionListener);
+          // If user already zoomed/panned, don't override their viewport
+          if (userInteracted) return;
           const currentBounds = mapInstanceRef.current?.bounds;
           if (!currentBounds) {
             map.setCenter({ lat: cLat, lng: cLng });
@@ -3312,7 +3319,7 @@ export default function App() {
   ];
 
   const MapScreen = React.memo(({
-    _paddocks, _mobs, _farmName, _mapMode, _landmarks, _openGates, _googleMapsKey, _paddockStats,
+    _paddocks, _mobs, _farmName, _mapMode, _landmarks, _openGates, _googleMapsKey,
   }) => (
     <div className="pb-24 relative">
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
@@ -6718,7 +6725,7 @@ export default function App() {
       {tab === "map" && <MapScreen
         _paddocks={paddocks} _mobs={mobs} _farmName={farmName}
         _mapMode={mapMode} _landmarks={landmarks} _openGates={openGates}
-        _googleMapsKey={googleMapsKey} _paddockStats={paddockStats}
+        _googleMapsKey={googleMapsKey}
       />}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
