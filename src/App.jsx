@@ -2620,7 +2620,7 @@ export default function App() {
   const [farmsMobs, setFarmsMobs] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const [farmName, setFarmName] = useState("Arundale");
   const [farmsPaddocks, setFarmsPaddocks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
-  const paddocks = farmsPaddocks[farmName] || [];
+  const paddocks = React.useMemo(() => farmsPaddocks[farmName] || [], [farmsPaddocks, farmName]);
   const setPaddocks = (updater) => {
     const targetFarm = farmName;
     setFarmsPaddocks((prev) => ({
@@ -2682,7 +2682,7 @@ export default function App() {
   const [paddockEditMode, setPaddockEditMode] = useState(false);
   const [paddockEditForm, setPaddockEditForm] = useState({});
   const [confirmPaddockDel, setConfirmPaddockDel] = useState(false); // two-step paddock delete
-  const mobs = farmsMobs[farmName] || [];
+  const mobs = React.useMemo(() => farmsMobs[farmName] || [], [farmsMobs, farmName]);
   // setMobs captures farmName at the moment it's created — so async
   // callbacks resolving after a farm switch still write to the right farm
   const setMobs = (updater) => {
@@ -3222,18 +3222,17 @@ export default function App() {
   );
 
   // ── All-farms aggregate totals ──
-  const allMobs = accessibleFarms.flatMap(f => farmsMobs[f] || []);
-  const totalCattle = allMobs.filter((m) => m.species === "Cattle" || /steer|cow|calf|calves|bull|heifer/i.test(m.type || "")).reduce((s, m) => s + m.count, 0);
-  const totalSheep = allMobs.filter((m) => m.species === "Sheep" || /ewe|sheep|merino|lamb|wether|ram/i.test(m.type || "")).reduce((s, m) => s + m.count, 0);
-  const totalDSE = allMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
-  // Per-farm summaries for farm tiles — only accessible farms
-  const farmSummaries = accessibleFarms.map((name) => {
+  const allMobs = React.useMemo(() => accessibleFarms.flatMap(f => farmsMobs[f] || []), [accessibleFarms, farmsMobs]);
+  const totalCattle = React.useMemo(() => allMobs.filter((m) => m.species === "Cattle" || /steer|cow|calf|calves|bull|heifer/i.test(m.type || "")).reduce((s, m) => s + m.count, 0), [allMobs]);
+  const totalSheep = React.useMemo(() => allMobs.filter((m) => m.species === "Sheep" || /ewe|sheep|merino|lamb|wether|ram/i.test(m.type || "")).reduce((s, m) => s + m.count, 0), [allMobs]);
+  const totalDSE = React.useMemo(() => allMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0), [allMobs]);
+  const farmSummaries = React.useMemo(() => accessibleFarms.map((name) => {
     const farmMobs = farmsMobs[name] || [];
     const cattle = farmMobs.filter((m) => m.species === "Cattle").reduce((s, m) => s + m.count, 0);
     const sheep = farmMobs.filter((m) => m.species === "Sheep").reduce((s, m) => s + m.count, 0);
     const dse = farmMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
     return { name, cattle, sheep, dse };
-  });
+  }), [accessibleFarms, farmsMobs]);
 
   // [extracted to top-level component]
   const PIN_DATA = mobs.map((m, i) => {
@@ -4275,27 +4274,27 @@ export default function App() {
               <div className="space-y-3 mb-4">
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Name</label>
-                  <input defaultValue={paddockEditForm.name ?? paddockDetail.name} id="pedit-name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  <input value={paddockEditForm.name ?? paddockDetail.name} onChange={(e) => setPaddockEditForm((f) => ({ ...f, name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Land use</label>
-                  <select defaultValue={paddockEditForm.landUse ?? paddockDetail.landUse} id="pedit-landuse" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                  <select value={paddockEditForm.landUse ?? paddockDetail.landUse} onChange={(e) => setPaddockEditForm((f) => ({ ...f, landUse: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
                     {LAND_USES.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Pasture/crop type</label>
-                  <select defaultValue={paddockEditForm.pasture ?? paddockDetail.pasture} id="pedit-pasture" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                  <select value={paddockEditForm.pasture ?? paddockDetail.pasture} onChange={(e) => setPaddockEditForm((f) => ({ ...f, pasture: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
                     {PASTURE_TYPES.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Total area (ha)</label>
-                  <input type="number" defaultValue={paddockEditForm.ha ?? paddockDetail.ha} id="pedit-ha" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  <input type="number" value={paddockEditForm.ha ?? paddockDetail.ha} onChange={(e) => setPaddockEditForm((f) => ({ ...f, ha: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-600 block mb-1">Paddock colour</label>
-                  <select defaultValue={paddockEditForm.colour ?? paddockDetail.colour} id="pedit-colour" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                  <select value={paddockEditForm.colour ?? paddockDetail.colour} onChange={(e) => setPaddockEditForm((f) => ({ ...f, colour: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
                     {PADDOCK_COLOURS.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
@@ -4304,11 +4303,11 @@ export default function App() {
                   <button
                     onClick={async () => {
                       const fields = {
-                        name: document.getElementById("pedit-name")?.value ?? paddockDetail.name,
-                        landUse: document.getElementById("pedit-landuse")?.value ?? paddockDetail.landUse,
-                        pasture: document.getElementById("pedit-pasture")?.value ?? paddockDetail.pasture,
-                        ha: document.getElementById("pedit-ha")?.value !== undefined ? Number(document.getElementById("pedit-ha").value) : paddockDetail.ha,
-                        colour: document.getElementById("pedit-colour")?.value ?? paddockDetail.colour,
+                        name: paddockEditForm.name ?? paddockDetail.name,
+                        landUse: paddockEditForm.landUse ?? paddockDetail.landUse,
+                        pasture: paddockEditForm.pasture ?? paddockDetail.pasture,
+                        ha: paddockEditForm.ha !== undefined ? Number(paddockEditForm.ha) : paddockDetail.ha,
+                        colour: paddockEditForm.colour ?? paddockDetail.colour,
                       };
                       try {
                         const updated = await api.updatePaddock(paddockDetail.id, fields);
