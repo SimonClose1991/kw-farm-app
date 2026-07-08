@@ -3671,6 +3671,7 @@ export default function App() {
         return mapMode === "Paddocks" ? (
           dataLoading ? <div className="h-[78vh] flex items-center justify-center text-slate-400 text-sm">Loading paddocks...</div> :
           dataError ? <div className="h-[78vh] flex items-center justify-center text-rose-500 text-sm p-4 text-center">{dataError}</div> :
+          <div className="h-[78vh] relative">
             {googleMapsKey && !mapLoadError ? (
               <GooglePaddockMap
                 paddocks={paddocks}
