@@ -3235,7 +3235,12 @@ export default function App() {
     { id: "outline",  label: "Outline Only",        icon: "⬜" },
   ];
 
-  const MapScreen = () => (
+  const MapScreen = React.memo(({
+    paddocks: _p, mobs: _m, farmName: _fn, mapMode: _mm, landmarks: _lm,
+    openGates: _og, insightMode: _im, paddockStats: _ps, userLocation: _ul,
+    googleMapsKey: _gk, fieldNotes: _fn2, showNotesOnMap: _snm,
+    fieldNoteForm: _fnf, canEdit: _ce,
+  }) => (
     <div className="pb-24 relative">
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
@@ -4732,9 +4737,9 @@ export default function App() {
         </Modal>
       )}
     </div>
-  );
+  ));
 
-  // ── Workflow Screen — embeds the workflow HTML via iframe ─────────────────
+  // ── Workflow Screen ─────────────────────────────────────────────────────────
   // Passes the JWT token to the iframe via postMessage so it can call our API
   // [extracted to top-level component]
 
@@ -6616,7 +6621,16 @@ export default function App() {
         paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
         currentUser={currentUser} homeFarm={homeFarm} setHomeFarm={setHomeFarm}
       />}
-      {tab === "map" && <MapScreen />}
+      {tab === "map" && <MapScreen
+        paddocks={paddocks} mobs={mobs} farmName={farmName}
+        mapMode={mapMode} setMapMode={setMapMode}
+        landmarks={landmarks} openGates={openGates}
+        insightMode={insightMode} paddockStats={paddockStats}
+        userLocation={userLocation} googleMapsKey={googleMapsKey}
+        fieldNotes={fieldNotes} showNotesOnMap={showNotesOnMap}
+        fieldNoteForm={fieldNoteForm}
+        canEdit={canEdit}
+      />}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
       {tab === "mobactivity" && MobActivityScreen()}
