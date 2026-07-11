@@ -807,31 +807,31 @@ function GooglePaddockMap({
         fittedBoundsRef.current = true;
         let userInteracted = false;
         const interactionListener = map.addListener("zoom_changed", () => { userInteracted = true; });
-        // Wait for map div to be fully painted before fitting bounds
         setTimeout(() => {
           g.event.removeListener(interactionListener);
-          // If user already zoomed/panned, don't override their viewport
           if (userInteracted) return;
+          // Use current bounds from ref — may have been updated by polygon effect
           const currentBounds = mapInstanceRef.current?.bounds;
-          if (!currentBounds) {
-            map.setCenter({ lat: cLat, lng: cLng });
-            map.setZoom(13);
-            return;
+          if (currentBounds) {
+            try {
+              const ne = currentBounds.getNorthEast();
+              const sw = currentBounds.getSouthWest();
+              if (ne.lat() !== sw.lat()) {
+                const midLat = (ne.lat() + sw.lat()) / 2;
+                const midLng = (ne.lng() + sw.lng()) / 2;
+                const dist = Math.hypot(midLat - cLat, midLng - cLng);
+                // Sanity check — bounds midpoint must be within 0.5° of farm center
+                if (dist < 0.5) {
+                  map.fitBounds(currentBounds, 40);
+                  return;
+                }
+              }
+            } catch {}
           }
-          try {
-            const ne = currentBounds.getNorthEast();
-            const sw = currentBounds.getSouthWest();
-            const midLat = (ne.lat() + sw.lat()) / 2;
-            const midLng = (ne.lng() + sw.lng()) / 2;
-            const dist = Math.hypot(midLat - cLat, midLng - cLng);
-            if (dist < 0.5 && ne.lat() !== sw.lat()) {
-              map.fitBounds(currentBounds, 40);
-              return;
-            }
-          } catch {}
+          // No valid bounds yet — just center on the farm, don't zoom out to world
           map.setCenter({ lat: cLat, lng: cLng });
-          map.setZoom(13);
-        }, 300);
+          map.setZoom(14);
+        }, 500);
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
@@ -879,7 +879,7 @@ function GooglePaddockMap({
         mapInstanceRef.current = null;
       }
     };
-  }, [center, apiKey, mode, drawMode, landmarkPinMode]); // userLocation handled by separate effect; paddocks/mobs/landmarks handled by their own effects
+  }, [center, apiKey, mode, landmarkPinMode]); // drawMode/paddocks/mobs/landmarks handled by separate effects
 
   // Separate effect: update gate open/close without rebuilding map
   // Just updates polygon stroke colour and gate marker symbols
@@ -3507,7 +3507,7 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none" }} className="h-[78vh] relative">
+      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none" }} className="h-[78vh] relative overflow-hidden">
 
           {googleMapsKey && !mapLoadError ? (
             <>
@@ -3673,49 +3673,32 @@ export default function App() {
           </div>
       </div>
 
-      {/* Paddocks map — always mounted so refs never reset */}
-      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none" }} className="h-[78vh] relative">
+      {/* Paddocks map — always mounted, structure mirrors livestock map */}
+      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none" }} className="h-[78vh] relative overflow-hidden">
         {dataLoading && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm z-10 bg-white">Loading paddocks...</div>}
         {dataError && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-rose-500 text-sm p-4 text-center z-10 bg-white">{dataError}</div>}
-        {googleMapsKey && !mapLoadError ? (
-          <GooglePaddockMap
-            paddocks={paddocks}
-            center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-            onSelect={setPaddockDetail}
-            apiKey={googleMapsKey}
-            onError={() => setMapLoadError(true)}
-            landmarks={landmarks}
-            onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
-            insightMode={insightMode}
-            paddockStats={paddockStats}
-            drawMode={mapDrawMode}
-            drawPoints={drawPoints}
-            onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
-            userLocation={userLocation}
-            openGateIds={openGates}
-            onMapCentreChange={(lat, lng) => setCurrentMapCentre({ lat, lng })}
-            fieldNotes={fieldNotes}
-            showNotesOnMap={showNotesOnMap}
-            onSelectNote={(note) => setFieldNoteDetail(note)}
-            onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
-            instanceRef={padMapRef}
-          />
-        ) : (
-          <PaddockMap
-            paddocks={paddocks}
-            center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-            onSelect={setPaddockDetail}
-            landmarks={landmarks}
-            onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
-            insightMode={insightMode}
-            paddockStats={paddockStats}
-            drawMode={mapDrawMode}
-            drawPoints={drawPoints}
-            onDrawPoint={(lat, lng, x, y) => setDrawPoints((prev) => [...prev, { lat, lng, x, y }])}
-            userLocation={userLocation}
-            openGateIds={openGates}
-          />
-        )}
+        <GooglePaddockMap
+          paddocks={paddocks}
+          center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
+          onSelect={setPaddockDetail}
+          apiKey={googleMapsKey}
+          onError={() => setMapLoadError(true)}
+          landmarks={landmarks}
+          onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
+          insightMode={insightMode}
+          paddockStats={paddockStats}
+          drawMode={mapDrawMode}
+          drawPoints={drawPoints}
+          onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
+          userLocation={userLocation}
+          openGateIds={openGates}
+          onMapCentreChange={(lat, lng) => setCurrentMapCentre({ lat, lng })}
+          fieldNotes={fieldNotes}
+          showNotesOnMap={showNotesOnMap}
+          onSelectNote={(note) => setFieldNoteDetail(note)}
+          onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
+          instanceRef={padMapRef}
+        />
         {/* Floating action buttons */}
         {!mapDrawMode && (
           <div className="absolute right-3 bottom-3 flex flex-col gap-2 z-10">
@@ -3815,7 +3798,7 @@ export default function App() {
       </div>
 
       {/* Notes map — always mounted so refs never reset */}
-      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none" }} className="h-[78vh] relative">
+      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none" }} className="h-[78vh] relative overflow-hidden">
         {(() => {
           const openNotes = fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng);
           const urgentCount = openNotes.filter(n => n.priority === "urgent").length;
@@ -5337,9 +5320,10 @@ export default function App() {
                           }));
                           // If it was a Treat, reverse the inventory deduction
                           if (h.action === "Treat" && h.detail) {
-                            const treatMatch = h.detail.match(/Treated: ([^·]+)/);
+                            const treatMatch = h.detail.match(/Treated: ([^·\n]+)/);
                             if (treatMatch) {
                               const treatedNames = treatMatch[1].trim().split(", ");
+                              const reversals = [];
                               treatedNames.forEach(tName => {
                                 const invItem = inventory.find(it => it.title === tName.trim());
                                 if (invItem) {
@@ -5347,16 +5331,29 @@ export default function App() {
                                   const doseMatch = (invItem.dosage || "").match(/^([\d.]+)/);
                                   if (doseMatch && mobCount) {
                                     const totalDose = Number(doseMatch[1]) * mobCount;
-                                    const newUsed = Math.max(0, (Number(invItem.quantityUsed) || 0) - totalDose);
-                                    api.updateTreatment(invItem.id, { quantityUsed: newUsed.toString() })
-                                      .then(() => setInventory(prev => prev.map(it => it.id === invItem.id ? { ...it, quantityUsed: newUsed.toString() } : it)))
-                                      .catch(() => {});
+                                    const currentUsed = Number(invItem.quantityUsed) || 0;
+                                    const newUsed = Math.max(0, currentUsed - totalDose);
+                                    reversals.push({ invItem, newUsed, totalDose });
                                   }
                                 }
                               });
+                              for (const { invItem, newUsed, totalDose } of reversals) {
+                                try {
+                                  await api.updateTreatment(invItem.id, { quantityUsed: newUsed.toString() });
+                                  setInventory(prev => prev.map(it => it.id === invItem.id ? { ...it, quantityUsed: newUsed.toString() } : it));
+                                } catch {}
+                              }
+                              if (reversals.length > 0) {
+                                showToast(`History deleted — ${reversals.length} treatment${reversals.length > 1 ? "s" : ""} returned to inventory`);
+                              } else {
+                                showToast("History entry deleted");
+                              }
+                            } else {
+                              showToast("History entry deleted");
                             }
+                          } else {
+                            showToast("History entry deleted");
                           }
-                          showToast("History entry deleted");
                         } catch (err) {
                           showToast(err.message || "Couldn't delete history entry");
                         }
@@ -5787,8 +5784,18 @@ export default function App() {
               ))}
             </div>
             {canEdit && (
-              <button
-                onClick={async () => {
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={() => {
+                    setInventoryForm({ ...item });
+                    setInventoryView("edit-" + item.id);
+                  }}
+                  className="flex-1 bg-slate-100 text-slate-700 rounded-2xl py-3 font-semibold"
+                >
+                  ✏️ Edit
+                </button>
+                <button
+                  onClick={async () => {
                   const id = item.id;
                   if (isTreatment) setInventory((prev) => prev.filter((i) => i.id !== id));
                   else setSprayInventory((prev) => prev.filter((i) => i.id !== id));
@@ -5802,11 +5809,46 @@ export default function App() {
                     showToast(err.message || "Couldn't remove record on the server");
                   }
                 }}
-                className="w-full bg-rose-500 text-white rounded-2xl py-3 font-bold"
+                className="bg-rose-50 text-rose-500 rounded-2xl py-3 px-4 font-semibold"
               >
-                Remove Record
+                Delete
               </button>
+              </div>
             )}
+          </Modal>
+        );
+      })()}
+
+      {showInventory && typeof inventoryView === "string" && inventoryView.startsWith("edit-") && (() => {
+        const isTreatment = inventoryType === "treatment";
+        const itemId = Number(inventoryView.replace("edit-", ""));
+        const item = (isTreatment ? inventory : sprayInventory).find(i => i.id === itemId);
+        const fields = isTreatment ? TREATMENT_FIELDS : SPRAY_FIELDS;
+        if (!item) return null;
+        return (
+          <Modal title={`Edit ${isTreatment ? "Treatment" : "Spray Chemical"}`} onClose={() => setInventoryView(itemId)}>
+            <InventoryForm values={inventoryForm} onChange={(k, v) => setInventoryForm(prev => ({ ...prev, [k]: v }))} fields={fields} />
+            <button onClick={async () => {
+              if (!inventoryForm.title) { showToast("Please enter a name"); return; }
+              const saveForm = { ...inventoryForm };
+              if (saveForm.numContainers && saveForm.containerSize) {
+                const newStarting = Number(saveForm.numContainers) * Number(saveForm.containerSize);
+                saveForm.startingStock = newStarting.toString();
+              }
+              try {
+                if (isTreatment) {
+                  await api.updateTreatment(itemId, saveForm);
+                  setInventory(prev => prev.map(i => i.id === itemId ? { ...i, ...saveForm } : i).sort((a,b) => (a.title||"").localeCompare(b.title||"")));
+                } else {
+                  await api.updateSprayInventory(itemId, saveForm);
+                  setSprayInventory(prev => prev.map(i => i.id === itemId ? { ...i, ...saveForm } : i).sort((a,b) => (a.title||"").localeCompare(b.title||"")));
+                }
+                setInventoryView(null);
+                showToast("Record updated");
+              } catch (err) { showToast(err.message || "Couldn't save changes"); }
+            }} className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold mt-2">
+              Save Changes
+            </button>
           </Modal>
         );
       })()}
@@ -7001,6 +7043,7 @@ export default function App() {
                     body: current.body.trim(),
                     priority: current.priority,
                     photos: current.photos || [],
+                    authorName: currentUser?.name || null,
                   });
                   setFieldNotes(prev => [created, ...prev]);
                   showToast("Note saved");
