@@ -34,7 +34,7 @@ router.delete("/treatments/:id", requireAuth, requireEditor, async (req, res) =>
 
 // PUT /api/inventory/treatments/:id — update fields including quantityUsed
 router.put("/treatments/:id", requireAuth, requireEditor, async (req, res) => {
-  const { farm, ...fields } = req.body;
+  const { farm, id, farmId, createdAt, ...fields } = req.body;
   const [updated] = await db.update(treatmentInventory).set(fields)
     .where(eq(treatmentInventory.id, Number(req.params.id))).returning();
   if (!updated) return res.status(404).json({ error: "Not found" });
@@ -64,7 +64,7 @@ router.delete("/spray/:id", requireAuth, requireEditor, async (req, res) => {
 
 // PUT /api/inventory/spray/:id
 router.put("/spray/:id", requireAuth, requireEditor, async (req, res) => {
-  const { farm, ...fields } = req.body;
+  const { farm, id, farmId, createdAt, ...fields } = req.body;
   const [updated] = await db.update(sprayInventory).set(fields)
     .where(eq(sprayInventory.id, Number(req.params.id))).returning();
   if (!updated) return res.status(404).json({ error: "Not found" });

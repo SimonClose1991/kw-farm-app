@@ -3310,7 +3310,7 @@ export default function App() {
   const MapScreen = React.memo(({
     _paddocks, _mobs, _farmName, _mapMode, _landmarks, _openGates, _googleMapsKey,
   }) => (
-    <div className="pb-24 relative">
+    <div className="flex flex-col" style={{ height: "calc(100dvh - 56px)", maxHeight: "calc(100dvh - 56px)", overflow: "hidden" }}>
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
           onClick={() => setShowSettings(true)}
@@ -3507,7 +3507,7 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none" }} className="h-[78vh] relative overflow-hidden">
+      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none" }} className="flex-1 relative overflow-hidden">
 
           {googleMapsKey && !mapLoadError ? (
             <>
@@ -3674,7 +3674,7 @@ export default function App() {
       </div>
 
       {/* Paddocks map — always mounted, structure mirrors livestock map */}
-      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none" }} className="h-[78vh] relative overflow-hidden">
+      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none" }} className="flex-1 relative overflow-hidden">
         {dataLoading && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm z-10 bg-white">Loading paddocks...</div>}
         {dataError && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-rose-500 text-sm p-4 text-center z-10 bg-white">{dataError}</div>}
         <GooglePaddockMap
@@ -3798,7 +3798,7 @@ export default function App() {
       </div>
 
       {/* Notes map — always mounted so refs never reset */}
-      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none" }} className="h-[78vh] relative overflow-hidden">
+      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none" }} className="flex-1 relative overflow-hidden">
         {(() => {
           const openNotes = fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng);
           const urgentCount = openNotes.filter(n => n.priority === "urgent").length;
@@ -5830,7 +5830,8 @@ export default function App() {
             <InventoryForm values={inventoryForm} onChange={(k, v) => setInventoryForm(prev => ({ ...prev, [k]: v }))} fields={fields} />
             <button onClick={async () => {
               if (!inventoryForm.title) { showToast("Please enter a name"); return; }
-              const saveForm = { ...inventoryForm };
+              // Strip fields that shouldn't be updated (server IDs, timestamps)
+              const { id: _id, farmId: _fid, createdAt: _ca, ...saveForm } = inventoryForm;
               if (saveForm.numContainers && saveForm.containerSize) {
                 const newStarting = Number(saveForm.numContainers) * Number(saveForm.containerSize);
                 saveForm.startingStock = newStarting.toString();

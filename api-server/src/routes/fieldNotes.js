@@ -66,6 +66,13 @@ router.put("/:id", requireAuth, async (req, res) => {
     if (fields.photos && Array.isArray(fields.photos)) {
       fields.photos = JSON.stringify(fields.photos);
     }
+    // Drizzle expects Date objects for timestamp columns, not strings
+    if (fields.resolvedAt && typeof fields.resolvedAt === "string") {
+      fields.resolvedAt = new Date(fields.resolvedAt);
+    }
+    if (fields.createdAt && typeof fields.createdAt === "string") {
+      fields.createdAt = new Date(fields.createdAt);
+    }
     const [updated] = await db
       .update(fieldNotes)
       .set(fields)
