@@ -415,6 +415,14 @@ const SAVED_MAP_VIEWPORTS = {};
 // otherwise draw two name labels on top of each other. Prefers the custom name
 // over a default "Paddock N" name.
 const isDefaultPaddockName = (n) => /^paddock\s*\d+$/i.test(String(n || "").trim());
+// Stable fingerprint of a paddock's geometry — used to detect duplicate records
+const paddockGeomKey = (gj) => {
+  try {
+    const ring = gj?.type === "MultiPolygon" ? gj.coordinates[0][0] : gj?.coordinates?.[0];
+    if (!ring?.length) return null;
+    return ring.slice(0, 5).map(([x, y]) => `${Number(x).toFixed(5)},${Number(y).toFixed(5)}`).join("|");
+  } catch { return null; }
+};
 const dedupePaddocksForLabels = (list, getCentroid) => {
   const kept = [];
   (list || []).forEach((p) => {
@@ -526,18 +534,18 @@ function GooglePaddockMap({
     const mode_ = currentInsightMode || insightMode;
     const stats_ = (currentPaddockStats || paddockStats)[p.name] || {};
     let badge = "";
-    if (zoom >= 14) {
+    if (zoom >= 15) {
       badge = `${Number(p.ha||0).toFixed(1)} ha`;
       if (mode_ === "stocking") badge = `${(stats_.dsePerHa||0).toFixed(1)} DSE/ha`;
       else if (mode_ === "feed") badge = stats_.lastFoo ? `${stats_.lastFoo} kgDM/ha` : "";
       else if (mode_ === "grazed") badge = stats_.daysSinceGrazed != null ? `${stats_.daysSinceGrazed}d ago` : "";
     }
 
-    // zoom 12-13: abbreviated initials only, no badge
-    // zoom 14+: full name + badge
-    const nameLine = zoom >= 14 ? p.name : abbrev(p.name);
-    const lines = [nameLine, ...(zoom >= 14 && badge ? [badge] : [])];
-    const fontSize = zoom >= 14 ? 13 : 10;
+    // zoom 12-14: abbreviated initials only, no badge (full names get cluttered)
+    // zoom 15+: full name + badge
+    const nameLine = zoom >= 15 ? p.name : abbrev(p.name);
+    const lines = [nameLine, ...(zoom >= 15 && badge ? [badge] : [])];
+    const fontSize = zoom >= 15 ? 13 : 10;
     const lineH = fontSize + 4;
     const dpr = window.devicePixelRatio || 1;
 
@@ -689,7 +697,7 @@ function GooglePaddockMap({
           // Skip if map container is hidden (display:none) — avoids iOS viewport reset
           if (mapDivRef.current && mapDivRef.current.closest('[style*="display: none"]')) return;
           // Determine zoom tier — only redraw labels when crossing a tier boundary
-          const tier = z < 12 ? 0 : z < 14 ? 1 : 2;
+          const tier = z < 12 ? 0 : z < 15 ? 1 : 2;
           if (tier === lastZoomTierRef.current) return; // same tier — labels correct, skip redraw
           lastZoomTierRef.current = tier;
           const ref = mapInstanceRef.current;
@@ -3975,15 +3983,8 @@ export default function App() {
               // Skip features whose geometry already exists — re-importing the same
               // file used to create duplicate paddocks (old default name alongside
               // the renamed one, drawing overlapping labels on the map)
-              const geomKey = (gj) => {
-                try {
-                  const ring = gj?.type === "MultiPolygon" ? gj.coordinates[0][0] : gj?.coordinates?.[0];
-                  if (!ring?.length) return null;
-                  return ring.slice(0, 5).map(([x, y]) => `${Number(x).toFixed(5)},${Number(y).toFixed(5)}`).join("|");
-                } catch { return null; }
-              };
-              const existingGeoms = new Set(paddocks.map((p) => geomKey(p.geojson)).filter(Boolean));
-              const fresh = imported.filter((p) => { const k = geomKey(p.geojson); return !k || !existingGeoms.has(k); });
+              const existingGeoms = new Set(paddocks.map((p) => paddockGeomKey(p.geojson)).filter(Boolean));
+              const fresh = imported.filter((p) => { const k = paddockGeomKey(p.geojson); return !k || !existingGeoms.has(k); });
               const skippedCount = imported.length - fresh.length;
               if (fresh.length === 0) { showToast("All paddocks in that file are already mapped — nothing imported"); return; }
               showToast(`Saving ${fresh.length} paddock${fresh.length > 1 ? "s" : ""}${skippedCount ? ` (${skippedCount} already mapped, skipped)` : ""}...`);
@@ -6460,6 +6461,57 @@ export default function App() {
               <h2 className="font-semibold text-slate-800 tracking-tight flex-1">{farmName} Paddocks</h2>
               <div className="text-xs text-slate-400 font-medium">{paddocks.length} total · {paddocks.reduce((s,p)=>s+Number(p.ha||0),0).toFixed(0)} ha</div>
             </div>
+            {canEdit && (() => {
+              // Detect duplicate records (same boundary saved more than once) —
+              // these inflate the farm's total ha and clutter pickers
+              const groups = {};
+              paddocks.forEach(p => {
+                const k = paddockGeomKey(p.geojson);
+                if (!k) return;
+                (groups[k] = groups[k] || []).push(p);
+              });
+              const dupeGroups = Object.values(groups).filter(g => g.length > 1);
+              const dupeCount = dupeGroups.reduce((s, g) => s + g.length - 1, 0);
+              if (dupeCount === 0) return null;
+              const dupeHa = dupeGroups.reduce((s, g) => s + (g.length - 1) * (Number(g[0].ha) || 0), 0);
+              return (
+                <div className="mx-4 mt-3 bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                  <div className="text-sm font-bold text-amber-800">⚠ {dupeCount} duplicate paddock{dupeCount > 1 ? "s" : ""} detected</div>
+                  <div className="text-xs text-amber-700 mt-1">
+                    The same boundary has been saved more than once (usually from re-importing a GeoJSON file) — inflating this farm's total by ≈{dupeHa.toFixed(0)} ha.
+                  </div>
+                  <button onClick={async () => {
+                    let removed = 0;
+                    const renames = []; // [oldName, keptName] so mobs follow the kept paddock
+                    for (const g of dupeGroups) {
+                      // Keep the renamed one if there is one, otherwise the first
+                      const keep = g.find(p => !isDefaultPaddockName(p.name)) || g[0];
+                      for (const p of g) {
+                        if (p.id === keep.id) continue;
+                        try {
+                          await api.deletePaddock(p.id);
+                          removed++;
+                          setPaddocks(prev => prev.filter(x => x.id !== p.id));
+                          if (p.name !== keep.name) renames.push([p.name, keep.name]);
+                        } catch {}
+                      }
+                    }
+                    // Re-point any mobs that referenced a removed duplicate's name
+                    for (const [oldName, newName] of renames) {
+                      const affected = mobs.filter(m => m.paddock === oldName);
+                      for (const m of affected) {
+                        try { await api.updateMob(m.id, { paddock: newName }); } catch {}
+                      }
+                      if (affected.length) setMobs(prev => prev.map(m => m.paddock === oldName ? { ...m, paddock: newName } : m));
+                    }
+                    markChanged();
+                    showToast(`Removed ${removed} duplicate paddock${removed !== 1 ? "s" : ""}`);
+                  }} className="mt-2.5 w-full bg-amber-500 text-white rounded-xl py-2.5 text-sm font-bold">
+                    Remove duplicates (keeps your renamed ones)
+                  </button>
+                </div>
+              );
+            })()}
             <div className="p-4 space-y-2">
               {paddocks.length === 0 && (
                 <div className="text-center text-slate-400 text-sm py-8">No paddocks yet. Import GeoJSON or draw paddocks on the map.</div>
