@@ -405,6 +405,11 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
 // ── Google Maps component ────────────────────────────────────────────────────
 // Handles both "paddocks" mode (polygons + zoom-aware labels + landmarks + pin placer)
 // and "livestock" mode (paddock outlines + per-species mob tiles + tag colour rings).
+// Last user viewport per farm+mode — module-level so it survives component
+// remounts (tab switches, parent re-renders). Restoring it means zoom/position
+// never snaps back to the default after the user has zoomed or panned.
+const SAVED_MAP_VIEWPORTS = {};
+
 function GooglePaddockMap({
   paddocks, center, onSelect, apiKey, onError,
   mode = "paddocks",
@@ -564,13 +569,25 @@ function GooglePaddockMap({
         // Clear the div so Google Maps doesn't see an existing map in it
         if (mapDivRef.current) mapDivRef.current.innerHTML = "";
       }
+      const viewportKey = `${center[0]},${center[1]}|${mode}`;
+      const savedVp = SAVED_MAP_VIEWPORTS[viewportKey];
       const map = new g.Map(mapDivRef.current, {
-        center: { lat: center[0], lng: center[1] },
-        zoom: initialZoom || 13,
+        center: savedVp ? { lat: savedVp.lat, lng: savedVp.lng } : { lat: center[0], lng: center[1] },
+        zoom: (savedVp && savedVp.zoom) || initialZoom || 14,
         mapTypeId: "satellite",
         streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
         gestureHandling: "greedy",
         zoomControl: true,
+      });
+      // Persist the user's viewport (zoom + centre) once the initial fit is done,
+      // so any rebuild/remount restores exactly where they were looking.
+      let vpReady = !!savedVp;
+      map.addListener("idle", () => {
+        if (!vpReady) return;
+        const c = map.getCenter();
+        const z = map.getZoom();
+        if (!c || !z) return;
+        SAVED_MAP_VIEWPORTS[viewportKey] = { lat: c.lat(), lng: c.lng(), zoom: z };
       });
       // Report centre changes via ref to avoid triggering re-renders
       if (onMapCentreChange) {
@@ -803,13 +820,18 @@ function GooglePaddockMap({
         fittedBoundsRef.current = false;
         fittedBoundsCenterRef.current = centerKey;
       }
+      if (savedVp) {
+        // Restored the user's last viewport — never refit over the top of it
+        fittedBoundsRef.current = true;
+        fittedBoundsCenterRef.current = centerKey;
+      }
       if (!fittedBoundsRef.current) {
         fittedBoundsRef.current = true;
         let userInteracted = false;
         const interactionListener = map.addListener("zoom_changed", () => { userInteracted = true; });
         setTimeout(() => {
           g.event.removeListener(interactionListener);
-          if (userInteracted) return;
+          if (userInteracted) { vpReady = true; return; }
           // Use current bounds from ref — may have been updated by polygon effect
           const currentBounds = mapInstanceRef.current?.bounds;
           if (currentBounds) {
@@ -822,7 +844,13 @@ function GooglePaddockMap({
                 const dist = Math.hypot(midLat - cLat, midLng - cLng);
                 // Sanity check — bounds midpoint must be within 0.5° of farm center
                 if (dist < 0.5) {
-                  map.fitBounds(currentBounds, 40);
+                  map.fitBounds(currentBounds, 20);
+                  // Nudge one zoom level in — the fitted view sits a touch too far out
+                  g.event.addListenerOnce(map, "idle", () => {
+                    const z = map.getZoom();
+                    if (z) map.setZoom(z + 1);
+                    vpReady = true;
+                  });
                   return;
                 }
               }
@@ -830,7 +858,8 @@ function GooglePaddockMap({
           }
           // No valid bounds yet — just center on the farm, don't zoom out to world
           map.setCenter({ lat: cLat, lng: cLng });
-          map.setZoom(14);
+          map.setZoom(15);
+          vpReady = true;
         }, 500);
       }
       mapInstanceRef.current = {
@@ -3307,10 +3336,11 @@ export default function App() {
     { id: "outline",  label: "Outline Only",        icon: "⬜" },
   ];
 
-  const MapScreen = React.memo(({
-    _paddocks, _mobs, _farmName, _mapMode, _landmarks, _openGates, _googleMapsKey,
-  }) => (
-    <div className="flex flex-col" style={{ height: "calc(100dvh - 56px)", maxHeight: "calc(100dvh - 56px)", overflow: "hidden" }}>
+  // Plain render function, NOT a component: defining a component inside App gives
+  // it a new identity on every render, so React unmounted and rebuilt the whole
+  // map screen each time state changed — resetting the map's zoom and position.
+  const MapScreen = () => (
+    <div className="flex flex-col overflow-hidden h-[calc(100dvh-56px)] max-h-[calc(100dvh-56px)] md:h-[100dvh] md:max-h-[100dvh]">
       <div className="bg-white flex items-center px-4 py-3 gap-2 sticky top-0 z-10 border-b border-stone-100">
         <button
           onClick={() => setShowSettings(true)}
@@ -3507,7 +3537,11 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none" }} className="flex-1 relative overflow-hidden">
+      {/* All three map panels are stacked absolutely inside one flex-1 container,
+          so the active map always fills the full remaining height (previously each
+          panel took a third of the column, leaving white space below the map). */}
+      <div className="flex-1 relative min-h-0">
+      <div style={{ visibility: mapMode === "Livestock" ? "visible" : "hidden", pointerEvents: mapMode === "Livestock" ? "auto" : "none" }} className="absolute inset-0 overflow-hidden">
 
           {googleMapsKey && !mapLoadError ? (
             <>
@@ -3674,7 +3708,7 @@ export default function App() {
       </div>
 
       {/* Paddocks map — always mounted, structure mirrors livestock map */}
-      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none" }} className="flex-1 relative overflow-hidden">
+      <div style={{ visibility: mapMode === "Paddocks" ? "visible" : "hidden", pointerEvents: mapMode === "Paddocks" ? "auto" : "none" }} className="absolute inset-0 overflow-hidden">
         {dataLoading && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm z-10 bg-white">Loading paddocks...</div>}
         {dataError && mapMode === "Paddocks" && <div className="absolute inset-0 flex items-center justify-center text-rose-500 text-sm p-4 text-center z-10 bg-white">{dataError}</div>}
         <GooglePaddockMap
@@ -3798,7 +3832,7 @@ export default function App() {
       </div>
 
       {/* Notes map — always mounted so refs never reset */}
-      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none" }} className="flex-1 relative overflow-hidden">
+      <div style={{ visibility: mapMode === "Notes" ? "visible" : "hidden", pointerEvents: mapMode === "Notes" ? "auto" : "none" }} className="absolute inset-0 overflow-hidden">
         {(() => {
           const openNotes = fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng);
           const urgentCount = openNotes.filter(n => n.priority === "urgent").length;
@@ -3839,6 +3873,7 @@ export default function App() {
             )}
           </>);
         })()}
+      </div>
       </div>
 
 
@@ -4777,7 +4812,7 @@ export default function App() {
         </Modal>
       )}
     </div>
-  ));
+  );
 
   // ── Workflow Screen ─────────────────────────────────────────────────────────
   // Passes the JWT token to the iframe via postMessage so it can call our API
@@ -6764,11 +6799,7 @@ export default function App() {
         paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
         currentUser={currentUser} homeFarm={homeFarm} setHomeFarm={setHomeFarm}
       />}
-      {tab === "map" && <MapScreen
-        _paddocks={paddocks} _mobs={mobs} _farmName={farmName}
-        _mapMode={mapMode} _landmarks={landmarks} _openGates={openGates}
-        _googleMapsKey={googleMapsKey}
-      />}
+      {tab === "map" && MapScreen()}
       {tab === "livestock" && LivestockScreen()}
       {tab === "moblist" && MobListScreen()}
       {tab === "mobactivity" && MobActivityScreen()}
