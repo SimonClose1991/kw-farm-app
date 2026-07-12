@@ -46,7 +46,7 @@ router.get("/", requireAuth, async (req, res) => {
 
 // POST /api/paddocks  body: { farm, name, ha, landUse, pasture, colour, geojson }
 router.post("/", requireAuth, requireEditor, async (req, res) => {
-  const { farm, ...fields } = req.body;
+  const { farm, id, farmId: _farmId, createdAt, updatedAt, ...fields } = req.body;
   const farmId = await farmIdByName(farm);
   if (!farmId) return res.status(400).json({ error: "Unknown farm" });
   // Always recalculate ha from geometry — stored values are often wrong (AgriWebb exports acres etc.)
@@ -60,7 +60,7 @@ router.post("/", requireAuth, requireEditor, async (req, res) => {
 
 // PUT /api/paddocks/:id
 router.put("/:id", requireAuth, requireEditor, async (req, res) => {
-  const { farm, ...fields } = req.body;
+  const { farm, id, farmId, createdAt, updatedAt, ...fields } = req.body;
   // Recalculate ha if geometry is being updated
   if (fields.geojson) {
     const computedHa = calcHaFromGeojson(fields.geojson);

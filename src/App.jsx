@@ -3276,7 +3276,7 @@ export default function App() {
     if (name === "Copy" && formValues["New mob name"]) {
       // Copy keeps every attribute of the mob — only name, paddock and head
       // count change, so identical mobs can be set up once then duplicated
-      const { id, ...rest } = mob;
+      const { id, farmId, createdAt, updatedAt, ...rest } = mob;
       const copyPaddock = formValues["Copy to paddock"] || rest.paddock;
       const copyCount = Number(formValues["Number of stock"]) > 0 ? Number(formValues["Number of stock"]) : rest.count;
       try {

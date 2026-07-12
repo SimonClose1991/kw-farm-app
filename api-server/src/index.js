@@ -22,6 +22,16 @@ import { db } from "./db/index.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// A single bad request must never take the whole API down. Express 4 doesn't
+// catch errors thrown in async handlers, so they surface as unhandled
+// rejections — log them and keep serving instead of crashing.
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection (request failed but server continues):", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (server continues):", err);
+});
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || true }));

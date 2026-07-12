@@ -24,16 +24,34 @@ router.get("/", requireAuth, async (req, res) => {
 
 // POST /api/mobs  body: { farm, ...mobFields }
 router.post("/", requireAuth, requireEditor, async (req, res) => {
-  const { farm, ...fields } = req.body;
+  // Strip server-managed fields — clients may post back a whole mob record
+  // (e.g. Copy mob), and JSON timestamps arrive as strings which crash the
+  // timestamp column mapper if inserted directly.
+  const { farm, id, farmId: _farmId, createdAt, updatedAt, extra, ...fields } = req.body;
   const farmId = await farmIdByName(farm);
   if (!farmId) return res.status(400).json({ error: "Unknown farm" });
-  const [created] = await db.insert(mobs).values({ ...fields, farmId, updatedAt: new Date() }).returning();
-  res.status(201).json(created);
+
+  // Same known-column split as PUT so flattened extra fields survive a copy
+  const KNOWN_COLS = new Set([
+    "name","desc","count","paddock","dse","species","type","breed","ageClass",
+    "mgmtGroup","tag","whp","lastWeight","lastWeightDate","assumedADG",
+    "daysInPaddock","wec","extra"
+  ]);
+  const knownFields = {};
+  const extraFields = { ...(extra || {}) };
+  for (const [k, v] of Object.entries(fields)) {
+    if (KNOWN_COLS.has(k)) knownFields[k] = v;
+    else extraFields[k] = v;
+  }
+  if (Object.keys(extraFields).length > 0) knownFields.extra = extraFields;
+
+  const [created] = await db.insert(mobs).values({ ...knownFields, farmId, updatedAt: new Date() }).returning();
+  res.status(201).json({ ...created, ...(created.extra || {}) });
 });
 
 // PUT /api/mobs/:id  body: { ...fields to update }
 router.put("/:id", requireAuth, requireEditor, async (req, res) => {
-  const { farm, ...fields } = req.body;
+  const { farm, id, farmId, createdAt, updatedAt, ...fields } = req.body;
 
   // Known DB columns on the mobs table
   const KNOWN_COLS = new Set([
