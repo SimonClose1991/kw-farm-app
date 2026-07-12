@@ -1315,6 +1315,11 @@ const ACTION_FIELDS = {
   ],
   Score: [{ label: "_score_counter", type: "score_counter" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining assessment" }],
   Merge: [{ label: "Merge into mob", type: "select", options: [] }],
+  Copy: [
+    { label: "New mob name", type: "text", placeholder: "e.g. Coleraine cows 2" },
+    { label: "Copy to paddock", type: "select", options: [] },
+    { label: "Number of stock", type: "number", placeholder: "e.g. 150" },
+  ],
   Delete: [],
 };
 
@@ -3108,6 +3113,11 @@ export default function App() {
     });
     if (name === "Ent/mgmt group" && m.mgmtGroup && m.mgmtGroup !== "Unassigned") prefill["Management group"] = m.mgmtGroup;
     if (name === "Recount") prefill["New head count"] = m.count;
+    if (name === "Copy") {
+      prefill["New mob name"] = `${m.name} (copy)`;
+      prefill["Copy to paddock"] = m.paddock;
+      prefill["Number of stock"] = m.count;
+    }
     if (name === "DSE") prefill["DSE rating per head"] = m.dse;
     if (name === "ADG" && m.assumedADG) prefill["Assumed ADG (kg/day)"] = m.assumedADG;
     if (name === "Score") prefill["_scores"] = []; // fresh counter each time
@@ -3200,9 +3210,13 @@ export default function App() {
 
     // --- Copy ---
     if (name === "Copy" && formValues["New mob name"]) {
+      // Copy keeps every attribute of the mob — only name, paddock and head
+      // count change, so identical mobs can be set up once then duplicated
       const { id, ...rest } = mob;
+      const copyPaddock = formValues["Copy to paddock"] || rest.paddock;
+      const copyCount = Number(formValues["Number of stock"]) > 0 ? Number(formValues["Number of stock"]) : rest.count;
       try {
-        const created = await api.createMob(farmName, { ...rest, name: formValues["New mob name"] });
+        const created = await api.createMob(farmName, { ...rest, name: formValues["New mob name"], paddock: copyPaddock, count: copyCount, daysInPaddock: 0 });
         setMobs((prev) => [...prev, created]);
         showToast("Mob copied");
       } catch (err) {
@@ -5239,7 +5253,7 @@ export default function App() {
         options = inventory.map((i) => i.title);
       } else if (field.label === "Transfer to property") {
         options = Object.keys(farmsMobs).filter((f) => f !== farmName);
-      } else if (field.label === "Move to paddock") {
+      } else if (field.label === "Move to paddock" || field.label === "Copy to paddock") {
         options = paddocks.map((p) => p.name);
       }
       return (
