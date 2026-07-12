@@ -445,6 +445,9 @@ function GooglePaddockMap({
   instanceRef = null,
   fieldNotes = [], showNotesOnMap = false, onSelectNote,
   onPickPin = null, // callback(lat, lng, paddockName) when user places a pin
+  editShapePaddockId = null, // paddock id currently being reshaped (editable polygon)
+  onShapeEditHa = null,      // callback(ha) with live recalculated area while reshaping
+  shapeEditRef = null,       // ref that receives { getLatLngs, restore } while reshaping
 }) {
   // Single persistent Set for ALL active label markers — survives closure differences between effects
   const labelMarkersSet = useRef(new Set());
@@ -466,6 +469,7 @@ function GooglePaddockMap({
   // they re-run once the async Google Maps build completes — otherwise on first
   // load they run before the map exists and nothing appears until data changes.
   const [mapReadyTick, setMapReadyTick] = React.useState(0);
+  const editingShapeIdRef = useRef(null); // paddock id being reshaped — suppress selection clicks
   // Sync internal ref to external ref so parent can access map/polygons/centroids
   React.useEffect(() => {
     if (instanceRef) instanceRef.current = mapInstanceRef.current;
@@ -649,6 +653,7 @@ function GooglePaddockMap({
         // Individual polygon click — routes to pin-picking if active, otherwise normal select
         if (!drawMode) {
           poly.addListener("click", (e) => {
+            if (editingShapeIdRef.current) return; // reshaping — clicks are vertex edits
             // Resolve the CURRENT paddock record at click time — the closure copy
             // goes stale after renames/edits and would show the old details
             const fresh = (mapInstanceRef.current?.paddockList || paddocks).find(x => String(x.id) === String(p.id)) || p;
@@ -715,6 +720,7 @@ function GooglePaddockMap({
       // ── Map-level tap handler (mobile-reliable) ──────────────────────────────
       if (!drawMode) {
         map.addListener("click", (e) => {
+          if (editingShapeIdRef.current) return; // reshaping — don't select paddocks
           const latLng = e.latLng;
           const ref = mapInstanceRef.current;
           if (!ref) return;
@@ -1154,6 +1160,7 @@ function GooglePaddockMap({
         const poly = new g.Polygon({ paths: path, strokeColor, strokeWeight, fillColor: fillColour, fillOpacity, map });
         if (!drawMode) {
           poly.addListener("click", (e) => {
+            if (editingShapeIdRef.current) return; // reshaping — clicks are vertex edits
             // Resolve the CURRENT paddock record at click time (closure copy goes stale)
             const fresh = (mapInstanceRef.current?.paddockList || [p]).find(x => String(x.id) === String(p.id)) || p;
             if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), fresh.name); }
@@ -1222,6 +1229,50 @@ function GooglePaddockMap({
       });
     }
   }, [insightMode, paddockStats, paddocks]);
+
+  // ── Shape editing: make the selected paddock's polygon editable ─────────────
+  // Google Maps editing shows draggable corner handles plus a faint midpoint
+  // handle between every pair of corners — dragging a midpoint creates a new
+  // corner, so any shape can be formed. Tapping a corner removes it. The area
+  // (ha) is recomputed live on every change.
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    const g = window.google?.maps;
+    editingShapeIdRef.current = editShapePaddockId || null;
+    if (!editShapePaddockId || !ref?.map || !g) return;
+    const poly = ref.polygons?.[editShapePaddockId];
+    if (!poly) return;
+
+    const originalPath = poly.getPath().getArray().map(pt => ({ lat: pt.lat(), lng: pt.lng() }));
+    poly.setOptions({ editable: true, zIndex: 999, strokeColor: "#22c55e", strokeWeight: 3, fillOpacity: 0.08 });
+
+    const reportHa = () => {
+      let ha = 0;
+      try { ha = g.geometry.spherical.computeArea(poly.getPath()) / 10000; } catch {}
+      onShapeEditHa?.(Math.round(ha * 10) / 10);
+    };
+    if (shapeEditRef) shapeEditRef.current = {
+      getLatLngs: () => poly.getPath().getArray().map(pt => [pt.lat(), pt.lng()]),
+      restore: () => { try { poly.setPath(originalPath); } catch {} },
+    };
+    const path = poly.getPath();
+    const l1 = path.addListener("insert_at", reportHa);
+    const l2 = path.addListener("set_at", reportHa);
+    const l3 = path.addListener("remove_at", reportHa);
+    // Tap a corner to remove it (a triangle is the minimum shape)
+    const l4 = poly.addListener("click", (e) => {
+      if (e.vertex !== undefined && poly.getPath().getLength() > 3) {
+        poly.getPath().removeAt(e.vertex);
+      }
+    });
+    reportHa();
+    return () => {
+      try { g.event.removeListener(l1); g.event.removeListener(l2); g.event.removeListener(l3); g.event.removeListener(l4); } catch {}
+      poly.setOptions({ editable: false, zIndex: 0, strokeColor: "#ffffff", strokeWeight: 2, fillOpacity: 0.45 });
+      if (shapeEditRef) shapeEditRef.current = null;
+      editingShapeIdRef.current = null;
+    };
+  }, [editShapePaddockId, mapReadyTick]);
 
   // Separate effect: update draw polygon without rebuilding map
   React.useEffect(() => {
@@ -2760,6 +2811,9 @@ export default function App() {
   const [landmarkEditMode, setLandmarkEditMode] = useState(false);
   const [confirmLmDel, setConfirmLmDel] = useState(false); // two-step landmark delete
   const [mapDrawMode, setMapDrawMode] = useState(false); // true while drawing a new paddock shape
+  const [shapeEditPaddock, setShapeEditPaddock] = useState(null); // paddock being reshaped on the map
+  const [shapeEditHa, setShapeEditHa] = useState(null); // live ha readout while reshaping
+  const shapeEditCtlRef = useRef(null); // { getLatLngs, restore } provided by the map
   const [drawPoints, setDrawPoints] = useState([]); // array of {x,y} in SVG space while drawing
   const [insightMode, setInsightMode] = useState("usage");
   const fileInputRef = useRef(null);
@@ -3781,6 +3835,9 @@ export default function App() {
           userLocation={userLocation}
           openGateIds={openGates}
           onMapCentreChange={(lat, lng) => setCurrentMapCentre({ lat, lng })}
+          editShapePaddockId={shapeEditPaddock?.id || null}
+          onShapeEditHa={setShapeEditHa}
+          shapeEditRef={shapeEditCtlRef}
           fieldNotes={fieldNotes}
           showNotesOnMap={showNotesOnMap}
           onSelectNote={(note) => setFieldNoteDetail(note)}
@@ -3788,7 +3845,7 @@ export default function App() {
           instanceRef={padMapRef}
         />
         {/* Floating action buttons */}
-        {!mapDrawMode && (
+        {!mapDrawMode && !shapeEditPaddock && (
           <div className="absolute right-3 bottom-3 flex flex-col gap-2 z-10">
             <button onClick={locateMe} disabled={locating} className="bg-white w-11 h-11 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 text-lg border border-slate-100">
               {locating ? "…" : "◎"}
@@ -3849,6 +3906,43 @@ export default function App() {
               setMapDrawMode(false);
               setDrawPoints([]);
               setShowAddPaddock(true);
+            }} className="flex-1 bg-green-600 text-white rounded-2xl py-3 font-bold text-sm">Save Shape</button>
+          </div>
+        )}
+        {shapeEditPaddock && (
+          <div className="absolute top-2 left-2 right-2 bg-green-700/90 text-white text-xs font-medium px-3 py-2 rounded-xl z-10">
+            ✏️ Reshaping {shapeEditPaddock.name} — drag a corner to move it · drag a faint midpoint to add a corner · tap a corner to delete it
+          </div>
+        )}
+        {shapeEditPaddock && (
+          <div className="absolute bottom-16 left-4 right-4 flex gap-2 z-10">
+            <div className="absolute -top-8 left-0 right-0 text-center">
+              <span className="bg-black/70 text-white text-xs px-3 py-1 rounded-full font-semibold">
+                ≈ {Number(shapeEditHa ?? shapeEditPaddock.ha ?? 0).toFixed(1)} ha
+              </span>
+            </div>
+            <button onClick={() => {
+              shapeEditCtlRef.current?.restore?.();
+              setShapeEditPaddock(null); setShapeEditHa(null);
+              setPaddocks(prev => [...prev]); // re-apply normal colours/labels
+            }} className="flex-1 bg-white text-slate-600 rounded-2xl py-3 font-bold text-sm border border-slate-200">Cancel</button>
+            <button onClick={async () => {
+              const ctl = shapeEditCtlRef.current;
+              const pad = shapeEditPaddock;
+              if (!ctl || !pad) { setShapeEditPaddock(null); setShapeEditHa(null); return; }
+              const latlngs = ctl.getLatLngs();
+              if (latlngs.length < 3) { showToast("Shape needs at least 3 corners"); return; }
+              // Closed GeoJSON ring, [lng, lat] order
+              const geojson = { type: "Polygon", coordinates: [[...latlngs.map(([lat, lng]) => [lng, lat]), [latlngs[0][1], latlngs[0][0]]]] };
+              setShapeEditPaddock(null); setShapeEditHa(null);
+              try {
+                const updated = await api.updatePaddock(pad.id, { geojson });
+                setPaddocks(prev => prev.map(p => p.id === updated.id ? updated : p));
+                markChanged();
+                showToast(`${updated.name} reshaped — now ${updated.ha} ha`);
+              } catch (err) {
+                showToast(err.message || "Couldn't save the new shape");
+              }
             }} className="flex-1 bg-green-600 text-white rounded-2xl py-3 font-bold text-sm">Save Shape</button>
           </div>
         )}
@@ -4426,6 +4520,30 @@ export default function App() {
                     {PADDOCK_COLOURS.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
+                <button
+                  onClick={() => {
+                    const p = paddockDetail;
+                    setPaddockDetail(null); setPaddockEditMode(false); setConfirmPaddockDel(false);
+                    setMapMode("Paddocks");
+                    setShapeEditPaddock(p); setShapeEditHa(Number(p.ha) || null);
+                    // Zoom the paddocks map to the shape being edited
+                    setTimeout(() => {
+                      const map = padMapRef.current?.map;
+                      const g = window.google?.maps;
+                      if (!map || !g) return;
+                      let ring = null;
+                      try { ring = p.geojson?.type === "MultiPolygon" ? p.geojson.coordinates[0][0] : p.geojson?.coordinates?.[0]; } catch {}
+                      if (ring?.length) {
+                        const b = new g.LatLngBounds();
+                        ring.forEach(([lng, lat]) => b.extend({ lat, lng }));
+                        map.fitBounds(b, 60);
+                      }
+                    }, 150);
+                  }}
+                  className="w-full bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-2xl py-3 font-bold text-sm"
+                >
+                  🔷 Edit Boundary on Map
+                </button>
                 <div className="flex gap-2">
                   <button onClick={() => setPaddockEditMode(false)} className="flex-1 border border-slate-200 rounded-2xl py-3 font-bold text-slate-500">Cancel</button>
                   <button
