@@ -3219,17 +3219,19 @@ export default function App() {
       patch.lastTreatDate = treatDate;
       patch.whpDays = Number(formValues["_whpDays"] || 0);
       patch.esiDays = Number(formValues["_esiDays"] || 0);
-      // Deduct from inventory — use mob count as proxy for usage
+      // Deduct the CONFIRMED amounts from inventory (falls back to dose × head count)
       const selected = formValues["_selectedTreatments"] || [];
+      const confirmedDoses = formValues["_doses"] || {};
       selected.forEach(async (t) => {
         const invItem = inventory.find(i => i.id === t.id);
-        if (!invItem || !invItem.dosage) return;
-        // Try to parse dosage like "1mL per 10kg" — approximate based on mob count
-        const mobCount = mob?.count || 0;
-        const doseMatch = invItem.dosage.match(/^([\d.]+)/);
-        if (!doseMatch || !mobCount) return;
-        const dosePerHead = Number(doseMatch[1]);
-        const totalDose = dosePerHead * mobCount;
+        if (!invItem) return;
+        let totalDose = Number(confirmedDoses[t.id]?.totalUsed) || 0;
+        if (!totalDose) {
+          const mobCount = mob?.count || 0;
+          const doseMatch = String(invItem.dosage || "").match(/^([\d.]+)/);
+          if (!doseMatch || !mobCount) return;
+          totalDose = Number(doseMatch[1]) * mobCount;
+        }
         const newUsed = (Number(invItem.quantityUsed) || 0) + totalDose;
         try {
           await api.updateTreatment(t.id, { quantityUsed: newUsed.toString() });
@@ -3318,9 +3320,24 @@ export default function App() {
       summary = `Condition score: ${formValues["Average condition score"]}/5.0 (${scores.length} animal${scores.length !== 1 ? "s" : ""} scored${formValues["Notes"] ? " · " + formValues["Notes"] : ""})`;
     } else if (name === "Treat") {
       const selected = formValues["_selectedTreatments"] || [];
+      const confirmedDoses = formValues["_doses"] || {};
       const names = selected.map(x => x.title).join(", ");
       const whp = formValues["_whpDays"];
-      summary = names ? `Treated: ${names}${whp ? ` · WHP ${whp}d` : ""}${formValues["Notes"] ? " · " + formValues["Notes"] : ""}` : "Treatment recorded";
+      // One detail line per treatment: dose/head, total used, batch, expiry
+      const doseLines = selected.map(t => {
+        const inv = inventory.find(i => i.id === t.id) || t;
+        const d = confirmedDoses[t.id] || {};
+        const unit = d.unit || inv.containerUnit || "mL";
+        const parts = [];
+        if (d.dosePerHead) parts.push(`${d.dosePerHead} ${unit}/hd`);
+        if (d.totalUsed) parts.push(`${d.totalUsed} ${unit} used`);
+        if (inv.batchNumber) parts.push(`Batch ${inv.batchNumber}`);
+        if (inv.expiryDate) parts.push(`Exp ${inv.expiryDate}`);
+        return parts.length ? `↳ ${t.title} — ${parts.join(" · ")}` : null;
+      }).filter(Boolean);
+      summary = names
+        ? `Treated: ${names}${whp ? ` · WHP ${whp}d` : ""}${formValues["_esiDays"] ? ` · ESI ${formValues["_esiDays"]}d` : ""}${formValues["Notes"] ? " · " + formValues["Notes"] : ""}${doseLines.length ? "\n" + doseLines.join("\n") : ""}`
+        : "Treatment recorded";
     } else {
       summary = Object.entries(formValues)
         .filter(([k, v]) => v && !k.startsWith("_"))
@@ -5053,7 +5070,7 @@ export default function App() {
                 <span className="text-slate-400 text-xs font-medium">{h.date}</span>
               </div>
               <div className="text-sm text-red-950 font-medium">{h.mob}</div>
-              {h.detail && <div className="text-sm text-slate-400 mt-1">{h.detail}</div>}
+              {h.detail && <div className="text-sm text-slate-400 mt-1 whitespace-pre-line">{h.detail}</div>}
             </div>
           ))}
         </div>
@@ -5251,33 +5268,93 @@ export default function App() {
     // ── Treatment multi-picker ─────────────────────────────────────────────────
     if (field.type === "treatment_picker") {
       const selected = formValues["_selectedTreatments"] || [];
+      const doses = formValues["_doses"] || {};
+      const mobCount = selectedMob?.count || 0;
+      // Days from either the picker shape (whp/esi) or inventory rows ("21 days" text)
+      const daysOf = (v) => parseInt(v) || 0;
+      const parseDose = (item) => { const m = String(item.dosage || "").match(/([\d.]+)/); return m ? Number(m[1]) : ""; };
       const toggle = (item) => {
         const already = selected.find(x => x.id === item.id);
         const next = already ? selected.filter(x => x.id !== item.id) : [...selected, item];
+        const nextDoses = { ...doses };
+        if (already) {
+          delete nextDoses[item.id];
+        } else {
+          // Prefill dose/head from the inventory dosage; total = dose × head count
+          const dose = parseDose(item);
+          nextDoses[item.id] = {
+            dosePerHead: dose === "" ? "" : dose,
+            totalUsed: dose !== "" && mobCount ? Math.round(dose * mobCount * 100) / 100 : "",
+            unit: item.containerUnit || "mL",
+          };
+        }
         setFormValues(prev => ({
           ...prev,
           "_selectedTreatments": next,
+          "_doses": nextDoses,
           "Treatment": next.map(x => x.title).join(", "),
-          "_whpDays": Math.max(0, ...next.map(x => Number(x.whp) || 0)),
-          "_esiDays": Math.max(0, ...next.map(x => Number(x.esi) || 0)),
+          "_whpDays": Math.max(0, 0, ...next.map(x => daysOf(x.whp ?? x.withholdingMeat))),
+          "_esiDays": Math.max(0, 0, ...next.map(x => daysOf(x.esi ?? x.withholdingESI))),
         }));
+      };
+      const setDose = (id, key, val) => {
+        setFormValues(prev => {
+          const cur = { ...(prev["_doses"] || {}) };
+          const entry = { ...(cur[id] || {}), [key]: val };
+          // Editing the dose recalculates the total; editing the total stands alone
+          if (key === "dosePerHead") {
+            const n = Number(val);
+            if (n > 0 && mobCount) entry.totalUsed = Math.round(n * mobCount * 100) / 100;
+          }
+          cur[id] = entry;
+          return { ...prev, "_doses": cur };
+        });
       };
       return (
         <div>
           <div className="text-xs text-slate-400 mb-2">Select one or more treatments from inventory — tap to toggle</div>
           {inventory.length === 0 && <div className="text-sm text-slate-400 italic">No treatments in inventory yet</div>}
-          <div className="space-y-2 max-h-52 overflow-y-auto">
+          <div className="space-y-2 max-h-72 overflow-y-auto">
             {inventory.map(item => {
               const on = selected.find(x => x.id === item.id);
+              const d = doses[item.id] || {};
+              const unit = d.unit || item.containerUnit || "mL";
+              const whpText = item.whp ?? item.withholdingMeat;
+              const esiText = item.esi ?? item.withholdingESI;
               return (
-                <button key={item.id} type="button" onClick={() => toggle(item)}
-                  className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 border-2 text-left transition-colors ${on ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"}`}>
-                  <div>
-                    <div className={`text-sm font-semibold ${on ? "text-amber-800" : "text-slate-700"}`}>{item.title}</div>
-                    <div className="text-xs text-slate-400">{[item.whp && `WHP ${item.whp}d`, item.esi && `ESI ${item.esi}d`].filter(Boolean).join(" · ")}</div>
-                  </div>
-                  {on && <span className="text-amber-500 font-bold text-lg">✓</span>}
-                </button>
+                <div key={item.id} className={`rounded-xl border-2 transition-colors ${on ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"}`}>
+                  <button type="button" onClick={() => toggle(item)}
+                    className="w-full flex items-center justify-between px-3 py-2.5 text-left">
+                    <div>
+                      <div className={`text-sm font-semibold ${on ? "text-amber-800" : "text-slate-700"}`}>{item.title}</div>
+                      <div className="text-xs text-slate-400">{[daysOf(whpText) > 0 && `WHP ${daysOf(whpText)}d`, daysOf(esiText) > 0 && `ESI ${daysOf(esiText)}d`].filter(Boolean).join(" · ")}</div>
+                    </div>
+                    {on && <span className="text-amber-500 font-bold text-lg">✓</span>}
+                  </button>
+                  {on && (
+                    <div className="px-3 pb-3 space-y-2">
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <label className="text-[11px] font-semibold text-slate-500 block mb-0.5">Dosage per head ({unit})</label>
+                          <input type="number" inputMode="decimal" value={d.dosePerHead ?? ""}
+                            onChange={(e) => setDose(item.id, "dosePerHead", e.target.value)}
+                            className="w-full border border-amber-300 rounded-lg px-2 py-2 bg-white text-sm" placeholder="e.g. 4.5" />
+                        </div>
+                        <div className="flex-1">
+                          <label className="text-[11px] font-semibold text-slate-500 block mb-0.5">Total used ({unit})</label>
+                          <input type="number" inputMode="decimal" value={d.totalUsed ?? ""}
+                            onChange={(e) => setDose(item.id, "totalUsed", e.target.value)}
+                            className="w-full border border-amber-300 rounded-lg px-2 py-2 bg-white text-sm" placeholder={mobCount ? `dose × ${mobCount} hd` : ""} />
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
+                        {item.batchNumber && <span>Batch: <b>{item.batchNumber}</b></span>}
+                        {item.expiryDate && <span>Expiry: <b>{item.expiryDate}</b></span>}
+                        {mobCount > 0 && <span>{mobCount} head</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -5526,7 +5603,7 @@ export default function App() {
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <div className="flex justify-between font-bold text-slate-800"><span>{h.action}</span><span className="text-slate-400 text-xs">{h.date}</span></div>
-                      {h.detail && <div className="text-sm text-slate-500 mt-1">{h.detail}</div>}
+                      {h.detail && <div className="text-sm text-slate-500 mt-1 whitespace-pre-line">{h.detail}</div>}
                       {h.authorName && <div className="text-xs text-slate-400 mt-1">by {h.authorName}</div>}
                     </div>
                     {canEdit && h.id && (
@@ -5541,10 +5618,21 @@ export default function App() {
                           }));
                           // If it was a Treat, reverse the inventory deduction
                           if (h.action === "Treat" && h.detail) {
+                            const reversals = [];
+                            // New-format records carry the exact amount: "↳ Title — 4.5 mL/hd · 738 mL used · ..."
+                            h.detail.split("\n").forEach(line => {
+                              const m = line.match(/^↳ (.+?) — .*?([\d.]+)\s*\S*\s+used/);
+                              if (!m) return;
+                              const invItem = inventory.find(it => it.title === m[1].trim());
+                              const totalDose = Number(m[2]) || 0;
+                              if (!invItem || !totalDose) return;
+                              const newUsed = Math.max(0, (Number(invItem.quantityUsed) || 0) - totalDose);
+                              reversals.push({ invItem, newUsed, totalDose });
+                            });
                             const treatMatch = h.detail.match(/Treated: ([^·\n]+)/);
-                            if (treatMatch) {
+                            if (reversals.length === 0 && treatMatch) {
+                              // Legacy records: approximate from inventory dosage × head count
                               const treatedNames = treatMatch[1].trim().split(", ");
-                              const reversals = [];
                               treatedNames.forEach(tName => {
                                 const invItem = inventory.find(it => it.title === tName.trim());
                                 if (invItem) {
@@ -5558,6 +5646,8 @@ export default function App() {
                                   }
                                 }
                               });
+                            }
+                            if (true) {
                               for (const { invItem, newUsed, totalDose } of reversals) {
                                 try {
                                   await api.updateTreatment(invItem.id, { quantityUsed: newUsed.toString() });
