@@ -442,6 +442,10 @@ function GooglePaddockMap({
   const fittedBoundsRef = useRef(false);
   const fittedBoundsCenterRef = useRef(null);
   const lastZoomTierRef = useRef(null); // track zoom tier to skip unnecessary label redraws
+  // Bumped after each map (re)build. The mob/note/location effects depend on it so
+  // they re-run once the async Google Maps build completes — otherwise on first
+  // load they run before the map exists and nothing appears until data changes.
+  const [mapReadyTick, setMapReadyTick] = React.useState(0);
   // Sync internal ref to external ref so parent can access map/polygons/centroids
   React.useEffect(() => {
     if (instanceRef) instanceRef.current = mapInstanceRef.current;
@@ -875,6 +879,7 @@ function GooglePaddockMap({
         currentOpenGateIds: openGateIds,
       };
       lastZoomTierRef.current = null; // reset so labels redraw correctly on first zoom
+      setMapReadyTick(t => t + 1); // re-run marker effects now that the map exists
     };
 
     if (window.google?.maps) {
@@ -1012,7 +1017,7 @@ function GooglePaddockMap({
       marker.addListener("click", () => onSelectPinRef.current?.({ l: totalCount, mob: groupMobs[0], mobs: groupMobs }));
       ref.mobOverlays.push(marker);
     });
-  }, [mobs, mode]);
+  }, [mobs, mode, mapReadyTick]);
 
   // Separate effect: re-render landmarks when they change (without full map rebuild)
   React.useEffect(() => {
@@ -1038,7 +1043,7 @@ function GooglePaddockMap({
       icon: { path: g.SymbolPath.CIRCLE, scale: 8, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 },
       zIndex: 999,
     });
-  }, [userLocation]);
+  }, [userLocation, mapReadyTick]);
 
   // ── Field note pins effect ─────────────────────────────────────────────────
   React.useEffect(() => {
@@ -1078,7 +1083,7 @@ function GooglePaddockMap({
       m.addListener("click", () => onSelectNote?.(note));
       ref.noteMarkers.push(m);
     });
-  }, [fieldNotes, showNotesOnMap, mode]);
+  }, [fieldNotes, showNotesOnMap, mode, mapReadyTick]);
 
 
   // Effect: update polygons when paddocks change — in-place updates, never destroy/recreate
