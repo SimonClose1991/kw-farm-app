@@ -649,12 +649,15 @@ function GooglePaddockMap({
         // Individual polygon click — routes to pin-picking if active, otherwise normal select
         if (!drawMode) {
           poly.addListener("click", (e) => {
+            // Resolve the CURRENT paddock record at click time — the closure copy
+            // goes stale after renames/edits and would show the old details
+            const fresh = (mapInstanceRef.current?.paddockList || paddocks).find(x => String(x.id) === String(p.id)) || p;
             if (onPickPinRef.current) {
               // Pin-picking mode: place pin at click location, detect paddock
               const lat = e.latLng.lat(), lng = e.latLng.lng();
-              onPickPinRef.current(lat, lng, p.name);
+              onPickPinRef.current(lat, lng, fresh.name);
             } else {
-              onSelect(p);
+              onSelect(fresh);
             }
           });
         }
@@ -726,7 +729,8 @@ function GooglePaddockMap({
           // Check exact containment first
           for (const [pid, poly] of Object.entries(ref.polygons || {})) {
             if (window.google.maps.geometry.poly.containsLocation(latLng, poly)) {
-              const p = paddocks.find(x => String(x.id) === String(pid));
+              // Current record, not the render-time closure — stale after renames
+              const p = (ref.paddockList || paddocks).find(x => String(x.id) === String(pid));
               if (p) { onSelect(p); return; }
             }
           }
@@ -739,7 +743,7 @@ function GooglePaddockMap({
             if (dist < nearestDist) { nearestDist = dist; nearest = pid; }
           }
           if (nearest && nearestDist < tol) {
-            const p = paddocks.find(x => String(x.id) === String(nearest));
+            const p = (ref.paddockList || paddocks).find(x => String(x.id) === String(nearest));
             if (p) onSelect(p);
           }
         });
@@ -752,7 +756,9 @@ function GooglePaddockMap({
         const gateIds = freshOpenGateIds || openGateIds;
         landmarkMarkers.forEach(m => { try { m.setMap(null); } catch {} });
         landmarkMarkers.length = 0;
-        landmarks.forEach((l) => {
+        // Use the current landmark list from the ref (kept fresh by effects) — the
+        // closure copy goes stale after landmark edits
+        (mapInstanceRef.current?.landmarks || landmarks).forEach((l) => {
           if (l.lat == null || l.lng == null) return;
           const pos = { lat: Number(l.lat), lng: Number(l.lng) };
           const cat = Object.values(LANDMARK_CATEGORIES).flat().find((c) => c.type === l.type);
@@ -1148,8 +1154,10 @@ function GooglePaddockMap({
         const poly = new g.Polygon({ paths: path, strokeColor, strokeWeight, fillColor: fillColour, fillOpacity, map });
         if (!drawMode) {
           poly.addListener("click", (e) => {
-            if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), p.name); }
-            else { onSelect(p); }
+            // Resolve the CURRENT paddock record at click time (closure copy goes stale)
+            const fresh = (mapInstanceRef.current?.paddockList || [p]).find(x => String(x.id) === String(p.id)) || p;
+            if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), fresh.name); }
+            else { onSelect(fresh); }
           });
         }
         ref.polygons[p.id] = poly;
