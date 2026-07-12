@@ -410,6 +410,26 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
 // never snaps back to the default after the user has zoomed or panned.
 const SAVED_MAP_VIEWPORTS = {};
 
+// Collapse paddock records sitting on (virtually) the same centroid — duplicate
+// rows (e.g. a re-imported "Paddock 46" alongside its renamed "Airstrip") would
+// otherwise draw two name labels on top of each other. Prefers the custom name
+// over a default "Paddock N" name.
+const isDefaultPaddockName = (n) => /^paddock\s*\d+$/i.test(String(n || "").trim());
+const dedupePaddocksForLabels = (list, getCentroid) => {
+  const kept = [];
+  (list || []).forEach((p) => {
+    const cen = getCentroid(p);
+    if (!cen) return;
+    const i = kept.findIndex((q) => {
+      const qc = getCentroid(q);
+      return qc && Math.abs(qc.lat - cen.lat) < 5e-5 && Math.abs(qc.lng - cen.lng) < 5e-5;
+    });
+    if (i === -1) kept.push(p);
+    else if (isDefaultPaddockName(kept[i].name) && !isDefaultPaddockName(p.name)) kept[i] = p;
+  });
+  return kept;
+};
+
 function GooglePaddockMap({
   paddocks, center, onSelect, apiKey, onError,
   mode = "paddocks",
@@ -641,8 +661,12 @@ function GooglePaddockMap({
         polygons[p.id] = poly;  // keyed by ID
         overlays.push(poly);
 
-        // Initial label at current zoom
-        const lm = updateLabelForZoom(g, map, centroid, p, { setMap: () => {} }, map.getZoom(), insightMode, paddockStats);
+      });
+
+      // Initial labels at current zoom — deduped so duplicate paddock records
+      // don't draw two names on top of each other
+      dedupePaddocksForLabels(paddocks, (p) => centroids[p.id]).forEach((p) => {
+        const lm = updateLabelForZoom(g, map, centroids[p.id], p, { setMap: () => {} }, map.getZoom(), insightMode, paddockStats);
         labelMarkers[p.id] = lm || null;
         trackLabel(lm); // register in persistent Set
       });
@@ -667,11 +691,14 @@ function GooglePaddockMap({
           const freshInsightMode = ref?.currentInsightMode || insightMode;
           const freshPaddockStats = ref?.currentPaddockStats || paddockStats;
           const freshCentroids = ref?.centroids || centroids;
+          // Use the CURRENT paddock list, not the closure — renames/additions since
+          // the map was built would otherwise redraw stale names on zoom
+          const freshPaddocks = ref?.paddockList || paddocks;
           // Clear ALL labels via persistent Set — no closure staleness possible
           clearAllLabels();
           const newLabels = {};
           if (ref) ref.labelMarkers = newLabels;
-          paddocks.forEach((p) => {
+          dedupePaddocksForLabels(freshPaddocks, (p) => freshCentroids[p.id]).forEach((p) => {
             const cen = freshCentroids[p.id];
             if (!cen) return;
             const newLm = updateLabelForZoom(g, map, cen, p, { setMap: () => {} }, z, freshInsightMode, freshPaddockStats);
@@ -1178,7 +1205,7 @@ function GooglePaddockMap({
       const g = window.google.maps;
       clearAllLabels(); // clears every marker ever registered
       if (ref.labelMarkers) ref.labelMarkers = {};
-      paddocks.forEach((p) => {
+      dedupePaddocksForLabels(paddocks, (p) => ref.centroids?.[p.id]).forEach((p) => {
         const cen = ref.centroids?.[p.id];
         if (!cen) return;
         const newLm = updateLabelForZoom(g, ref.map, cen, p, { setMap: () => {} }, z, insightMode, paddockStats);
@@ -3812,9 +3839,23 @@ export default function App() {
               const data = JSON.parse(ev.target.result);
               const imported = geojsonToPaddocks(data);
               if (imported.length === 0) { showToast("No paddock features found"); return; }
-              showToast(`Saving ${imported.length} paddock${imported.length > 1 ? "s" : ""}...`);
+              // Skip features whose geometry already exists — re-importing the same
+              // file used to create duplicate paddocks (old default name alongside
+              // the renamed one, drawing overlapping labels on the map)
+              const geomKey = (gj) => {
+                try {
+                  const ring = gj?.type === "MultiPolygon" ? gj.coordinates[0][0] : gj?.coordinates?.[0];
+                  if (!ring?.length) return null;
+                  return ring.slice(0, 5).map(([x, y]) => `${Number(x).toFixed(5)},${Number(y).toFixed(5)}`).join("|");
+                } catch { return null; }
+              };
+              const existingGeoms = new Set(paddocks.map((p) => geomKey(p.geojson)).filter(Boolean));
+              const fresh = imported.filter((p) => { const k = geomKey(p.geojson); return !k || !existingGeoms.has(k); });
+              const skippedCount = imported.length - fresh.length;
+              if (fresh.length === 0) { showToast("All paddocks in that file are already mapped — nothing imported"); return; }
+              showToast(`Saving ${fresh.length} paddock${fresh.length > 1 ? "s" : ""}${skippedCount ? ` (${skippedCount} already mapped, skipped)` : ""}...`);
               const created = [];
-              for (const p of imported) {
+              for (const p of fresh) {
                 const { id, ...fields } = p;
                 try {
                   const saved = await api.createPaddock(farmName, fields);
