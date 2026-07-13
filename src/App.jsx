@@ -968,20 +968,21 @@ function GooglePaddockMap({
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
     if (!ref?.polygons || !window.google?.maps) return;
-    // Update polygon strokes for open/closed gates
+    // Update polygon strokes for open/closed gates (polygons are keyed by id)
+    ref.currentOpenGateIds = openGateIds;
     paddocks.forEach((p) => {
-      const poly = ref.polygons[p.name];
+      const poly = ref.polygons[p.id];
       if (!poly) return;
-      const isGateOpen = (ref.landmarks || []).some(l =>
+      const isGateOpen = (landmarks.length ? landmarks : (ref.landmarks || [])).some(l =>
         l.type === "Gate" && openGateIds.includes(String(l.id)) &&
         (l.paddockA === p.name || l.paddockB === p.name)
       );
       poly.setOptions({
         strokeColor: isGateOpen ? "#eab308" : "#ffffff",
-        strokeWeight: isGateOpen ? 3 : 2,
+        strokeWeight: isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5),
       });
     });
-  }, [openGateIds, paddocks]);
+  }, [openGateIds, paddocks, landmarks, mapReadyTick]);
 
   // Separate effect: update mob markers when mobs change — no map rebuild, no fitBounds
   React.useEffect(() => {
@@ -2820,6 +2821,7 @@ export default function App() {
   const [landmarkEditMode, setLandmarkEditMode] = useState(false);
   const [confirmLmDel, setConfirmLmDel] = useState(false); // two-step landmark delete
   const [mapDrawMode, setMapDrawMode] = useState(false); // true while drawing a new paddock shape
+  const [mapSpeciesFilter, setMapSpeciesFilter] = useState("All"); // livestock map pin filter
   const [shapeEditPaddock, setShapeEditPaddock] = useState(null); // paddock being reshaped on the map
   const [shapeEditHa, setShapeEditHa] = useState(null); // live ha readout while reshaping
   const shapeEditCtlRef = useRef(null); // { getLatLngs, restore } provided by the map
@@ -3472,6 +3474,17 @@ export default function App() {
     { id: "outline",  label: "Outline Only",        icon: "⬜" },
   ];
 
+  // Species/type filter for the livestock map pins ("All" shows everything)
+  const MAP_MOB_FILTERS = {
+    Cattle: (m) => m.species === "Cattle",
+    Bulls:  (m) => m.type === "Bulls" || m.species === "Bulls",
+    Sheep:  (m) => m.species === "Sheep",
+    Rams:   (m) => m.type === "Rams" || m.species === "Rams",
+  };
+  const mapFilteredMobs = mapSpeciesFilter === "All"
+    ? mobs
+    : mobs.filter(MAP_MOB_FILTERS[mapSpeciesFilter] || (() => true));
+
   // Plain render function, NOT a component: defining a component inside App gives
   // it a new identity on every render, so React unmounted and rebuilt the whole
   // map screen each time state changed — resetting the map's zoom and position.
@@ -3683,7 +3696,7 @@ export default function App() {
             <>
               <GooglePaddockMap
                 paddocks={paddocks}
-                mobs={mobs}
+                mobs={mapFilteredMobs}
                 mode="livestock"
                 center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
                 onSelect={() => {}}
@@ -3691,8 +3704,21 @@ export default function App() {
                 apiKey={googleMapsKey}
                 onError={() => setMapLoadError(true)}
                 userLocation={userLocation}
+                landmarks={landmarks}
+                openGateIds={openGates}
+                onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
                 instanceRef={livMapRef}
               />
+
+              {/* ── Species filter chips — pins show only the selected kind ── */}
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex gap-1.5 bg-white/90 backdrop-blur-sm rounded-full px-2 py-1.5 shadow-md max-w-[95%] overflow-x-auto">
+                {[["All", ""], ["Cattle", "🐄"], ["Bulls", "🐂"], ["Sheep", "🐑"], ["Rams", "🐏"]].map(([label, icon]) => (
+                  <button key={label} onClick={() => setMapSpeciesFilter(label)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${mapSpeciesFilter === label ? "bg-red-900 text-white" : "bg-slate-100 text-slate-600"}`}>
+                    {icon && <span>{icon}</span>}{label}
+                  </button>
+                ))}
+              </div>
 
               {/* ── Drag overlay — covers Google Map during mob drag, intercepts all pointer events ── */}
               {draggingMob && (
