@@ -575,6 +575,7 @@ function GooglePaddockMap({
 
     const marker = new g.Marker({
       position: centroid, map,
+      clickable: false, // let taps pass through to the paddock polygon below
       icon: {
         url: canvas.toDataURL(),
         scaledSize: new g.Size(maxW, totalH),
@@ -2924,6 +2925,8 @@ export default function App() {
   const [showRecords, setShowRecords] = useState(false);
   const [recordsType, setRecordsType] = useState("deaths");
   const [recordsDateFrom, setRecordsDateFrom] = useState("");
+  const [recordsFilters, setRecordsFilters] = useState({}); // column key → selected value
+  const [recordsSort, setRecordsSort] = useState(null); // { key, dir } from tapping a column header
   const [recordsDateTo, setRecordsDateTo] = useState("");
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [allMobHistory, setAllMobHistory] = useState([]); // all mob history across all mobs
@@ -4058,8 +4061,23 @@ export default function App() {
 
 
       {pinSelected && (
-        <Modal title={pinSelected.mob ? pinSelected.mob.name : `Group of ${pinSelected.l}`} onClose={() => setPinSelected(null)}>
-          <p className="text-sm text-slate-500 mb-3">{pinSelected.mob ? pinSelected.mob.desc : "Unidentified group on map"}</p>
+        <Modal title={pinSelected.mobs?.length > 1 ? `${pinSelected.mobs.length} mobs · ${pinSelected.l} head` : (pinSelected.mob ? pinSelected.mob.name : `Group of ${pinSelected.l}`)} onClose={() => setPinSelected(null)}>
+          <p className="text-sm text-slate-500 mb-3">{pinSelected.mobs?.length > 1 ? "Multiple mobs share this paddock — tap one for details" : (pinSelected.mob ? pinSelected.mob.desc : "Unidentified group on map")}</p>
+          {pinSelected.mobs?.length > 1 && (
+            <div className="space-y-2 mb-3">
+              {pinSelected.mobs.map(m => (
+                <button key={m.id}
+                  onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); setPinSelected(null); }}
+                  className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 text-left hover:bg-slate-100">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-800 text-sm truncate">{m.name}</div>
+                    <div className="text-xs text-slate-400">{m.count} hd · {m.type || m.species}{m.mgmtGroup && m.mgmtGroup !== "Unassigned" ? ` · ${m.mgmtGroup}` : ""}</div>
+                  </div>
+                  <span className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0" style={{ backgroundColor: TAG_COLOUR_HEX[m.tag] || "#e2e8f0" }} />
+                </button>
+              ))}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div className="bg-slate-50 rounded-2xl p-4">
               <div className="text-xs text-slate-400 font-semibold">HEAD COUNT</div>
@@ -4072,7 +4090,7 @@ export default function App() {
               </div>
             )}
           </div>
-          {pinSelected.mob?.tag && (
+          {!(pinSelected.mobs?.length > 1) && pinSelected.mob?.tag && (
             <div className="flex items-center gap-2 bg-slate-50 rounded-2xl p-4 mb-3">
               <span className="w-5 h-5 rounded-full border border-slate-300" style={{ backgroundColor: TAG_COLOUR_HEX[pinSelected.mob.tag] || "#e2e8f0" }} />
               <div>
@@ -4081,7 +4099,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {pinSelected.mob && (
+          {!(pinSelected.mobs?.length > 1) && pinSelected.mob && (
             <div className="flex gap-2">
               <button
                 onClick={() => { setSelectedMobId(pinSelected.mob.id); setMobTab("Summary"); setPinSelected(null); }}
@@ -5086,8 +5104,8 @@ export default function App() {
     switch (showFilter) {
       case "Sheep": return m.species === "Sheep";
       case "Cattle": return m.species === "Cattle";
-      case "Rams": return m.type === "Rams";
-      case "Bulls": return m.type === "Bulls";
+      case "Rams": return m.type === "Rams" || m.species === "Rams";
+      case "Bulls": return m.type === "Bulls" || m.species === "Bulls";
       case "Withholding": return m.whp > 0;
       default: return true;
     }
@@ -6267,6 +6285,7 @@ export default function App() {
               { key: "species", label: "Species" },
               { key: "breed",   label: "Breed" },
               { key: "ageClass",label: "Age Class" },
+              { key: "mgmtGroup", label: "Mgmt Tag" },
               { key: "paddock", label: "Paddock" },
               { key: "detail",  label: "Detail" },
             ];
@@ -6276,6 +6295,7 @@ export default function App() {
               { key: "mobName", label: "Mob" },
               { key: "species", label: "Species" },
               { key: "breed",   label: "Breed" },
+              { key: "mgmtGroup", label: "Mgmt Tag" },
               { key: "paddock", label: "Paddock" },
               { key: "detail",  label: "Treatment detail" },
             ];
@@ -6284,11 +6304,28 @@ export default function App() {
               { key: "date",    label: "Date" },
               { key: "mobName", label: "Mob" },
               { key: "species", label: "Species" },
+              { key: "mgmtGroup", label: "Mgmt Tag" },
               { key: "paddock", label: "Paddock" },
               { key: "detail",  label: "Detail" },
             ];
           }
         }
+
+        // ── Column filters + header sorting ──
+        // preFilterRows keeps the full set so filter dropdowns list every value
+        const preFilterRows = rows;
+        const activeFilters = Object.entries(recordsFilters).filter(([k, v]) => v && columns.some(c => c.key === k));
+        if (activeFilters.length) {
+          rows = rows.filter(r => activeFilters.every(([k, v]) => String(r[k] || "") === v));
+        }
+        if (recordsSort && columns.some(c => c.key === recordsSort.key)) {
+          const { key, dir } = recordsSort;
+          rows = [...rows].sort((a, b) =>
+            String(a[key] || "").localeCompare(String(b[key] || ""), undefined, { numeric: true }) * (dir === "asc" ? 1 : -1)
+          );
+        }
+        const FILTERABLE_KEYS = ["mobName", "species", "breed", "ageClass", "paddock", "mgmtGroup", "title", "location", "applicationMethod"];
+        const filterableCols = columns.filter(c => FILTERABLE_KEYS.includes(c.key));
 
         // Export helpers
         const toCSV = () => {
@@ -6342,11 +6379,24 @@ export default function App() {
                 <tbody>${tableRows}</tbody>
               </table>
             </body></html>`;
-          const win = window.open("", "_blank");
-          win.document.write(html);
-          win.document.close();
-          win.focus();
-          setTimeout(() => win.print(), 500);
+          // Print from a hidden iframe so the app stays open — opening a new
+          // window strands iPhone/PWA users outside the app with no way back.
+          try {
+            const frame = document.createElement("iframe");
+            frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+            frame.srcdoc = html;
+            frame.onload = () => {
+              try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch {}
+              setTimeout(() => { try { frame.remove(); } catch {} }, 60000);
+            };
+            document.body.appendChild(frame);
+          } catch {
+            const win = window.open("", "_blank");
+            win.document.write(html);
+            win.document.close();
+            win.focus();
+            setTimeout(() => win.print(), 500);
+          }
         };
 
         return (
@@ -6368,6 +6418,8 @@ export default function App() {
                   key={t.id}
                   onClick={async () => {
                     setRecordsType(t.id);
+                    setRecordsFilters({});
+                    setRecordsSort(null);
                     // Load mob history if needed
                     if (t.action !== null && allMobHistory.length === 0) {
                       setRecordsLoading(true);
@@ -6408,6 +6460,30 @@ export default function App() {
               )}
               <span className="ml-auto text-xs text-slate-400">{rows.length} records</span>
             </div>
+            {/* Column filters */}
+            {filterableCols.length > 0 && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-slate-100 flex-shrink-0 flex-wrap">
+                {filterableCols.map(c => {
+                  const values = [...new Set(preFilterRows.map(r => r[c.key]).filter(Boolean).map(String))]
+                    .sort((a, b) => a.localeCompare(b));
+                  if (values.length === 0) return null;
+                  return (
+                    <select key={c.key} value={recordsFilters[c.key] || ""}
+                      onChange={e => setRecordsFilters(prev => ({ ...prev, [c.key]: e.target.value }))}
+                      className={`border rounded-lg px-2 py-1 text-xs ${recordsFilters[c.key] ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-slate-200 bg-white text-slate-600"}`}>
+                      <option value="">{c.label}: All</option>
+                      {values.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  );
+                })}
+                {Object.values(recordsFilters).some(Boolean) && (
+                  <button onClick={() => setRecordsFilters({})}
+                    className="text-xs text-amber-700 font-semibold px-2 py-1 rounded-lg bg-amber-50">
+                    Clear filters
+                  </button>
+                )}
+              </div>
+            )}
             {/* Export buttons */}
             <div className="flex gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex-shrink-0">
               <div className="text-xs text-slate-400 font-semibold self-center mr-1">Export:</div>
@@ -6430,7 +6506,12 @@ export default function App() {
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200">
                       {columns.map(c => (
-                        <th key={c.key} className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{c.label}</th>
+                        <th key={c.key}
+                          onClick={() => setRecordsSort(s => s?.key === c.key ? { key: c.key, dir: s.dir === "asc" ? "desc" : "asc" } : { key: c.key, dir: "asc" })}
+                          className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap cursor-pointer select-none hover:text-slate-800"
+                          title="Tap to sort">
+                          {c.label}{recordsSort?.key === c.key ? (recordsSort.dir === "asc" ? " ▲" : " ▼") : ""}
+                        </th>
                       ))}
                     </tr>
                   </thead>
@@ -6904,7 +6985,31 @@ export default function App() {
           <div>
             <label className="text-sm font-bold text-slate-700 block mb-2">Management Tag</label>
             <p className="text-xs text-slate-400 mb-2">Assign to a group of animals to manage or report on.</p>
-            <input value={newMobForm.mgmtGroup || ""} onChange={(e) => updateNewMob("mgmtGroup", e.target.value)} placeholder="e.g. Breeders" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+            {(() => {
+              // Only tags currently in use — keeps everyone using identical spellings
+              const usedTags = [...new Set(mobs.map(m => m.mgmtGroup).filter(t => t && t !== "Unassigned"))]
+                .sort((a, b) => a.localeCompare(b));
+              const val = newMobForm.mgmtGroup || "";
+              const customMode = newMobForm._mgmtCustom || (val && !usedTags.includes(val));
+              return (<>
+                <select
+                  value={customMode ? "__custom__" : val}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") { updateNewMob("_mgmtCustom", true); updateNewMob("mgmtGroup", ""); }
+                    else { updateNewMob("_mgmtCustom", false); updateNewMob("mgmtGroup", e.target.value); }
+                  }}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
+                  <option value="">No management tag</option>
+                  {usedTags.map((t) => <option key={t} value={t}>{t}</option>)}
+                  <option value="__custom__">+ Add a new tag</option>
+                </select>
+                {customMode && (
+                  <input value={val} onChange={(e) => updateNewMob("mgmtGroup", e.target.value)}
+                    placeholder="Type new tag name..." autoFocus
+                    className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white" />
+                )}
+              </>);
+            })()}
           </div>
 
           <div>

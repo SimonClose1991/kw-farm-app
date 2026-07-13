@@ -193,7 +193,7 @@ router.get("/history", requireAuth, async (req, res) => {
   const allHistory = [];
   for (const mob of farmMobs) {
     const history = await db.select().from(mobHistory).where(eq(mobHistory.mobId, mob.id));
-    history.forEach(h => allHistory.push({ ...h, mobName: mob.name, species: mob.species, breed: mob.breed, ageClass: mob.ageClass, tag: mob.tag, paddock: mob.paddock }));
+    history.forEach(h => allHistory.push({ ...h, mobName: mob.name, species: mob.species, breed: mob.breed, ageClass: mob.ageClass, tag: mob.tag, paddock: mob.paddock, mgmtGroup: mob.mgmtGroup }));
   }
   // Sort by date descending
   allHistory.sort((a, b) => (a.date < b.date ? 1 : -1));
