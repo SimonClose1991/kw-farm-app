@@ -5619,7 +5619,7 @@ export default function App() {
       } else if (field.label === "Transfer to property") {
         options = Object.keys(farmsMobs).filter((f) => f !== farmName);
       } else if (field.label === "Move to paddock" || field.label === "Copy to paddock") {
-        options = paddocks.map((p) => p.name);
+        options = paddocks.map((p) => p.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       }
       return (
         <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
