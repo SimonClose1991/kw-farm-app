@@ -3558,17 +3558,38 @@ export default function App() {
   // in the New Mob form. useMemo keeps the reference stable until data changes.
   const paddockStats = React.useMemo(() => {
     const stats = {};
+    // Adjacency of paddocks joined by OPEN gates — stocking rate is computed
+    // over the whole connected group (combined DSE ÷ combined ha)
+    const adj = {};
+    landmarks.forEach((l) => {
+      if (l.type !== "Gate" || !openGates.includes(String(l.id)) || !l.paddockA || !l.paddockB) return;
+      (adj[l.paddockA] = adj[l.paddockA] || []).push(l.paddockB);
+      (adj[l.paddockB] = adj[l.paddockB] || []).push(l.paddockA);
+    });
+    const componentOf = (start) => {
+      const seen = new Set([start]);
+      const stack = [start];
+      while (stack.length) {
+        const n = stack.pop();
+        (adj[n] || []).forEach((x) => { if (!seen.has(x)) { seen.add(x); stack.push(x); } });
+      }
+      return seen;
+    };
     paddocks.forEach((p) => {
+      const group = adj[p.name] ? componentOf(p.name) : new Set([p.name]);
+      const groupPaddocks = paddocks.filter(x => group.has(x.name));
+      const groupHa = groupPaddocks.reduce((s, x) => s + (Number(x.ha) || 0), 0);
       const paddockMobs = mobs.filter((m) => m.paddock === p.name);
-      const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
+      const groupMobs = group.size > 1 ? mobs.filter((m) => group.has(m.paddock)) : paddockMobs;
+      const dseTotal = groupMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
       const isGrazing = !NON_GRAZING_LAND_USES.has(p.landUse);
-      const dsePerHa = (isGrazing && p.ha) ? dseTotal / Number(p.ha) : 0;
+      const dsePerHa = (isGrazing && groupHa) ? dseTotal / groupHa : 0;
       const lastFooEntry = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
       const daysSinceGrazed = paddockMobs.length > 0 ? Math.min(...paddockMobs.map((m) => m.daysInPaddock ?? 999)) : null;
       stats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing };
     });
     return stats;
-  }, [paddocks, mobs, fooHistory]);
+  }, [paddocks, mobs, fooHistory, landmarks, openGates]);
 
   // [extracted to top-level component]
   const PIN_DATA = mobs.map((m, i) => {
@@ -3881,9 +3902,12 @@ export default function App() {
                     const g = window.google.maps;
                     let targetPaddock = null;
                     const polygonsRef = livMapRef.current?.polygons || {};
-                    for (const [pName, poly] of Object.entries(polygonsRef)) {
+                    for (const [pid, poly] of Object.entries(polygonsRef)) {
                       if (g.geometry?.poly?.containsLocation(dropLatLng, poly)) {
-                        targetPaddock = pName;
+                        // Polygon keys are paddock IDs — resolve to the paddock NAME,
+                        // otherwise the mob gets assigned to a paddock called "137"
+                        const pd = (livMapRef.current?.paddockList || paddocks).find(x => String(x.id) === String(pid));
+                        targetPaddock = pd ? pd.name : null;
                         break;
                       }
                     }
@@ -4672,11 +4696,31 @@ export default function App() {
       )}
 
       {paddockDetail && (() => {
-        const paddockMobs = mobs.filter((m) => m.paddock === paddockDetail.name);
+        // Open gates merge paddocks: walk the chain of open gates from this
+        // paddock to find every connected paddock (A↔B open + B↔C open ⇒ A,B,C)
+        const gateGroup = (() => {
+          const group = new Set([paddockDetail.name]);
+          const openGateLms = landmarks.filter(l => l.type === "Gate" && openGates.includes(String(l.id)) && l.paddockA && l.paddockB);
+          let grew = true;
+          while (grew) {
+            grew = false;
+            openGateLms.forEach(gt => {
+              if (group.has(gt.paddockA) && !group.has(gt.paddockB)) { group.add(gt.paddockB); grew = true; }
+              if (group.has(gt.paddockB) && !group.has(gt.paddockA)) { group.add(gt.paddockA); grew = true; }
+            });
+          }
+          return [...group];
+        })();
+        const isCombined = gateGroup.length > 1;
+        const groupPaddocks = paddocks.filter(p => gateGroup.includes(p.name));
+        const combinedHa = isCombined
+          ? groupPaddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0)
+          : (Number(paddockDetail.ha) || 0);
+        const paddockMobs = mobs.filter((m) => gateGroup.includes(m.paddock));
         const headCount = paddockMobs.reduce((s, m) => s + m.count, 0);
-        const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
+        const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
         const isGrazingPaddock = !NON_GRAZING_LAND_USES.has(paddockDetail.landUse);
-        const dsePerHa = (isGrazingPaddock && paddockDetail.ha) ? dseTotal / paddockDetail.ha : 0;
+        const dsePerHa = (isGrazingPaddock && combinedHa) ? dseTotal / combinedHa : 0;
         return (
           <Modal title={paddockEditMode ? "Edit Paddock" : paddockDetail.name} onClose={() => { setPaddockDetail(null); setPaddockEditMode(false); setConfirmPaddockDel(false); }}>
             {paddockEditMode ? (
@@ -4795,7 +4839,7 @@ export default function App() {
                 <div className="text-2xl font-extrabold text-slate-800 mt-1">{Number(paddockDetail.ha||0).toFixed(1)} ha</div>
               </div>
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
-                <div className="text-xs text-slate-400 font-semibold">HEAD COUNT</div>
+                <div className="text-xs text-slate-400 font-semibold">HEAD COUNT{isCombined ? " (COMBINED)" : ""}</div>
                 <div className="text-2xl font-extrabold text-slate-800 mt-1">{headCount.toLocaleString()}</div>
               </div>
               <div className={`rounded-2xl p-4 col-span-2 ${isGrazingPaddock ? "bg-gradient-to-br from-red-950 to-red-900 text-white" : "bg-stone-100 text-stone-500 border border-stone-200"}`}>
@@ -4803,7 +4847,12 @@ export default function App() {
                 {isGrazingPaddock ? (
                   <>
                     <div className="text-2xl font-extrabold mt-1">{dsePerHa.toFixed(2)} DSE/ha</div>
-                    <div className="text-xs opacity-80 mt-1">{dseTotal.toLocaleString(undefined,{maximumFractionDigits:1})} total DSE ÷ {paddockDetail.ha} ha</div>
+                    <div className="text-xs opacity-80 mt-1">{dseTotal.toLocaleString(undefined,{maximumFractionDigits:1})} total DSE ÷ {combinedHa.toFixed(1)} ha{isCombined ? " (combined)" : ""}</div>
+                    {isCombined && (
+                      <div className="text-xs mt-1.5 bg-yellow-400/20 text-yellow-200 rounded-lg px-2 py-1 font-semibold">
+                        ⊙ Gate open — combined with {gateGroup.filter(n => n !== paddockDetail.name).join(", ")}
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
