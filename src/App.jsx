@@ -7793,7 +7793,8 @@ export default function App() {
             </div>
           </div>
 
-          <div className="text-sm font-bold text-slate-700 mb-2">Team members</div>
+          <div className="text-sm font-bold text-slate-700 mb-0.5">Team members</div>
+          <div className="text-xs text-slate-400 mb-2">Changes save automatically — you'll see a confirmation each time.</div>
           <div className="space-y-2 mb-4">
             {accounts.map((a) => (
               <div key={a.id} className="flex items-center justify-between bg-white border border-slate-100 rounded-2xl p-3 shadow-sm">
@@ -7808,11 +7809,17 @@ export default function App() {
                         value={a.role}
                         onChange={async (e) => {
                           const newRole = e.target.value;
+                          const prevRole = a.role;
                           setAccounts((prev) => prev.map((acc) => acc.id === a.id ? { ...acc, role: newRole } : acc));
                           try {
-                            await api.updateAccount(a.id, { role: newRole });
+                            const updated = await api.updateAccount(a.id, { role: newRole });
+                            // Sync with what the server actually stored
+                            setAccounts((prev) => prev.map((acc) => acc.id === a.id ? { ...acc, ...updated } : acc));
+                            showToast(`✓ ${a.name || a.email} is now ${newRole}`);
                           } catch (err) {
-                            showToast(err.message || "Couldn't update role");
+                            // Save failed — snap the dropdown back so it's obvious
+                            setAccounts((prev) => prev.map((acc) => acc.id === a.id ? { ...acc, role: prevRole } : acc));
+                            showToast(`Couldn't save role change — ${err.message || "check your connection and try again"}`);
                           }
                         }}
                         className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
@@ -7852,9 +7859,16 @@ export default function App() {
                                   const next = base.includes(f) ? base.filter(x => x !== f) : [...base, f];
                                   // If all farms selected, store as empty (= no restriction)
                                   const toStore = next.length === ALL_FARM_NAMES.length ? [] : next;
+                                  const prevFarms = a.allowedFarms || [];
                                   setAccounts(prev => prev.map(acc => acc.id === a.id ? { ...acc, allowedFarms: toStore } : acc));
-                                  try { await api.updateAccount(a.id, { allowedFarms: toStore }); }
-                                  catch (err) { showToast(err.message || "Couldn't update farm access"); }
+                                  try {
+                                    await api.updateAccount(a.id, { allowedFarms: toStore });
+                                    showToast("✓ Farm access saved");
+                                  } catch (err) {
+                                    // Save failed — snap the chips back so it's obvious
+                                    setAccounts(prev => prev.map(acc => acc.id === a.id ? { ...acc, allowedFarms: prevFarms } : acc));
+                                    showToast(`Couldn't save farm access — ${err.message || "check your connection and try again"}`);
+                                  }
                                 }}
                                 className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border transition-colors ${
                                   hasAccess
