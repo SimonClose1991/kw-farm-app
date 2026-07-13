@@ -1888,8 +1888,97 @@ function WeatherWidget({ farmName, farmCenters }) {
 }
 
 
+// ── Stock breakdown — horizontal bar charts of head counts ──────────────────
+const STOCK_BAR_COLOURS = ["#2ea8c9", "#5cb85c", "#f5a623", "#e8c917", "#9b6dd7", "#f78fb3", "#e05252", "#8a97a5"];
+
+function StockBars({ rows }) {
+  if (rows.length === 0) return <div className="text-xs text-slate-400 italic py-2">No stock recorded</div>;
+  const max = Math.max(1, ...rows.map(r => r.value));
+  return (
+    <div className="space-y-2">
+      {rows.map((r, i) => {
+        const pct = Math.max(6, Math.round((r.value / max) * 100));
+        return (
+          <div key={r.label} className="flex items-center gap-2">
+            <div className="w-24 text-xs text-slate-500 font-medium flex-shrink-0 leading-tight">{r.label}</div>
+            <div className="flex-1 flex items-center bg-slate-100 rounded-lg h-7 overflow-hidden">
+              <div className="h-full rounded-lg flex items-center justify-end flex-shrink-0"
+                style={{ width: `${pct}%`, backgroundColor: STOCK_BAR_COLOURS[i % STOCK_BAR_COLOURS.length] }}>
+                {pct >= 40 && <span className="text-white text-xs font-bold px-2">{r.value.toLocaleString()}</span>}
+              </div>
+              {pct < 40 && <span className="text-slate-600 text-xs font-semibold px-2">{r.value.toLocaleString()}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function groupStockRows(list, key) {
+  const counts = {};
+  list.forEach(m => {
+    const k = (m[key] && m[key] !== "Unassigned") ? m[key] : "Unassigned";
+    counts[k] = (counts[k] || 0) + (Number(m.count) || 0);
+  });
+  const rows = Object.entries(counts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  if (rows.length > 7) {
+    const extra = rows.splice(7);
+    rows.push({ label: `Other (${extra.length})`, value: extra.reduce((s, r) => s + r.value, 0) });
+  }
+  return rows;
+}
+
+function SpeciesBreakdownCard({ title, list }) {
+  const [dim, setDim] = React.useState("type");
+  const DIMS = [["type", "Type"], ["ageClass", "Age"], ["mgmtGroup", "Mgmt tag"], ["breed", "Breed"]];
+  return (
+    <div className="bg-stone-50 rounded-xl p-3 border border-stone-100">
+      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+        <div className="font-semibold text-stone-700 text-sm">{title}</div>
+        <div className="flex gap-1">
+          {DIMS.map(([k, label]) => (
+            <button key={k} onClick={() => setDim(k)}
+              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${dim === k ? "bg-stone-700 text-white" : "bg-white border border-stone-200 text-stone-500"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <StockBars rows={groupStockRows(list, dim)} />
+    </div>
+  );
+}
+
+function StockBreakdown({ mobs }) {
+  const cattle = mobs.filter(m => m.species === "Cattle" || m.species === "Bulls");
+  const sheep = mobs.filter(m => m.species === "Sheep" || m.species === "Rams");
+  const other = mobs.filter(m => !(m.species === "Cattle" || m.species === "Bulls" || m.species === "Sheep" || m.species === "Rams"));
+  const dse = (list) => Math.round(list.reduce((s, m) => s + (Number(m.count) || 0) * (Number(m.dse) || 0), 0));
+  const heads = (list) => list.reduce((s, m) => s + (Number(m.count) || 0), 0);
+  const dseRows = [
+    { label: "Cattle", value: dse(cattle) },
+    { label: "Sheep", value: dse(sheep) },
+    ...(other.length ? [{ label: "Other", value: dse(other) }] : []),
+  ].filter(r => r.value > 0);
+  if (mobs.length === 0) return <div className="text-sm text-stone-400 italic p-3">No livestock data loaded yet.</div>;
+  return (
+    <div className="space-y-3">
+      {cattle.length > 0 && <SpeciesBreakdownCard title={`🐄 Cattle · ${heads(cattle).toLocaleString()} hd`} list={cattle} />}
+      {sheep.length > 0 && <SpeciesBreakdownCard title={`🐑 Sheep · ${heads(sheep).toLocaleString()} hd`} list={sheep} />}
+      {dseRows.length > 0 && (
+        <div className="bg-stone-50 rounded-xl p-3 border border-stone-100">
+          <div className="font-semibold text-stone-700 text-sm mb-2">🌿 Livestock by DSE</div>
+          <StockBars rows={dseRows} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api, farmCenters, currentUser, homeFarm, setHomeFarm }) {
   const [dashLoading, setDashLoading] = React.useState(false);
+  const [showStock, setShowStock] = React.useState(false); // stock breakdown collapse
 
   const enterFarm = async (name) => {
     setFarmName(name);
@@ -2002,6 +2091,15 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
             </div>
           </div>
 
+          {/* Stock breakdown — this farm's numbers, tap the arrow to expand */}
+          <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
+            <button onClick={() => setShowStock(v => !v)} className="w-full flex items-center justify-between px-4 py-3">
+              <span className="font-semibold text-stone-700 text-sm uppercase tracking-wide">Stock Breakdown</span>
+              <span className={`text-stone-400 text-xs transition-transform duration-200 inline-block ${showStock ? "rotate-180" : ""}`}>▼</span>
+            </button>
+            {showStock && <div className="px-3 pb-3"><StockBreakdown mobs={fMobs} /></div>}
+          </div>
+
           {/* Weather & Schedule — always visible regardless of which farm is open */}
           <WeatherWidget farmName={homeFarm} farmCenters={farmCenters} />
           <MyScheduleWidget currentUser={currentUser} api={api} setTab={setTab} />
@@ -2064,6 +2162,15 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
     </div>
 
     <div className="px-4 pt-4 space-y-3">
+
+      {/* Stock breakdown — all farms combined, tap the arrow to expand */}
+      <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
+        <button onClick={() => setShowStock(v => !v)} className="w-full flex items-center justify-between px-4 py-3">
+          <span className="font-semibold text-stone-700 text-sm uppercase tracking-wide">Stock Breakdown — All Farms</span>
+          <span className={`text-stone-400 text-xs transition-transform duration-200 inline-block ${showStock ? "rotate-180" : ""}`}>▼</span>
+        </button>
+        {showStock && <div className="px-3 pb-3"><StockBreakdown mobs={Object.values(farmsMobs).flat()} /></div>}
+      </div>
 
       {/* ── Weather ── */}
       <WeatherWidget farmName={farmName} farmCenters={farmCenters} />
