@@ -101,6 +101,7 @@ export const landmarks = pgTable("landmarks", {
   notes: text("notes"),
   lat: numeric("lat"),
   lng: numeric("lng"),
+  isOpen: boolean("is_open").default(false), // Gates: persisted open/closed state
   createdAt: timestamp("created_at").defaultNow(),
 });
 

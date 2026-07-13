@@ -32,7 +32,7 @@ router.post("/", requireAuth, requireEditor, async (req, res) => {
 
 // PUT /api/landmarks/:id
 router.put("/:id", requireAuth, requireEditor, async (req, res) => {
-  const { farm, ...fields } = req.body;
+  const { farm, id, farmId, createdAt, ...fields } = req.body;
   const [updated] = await db
     .update(landmarks)
     .set(fields)

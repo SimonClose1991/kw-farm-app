@@ -2938,9 +2938,12 @@ export default function App() {
   const [showAddPaddock, setShowAddPaddock] = useState(false);
   const [newPaddockForm, setNewPaddockForm] = useState({});
   const [paddockDetail, setPaddockDetail] = useState(null);
-  // Gate state: array of {id, paddockA, paddockB, landmarkId} — when a gate is open, the two
-  // paddocks it connects are merged visually (yellow border) and their DSE/ha is combined.
-  const [openGates, setOpenGates] = useState([]);
+  // Gate state is DERIVED from the landmark records (isOpen is stored on the
+  // server), so open gates survive reloads and are shared between devices.
+  const openGates = React.useMemo(
+    () => landmarks.filter(l => l.type === "Gate" && l.isOpen).map(l => String(l.id)),
+    [landmarks]
+  );
   // ── Field Notes ──────────────────────────────────────────────────────────────
   const [fieldNotes, setFieldNotes] = useState([]);
   const [showFieldNotes, setShowFieldNotes] = useState(false);   // notes list screen
@@ -4601,7 +4604,15 @@ export default function App() {
                         const nextGates = opening
                           ? [...openGates, key]
                           : openGates.filter(g => g !== key);
-                        setOpenGates(nextGates);
+                        // Persist on the landmark record — gates stay open across
+                        // app reloads and show the same on everyone's device
+                        setFarmsLandmarks(prev => ({
+                          ...prev,
+                          [farmName]: (prev[farmName] || []).map(l =>
+                            l.id === landmarkDetail.id ? { ...l, isOpen: opening } : l),
+                        }));
+                        api.updateLandmark(landmarkDetail.id, { isOpen: opening })
+                          .catch(err => showToast(err.message || "Couldn't save gate state to the server"));
                         // Also update the map ref directly and re-render landmarks immediately
                         // This avoids the race condition where the inline-function MapScreen
                         // re-evaluates and remounts GooglePaddockMap before state propagates
@@ -5620,6 +5631,8 @@ export default function App() {
     return (
       <input
         type={field.type}
+        step={field.type === "number" ? "any" : undefined}
+        inputMode={field.type === "number" ? "decimal" : undefined}
         value={value}
         placeholder={field.placeholder}
         onChange={(e) => onChange(e.target.value)}
@@ -7170,7 +7183,7 @@ export default function App() {
 
           <div>
             <label className="text-sm font-bold text-slate-700 block mb-2">DSE per head</label>
-            <input type="number" value={newMobForm.dse || ""} onChange={(e) => updateNewMob("dse", e.target.value)} placeholder={species === "Sheep" ? "e.g. 1.5" : "e.g. 6"} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+            <input type="number" step="0.1" inputMode="decimal" value={newMobForm.dse || ""} onChange={(e) => updateNewMob("dse", e.target.value)} placeholder={species === "Sheep" ? "e.g. 1.5" : "e.g. 6"} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
           </div>
 
           <div>
