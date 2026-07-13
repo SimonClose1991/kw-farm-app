@@ -301,11 +301,11 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
     if (insightMode === "grazed") {
       const stats = paddockStats[p.name] || {};
       const days = stats.daysSinceGrazed;
-      if (days == null) return "#475569";
-      if (days === 0) return "#22c55e";
-      if (days < 14) return "#84cc16";
-      if (days < 30) return "#eab308";
-      return "#ef4444";
+      if (days == null) return "#475569";  // no record — grey
+      if (days === 0) return "#ef4444";     // being grazed now — red
+      if (days < 14) return "#eab308";      // short rest — yellow
+      if (days < 30) return "#84cc16";      // fair rest — light green
+      return "#22c55e";                     // well rested — green
     }
     // Custom colour wins over land-use colour
     return customColour || USAGE_COLOURS[p.landUse] || "#999";
@@ -345,7 +345,7 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
           let badge = `${Number(p.ha||0).toFixed(1)} ha`;
           if (insightMode === "stocking") badge = `${(stats.dsePerHa || 0).toFixed(1)} DSE/ha`;
           else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "No data";
-          else if (insightMode === "grazed") badge = stats.daysSinceGrazed != null ? `${stats.daysSinceGrazed}d since grazed` : "No data";
+          else if (insightMode === "grazed") badge = stats.daysSinceGrazed == null ? "No record" : stats.daysSinceGrazed === 0 ? "Grazing now" : `${stats.daysSinceGrazed}d rest`;
           const openGate = landmarks.find(l =>
             l.type === "Gate" && openGateIds.includes(String(l.id)) &&
             (l.paddockA === p.name || l.paddockB === p.name)
@@ -510,11 +510,11 @@ function GooglePaddockMap({
     }
     if (insightMode === "grazed") {
       const days = (paddockStats[p.name] || {}).daysSinceGrazed;
-      if (days == null) return "#475569";
-      if (days === 0) return "#22c55e";
-      if (days < 14) return "#84cc16";
-      if (days < 30) return "#eab308";
-      return "#ef4444";
+      if (days == null) return "#475569";  // no record — grey
+      if (days === 0) return "#ef4444";     // being grazed now — red
+      if (days < 14) return "#eab308";      // short rest — yellow
+      if (days < 30) return "#84cc16";      // fair rest — light green
+      return "#22c55e";                     // well rested — green
     }
     // Default / usage / crop: custom colour wins, then land-use colour
     return customColour || USAGE_COLOURS[p.landUse] || "#999999";
@@ -538,7 +538,7 @@ function GooglePaddockMap({
       badge = `${Number(p.ha||0).toFixed(1)} ha`;
       if (mode_ === "stocking") badge = `${(stats_.dsePerHa||0).toFixed(1)} DSE/ha`;
       else if (mode_ === "feed") badge = stats_.lastFoo ? `${stats_.lastFoo} kgDM/ha` : "";
-      else if (mode_ === "grazed") badge = stats_.daysSinceGrazed != null ? `${stats_.daysSinceGrazed}d ago` : "";
+      else if (mode_ === "grazed") badge = stats_.daysSinceGrazed == null ? "No record" : stats_.daysSinceGrazed === 0 ? "Grazing now" : `${stats_.daysSinceGrazed}d rest`;
     }
 
     // zoom 12-14: abbreviated initials only, no badge (full names get cluttered)
@@ -986,8 +986,15 @@ function GooglePaddockMap({
 
   // Separate effect: update mob markers when mobs change — no map rebuild, no fitBounds
   React.useEffect(() => {
+    const ref0 = mapInstanceRef.current;
+    if (!ref0?.map || !window.google?.maps || mode !== "livestock") return;
+    // Drawing lives in a function stored on the map ref so the paddock effect
+    // can re-run it after centroids update. On farm switch the mobs arrive
+    // before the new farm's paddocks — without the re-run, every pin fell back
+    // to the "unknown paddock" ring around the farm centre.
+    const drawMobPins = () => {
     const ref = mapInstanceRef.current;
-    if (!ref?.map || !window.google?.maps || mode !== "livestock") return;
+    if (!ref?.map || !window.google?.maps) return;
     const g = window.google.maps;
     const { map, centroids, center } = ref;
     // Remove existing mob markers
@@ -1066,6 +1073,9 @@ function GooglePaddockMap({
       marker.addListener("click", () => onSelectPinRef.current?.({ l: totalCount, mob: groupMobs[0], mobs: groupMobs }));
       ref.mobOverlays.push(marker);
     });
+    };
+    ref0.renderMobs = drawMobPins;
+    drawMobPins();
   }, [mobs, mode, mapReadyTick]);
 
   // Separate effect: re-render landmarks when they change (without full map rebuild)
@@ -1191,6 +1201,9 @@ function GooglePaddockMap({
 
     ref.bounds = newBounds;
     ref.paddockList = paddocks;
+    // Centroids just updated — redraw mob pins so they snap from the fallback
+    // ring onto their real paddocks (farm-switch race)
+    if (mode === "livestock" && ref.renderMobs) ref.renderMobs();
   }, [paddocks, mode]);
   React.useEffect(() => {
     const ref = mapInstanceRef.current;
@@ -3558,6 +3571,17 @@ export default function App() {
   // in the New Mob form. useMemo keeps the reference stable until data changes.
   const paddockStats = React.useMemo(() => {
     const stats = {};
+    // Last time stock LEFT each paddock — parsed from Move history entries
+    // ("Moved from X to Y"), used to show rest days on empty paddocks
+    const lastLeftByPaddock = {};
+    allMobHistory.forEach((h) => {
+      if (h.action !== "Move" || !h.detail || !h.date) return;
+      const mm = String(h.detail).match(/Moved from (.+?) to /);
+      if (!mm) return;
+      const from = mm[1];
+      if (!lastLeftByPaddock[from] || h.date > lastLeftByPaddock[from]) lastLeftByPaddock[from] = h.date;
+    });
+    const todayMs = Date.now();
     // Adjacency of paddocks joined by OPEN gates — stocking rate is computed
     // over the whole connected group (combined DSE ÷ combined ha)
     const adj = {};
@@ -3585,11 +3609,20 @@ export default function App() {
       const isGrazing = !NON_GRAZING_LAND_USES.has(p.landUse);
       const dsePerHa = (isGrazing && groupHa) ? dseTotal / groupHa : 0;
       const lastFooEntry = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
-      const daysSinceGrazed = paddockMobs.length > 0 ? Math.min(...paddockMobs.map((m) => m.daysInPaddock ?? 999)) : null;
+      // Days since grazed = REST DAYS: 0 while stock are in it, otherwise days
+      // since the last mob moved OUT (from Move history), null if no record
+      let daysSinceGrazed;
+      if (paddockMobs.length > 0) {
+        daysSinceGrazed = 0; // being grazed right now
+      } else if (lastLeftByPaddock[p.name]) {
+        daysSinceGrazed = Math.max(0, Math.floor((todayMs - new Date(lastLeftByPaddock[p.name]).getTime()) / 86400000));
+      } else {
+        daysSinceGrazed = null;
+      }
       stats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing };
     });
     return stats;
-  }, [paddocks, mobs, fooHistory, landmarks, openGates]);
+  }, [paddocks, mobs, fooHistory, landmarks, openGates, allMobHistory]);
 
   // [extracted to top-level component]
   const PIN_DATA = mobs.map((m, i) => {
@@ -7528,7 +7561,14 @@ export default function App() {
               {INSIGHT_OPTIONS.map((opt) => (
                 <button
                   key={opt.id}
-                  onClick={() => { setInsightMode(opt.id); setShowInsightPicker(false); }}
+                  onClick={() => {
+                    setInsightMode(opt.id);
+                    setShowInsightPicker(false);
+                    // Rest days need the move history — load it on first use
+                    if (opt.id === "grazed" && allMobHistory.length === 0) {
+                      api.listAllMobHistory(farmName).then(setAllMobHistory).catch(() => {});
+                    }
+                  }}
                   className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-left transition-colors border ${insightMode === opt.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-700 border-stone-100 hover:border-stone-300"}`}
                 >
                   <span className="text-lg">{opt.icon}</span>
