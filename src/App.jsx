@@ -6023,7 +6023,8 @@ export default function App() {
           </button>
           <button onClick={() => {
             setShowRecords(true);
-            if (allMobHistory.length === 0) {
+            // Always refetch on open — records entered by other users must show up
+            {
               setRecordsLoading(true);
               api.listAllMobHistory(farmName)
                 .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
@@ -6573,8 +6574,8 @@ export default function App() {
                     setRecordsType(t.id);
                     setRecordsFilters({});
                     setRecordsSort(null);
-                    // Load mob history if needed
-                    if (t.action !== null && allMobHistory.length === 0) {
+                    // Always refetch so records entered by others show up fresh
+                    if (t.action !== null) {
                       setRecordsLoading(true);
                       try {
                         const h = await api.listAllMobHistory(farmName);
