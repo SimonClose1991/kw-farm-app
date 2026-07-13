@@ -3442,18 +3442,23 @@ export default function App() {
     return { name, cattle, sheep, dse };
   });
 
-  // paddockStats computed at App level — passed as stable prop to MapScreen so it
-  // doesn't change reference on every render (which would cause GooglePaddockMap insight effect to refire)
-  const paddockStats = {};
-  paddocks.forEach((p) => {
-    const paddockMobs = mobs.filter((m) => m.paddock === p.name);
-    const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
-    const isGrazing = !NON_GRAZING_LAND_USES.has(p.landUse);
-    const dsePerHa = (isGrazing && p.ha) ? dseTotal / Number(p.ha) : 0;
-    const lastFooEntry = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
-    const daysSinceGrazed = paddockMobs.length > 0 ? Math.min(...paddockMobs.map((m) => m.daysInPaddock ?? 999)) : null;
-    paddockStats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing };
-  });
+  // paddockStats MUST be memoised: it feeds GooglePaddockMap's insight effect,
+  // and a fresh object reference every render made that effect clear and redraw
+  // every paddock label (a canvas each) on every keystroke — e.g. while typing
+  // in the New Mob form. useMemo keeps the reference stable until data changes.
+  const paddockStats = React.useMemo(() => {
+    const stats = {};
+    paddocks.forEach((p) => {
+      const paddockMobs = mobs.filter((m) => m.paddock === p.name);
+      const dseTotal = paddockMobs.reduce((s, m) => s + m.count * (m.dse || 0), 0);
+      const isGrazing = !NON_GRAZING_LAND_USES.has(p.landUse);
+      const dsePerHa = (isGrazing && p.ha) ? dseTotal / Number(p.ha) : 0;
+      const lastFooEntry = fooHistory.filter((r) => r.paddock === p.name).slice(-1)[0];
+      const daysSinceGrazed = paddockMobs.length > 0 ? Math.min(...paddockMobs.map((m) => m.daysInPaddock ?? 999)) : null;
+      stats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing };
+    });
+    return stats;
+  }, [paddocks, mobs, fooHistory]);
 
   // [extracted to top-level component]
   const PIN_DATA = mobs.map((m, i) => {
@@ -3481,9 +3486,11 @@ export default function App() {
     Sheep:  (m) => m.species === "Sheep",
     Rams:   (m) => m.type === "Rams" || m.species === "Rams",
   };
-  const mapFilteredMobs = mapSpeciesFilter === "All"
-    ? mobs
-    : mobs.filter(MAP_MOB_FILTERS[mapSpeciesFilter] || (() => true));
+  const mapFilteredMobs = React.useMemo(() => (
+    mapSpeciesFilter === "All"
+      ? mobs
+      : mobs.filter(MAP_MOB_FILTERS[mapSpeciesFilter] || (() => true))
+  ), [mobs, mapSpeciesFilter]);  // stable reference — new array every render would redraw all pins
 
   // Plain render function, NOT a component: defining a component inside App gives
   // it a new identity on every render, so React unmounted and rebuilt the whole
