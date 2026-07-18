@@ -1093,9 +1093,14 @@ function GooglePaddockMap({
     const ref = mapInstanceRef.current;
     if (!ref?.map || !window.google?.maps) return;
     const g = window.google.maps;
-    // Remove old dot
-    if (ref.userLocationDot) { try { ref.userLocationDot.setMap(null); } catch {} ref.userLocationDot = null; }
-    if (!userLocation) return;
+    if (!userLocation) {
+      if (ref.userLocationDot) { try { ref.userLocationDot.setMap(null); } catch {} ref.userLocationDot = null; }
+      return;
+    }
+    // Move the existing dot instead of recreating it — smooth while tracking
+    if (ref.userLocationDot) {
+      try { ref.userLocationDot.setPosition({ lat: userLocation.lat, lng: userLocation.lng }); return; } catch {}
+    }
     ref.userLocationDot = new g.Marker({
       position: { lat: userLocation.lat, lng: userLocation.lng },
       map: ref.map,
@@ -3163,21 +3168,49 @@ export default function App() {
   const [pinSelected, setPinSelected] = useState(null);
   const [userLocation, setUserLocation] = useState(null); // { lat, lng } once located
   const [locating, setLocating] = useState(false);
-  const locateMe = () => {
+  // ── Continuous location: ◎ toggles follow-me tracking (blue dot moves with
+  // you). The setting is remembered, so it resumes automatically next launch.
+  const geoWatchIdRef = useRef(null);
+  const lastLocRef = useRef(null);
+  const [trackingOn, setTrackingOn] = useState(false);
+  const stopLocationWatch = React.useCallback(() => {
+    if (geoWatchIdRef.current != null) { try { navigator.geolocation.clearWatch(geoWatchIdRef.current); } catch {} geoWatchIdRef.current = null; }
+    try { localStorage.removeItem("kw_track_location"); } catch {}
+    setTrackingOn(false);
+    setLocating(false);
+    setUserLocation(null);
+  }, []);
+  const startLocationWatch = React.useCallback(() => {
     if (!navigator.geolocation) { showToast("Location isn't available on this device"); return; }
+    if (geoWatchIdRef.current != null) return;
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
+    geoWatchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
-        setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         setLocating(false);
+        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+        // Ignore tiny GPS jitter (~<3 m) so we don't re-render constantly
+        const prev = lastLocRef.current;
+        if (prev && Math.abs(prev.lat - next.lat) < 0.00003 && Math.abs(prev.lng - next.lng) < 0.00003) return;
+        lastLocRef.current = next;
+        setUserLocation(next);
       },
       () => {
         setLocating(false);
         showToast("Couldn't get your location — check location permission for this app");
+        stopLocationWatch();
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 }
     );
-  };
+    try { localStorage.setItem("kw_track_location", "1"); } catch {}
+    setTrackingOn(true);
+  }, [stopLocationWatch]);
+  const locateMe = () => { if (geoWatchIdRef.current != null) stopLocationWatch(); else startLocationWatch(); };
+  // Resume tracking automatically if it was on last session
+  React.useEffect(() => {
+    let t;
+    try { if (localStorage.getItem("kw_track_location") === "1") t = setTimeout(startLocationWatch, 500); } catch {}
+    return () => { clearTimeout(t); if (geoWatchIdRef.current != null) { try { navigator.geolocation.clearWatch(geoWatchIdRef.current); } catch {} } };
+  }, [startLocationWatch]);
 
   const selectedMob = mobs.find((m) => m.id === selectedMobId);
 
@@ -3275,6 +3308,13 @@ export default function App() {
   }, [loggedInEmail, farmName, isOnline, syncing]);
 
   const openAction = (name) => {
+    if (name === "Draft/Split") {
+      // Use the paddock-picker split flow — pick a count and the paddock;
+      // the split animals keep the mob's name and details
+      setShowMore(false);
+      setShowPaddockPicker(true);
+      return;
+    }
     if (name === "Edit") {
       const m = selectedMob;
       setNewMobForm({
@@ -3362,6 +3402,13 @@ export default function App() {
         const invItem = inventory.find(i => i.id === t.id);
         if (!invItem) return;
         let totalDose = Number(confirmedDoses[t.id]?.totalUsed) || 0;
+        // Convert the entered unit into the inventory's unit (mL doses from an L drum)
+        const entryUnit = String(confirmedDoses[t.id]?.unit || invItem.containerUnit || "mL").toLowerCase();
+        const invUnit = String(invItem.containerUnit || "mL").toLowerCase();
+        if (totalDose && entryUnit !== invUnit) {
+          if ((entryUnit === "ml" && invUnit === "l") || (entryUnit === "g" && invUnit === "kg")) totalDose = totalDose / 1000;
+          else if ((entryUnit === "l" && invUnit === "ml") || (entryUnit === "kg" && invUnit === "g")) totalDose = totalDose * 1000;
+        }
         if (!totalDose) {
           const mobCount = mob?.count || 0;
           const doseMatch = String(invItem.dosage || "").match(/^([\d.]+)/);
@@ -3903,6 +3950,7 @@ export default function App() {
                     e.preventDefault();
                     const mapRef = livMapRef.current?.map;
                     const mob = draggingMob.mob;
+                    const movingMobs = draggingMob.mobs || [draggingMob.mob];
                     setDraggingMob(null);
                     // Restore Google Maps gesture handling
                     if (mapRef) mapRef.setOptions({ gestureHandling: "greedy" });
@@ -3946,16 +3994,19 @@ export default function App() {
                     }
 
                     if (!targetPaddock) { showToast("Drop on a paddock to move"); return; }
-                    if (targetPaddock === mob.paddock) { showToast("Already in that paddock"); return; }
+                    const toMove = movingMobs.filter(m => m.paddock !== targetPaddock);
+                    if (toMove.length === 0) { showToast("Already in that paddock"); return; }
 
                     const dateStr = todayStr();
-                    const detail = `Moved from ${mob.paddock} to ${targetPaddock}`;
-                    setMobs(prev => prev.map(m => m.id === mob.id ? { ...m, paddock: targetPaddock, daysInPaddock: 0 } : m));
-                    showToast(`${mob.name} → ${targetPaddock}`);
+                    const ids = new Set(toMove.map(m => m.id));
+                    setMobs(prev => prev.map(m => ids.has(m.id) ? { ...m, paddock: targetPaddock, daysInPaddock: 0 } : m));
+                    showToast(toMove.length > 1 ? `${toMove.length} mobs → ${targetPaddock}` : `${toMove[0].name} → ${targetPaddock}`);
                     markChanged();
-                    api.updateMob(mob.id, { paddock: targetPaddock, daysInPaddock: 0 })
-                      .then(() => api.addMobHistory(mob.id, { action: "Move", detail, date: dateStr }))
-                      .catch(err => showToast(err.message || "Couldn't save move"));
+                    toMove.forEach(m => {
+                      api.updateMob(m.id, { paddock: targetPaddock, daysInPaddock: 0 })
+                        .then(() => api.addMobHistory(m.id, { action: "Move", detail: `Moved from ${m.paddock} to ${targetPaddock}`, date: dateStr }))
+                        .catch(err => showToast(err.message || "Couldn't save move"));
+                    });
                   }}
                   onPointerCancel={() => {
                     const mapRef = livMapRef.current?.map;
@@ -3975,13 +4026,13 @@ export default function App() {
                         transition: "transform 0.1s",
                       }}
                     >
-                      <div className="text-xs font-bold text-slate-700 whitespace-nowrap">{draggingMob.mob.name}</div>
-                      <div className="text-[10px] text-slate-400">{draggingMob.mob.count} hd · {draggingMob.mob.paddock}</div>
+                      <div className="text-xs font-bold text-slate-700 whitespace-nowrap">{draggingMob.mobs?.length > 1 ? `${draggingMob.mobs.length} mobs` : draggingMob.mob.name}</div>
+                      <div className="text-[10px] text-slate-400">{draggingMob.mobs?.length > 1 ? `${draggingMob.mobs.reduce((s, m) => s + m.count, 0)} hd total` : `${draggingMob.mob.count} hd · ${draggingMob.mob.paddock}`}</div>
                     </div>
                   )}
                   {/* Instruction hint */}
                   <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full whitespace-nowrap">
-                    Drop on a paddock to move {draggingMob?.mob?.name}
+                    Drop on a paddock to move {draggingMob?.mobs?.length > 1 ? `all ${draggingMob.mobs.length} mobs` : draggingMob?.mob?.name}
                   </div>
                 </div>
               )}
@@ -4037,7 +4088,7 @@ export default function App() {
           <div className="absolute right-4 bottom-6 flex flex-col gap-3 z-10">
             <button onClick={() => showToast("Recentering map...")} className="bg-white rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg">⌖</button>
             <button onClick={() => { setNewMobForm({ species: "Cattle", dobOption: "Year" }); setEditingMobId(null); setShowAddMob(true); }} className="bg-red-900 text-white rounded-2xl w-12 h-12 flex items-center justify-center text-2xl shadow-lg">+</button>
-            <button onClick={locateMe} disabled={locating} className="bg-white rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg disabled:opacity-50">
+            <button onClick={locateMe} disabled={locating} title={trackingOn ? "Tracking ON — tap to stop" : "Follow my location"} className={`rounded-2xl w-12 h-12 flex items-center justify-center shadow-lg disabled:opacity-50 ${trackingOn ? "bg-blue-500 text-white" : "bg-white"}`}>
               {locating ? "…" : "◎"}
             </button>
           </div>
@@ -4075,7 +4126,7 @@ export default function App() {
         {/* Floating action buttons */}
         {!mapDrawMode && !shapeEditPaddock && (
           <div className="absolute right-3 bottom-3 flex flex-col gap-2 z-10">
-            <button onClick={locateMe} disabled={locating} className="bg-white w-11 h-11 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 text-lg border border-slate-100">
+            <button onClick={locateMe} disabled={locating} title={trackingOn ? "Tracking ON — tap to stop" : "Follow my location"} className={`w-11 h-11 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 text-lg border border-slate-100 ${trackingOn ? "bg-blue-500 text-white" : "bg-white"}`}>
               {locating ? "…" : "◎"}
             </button>
             {canEdit && (
@@ -4276,6 +4327,29 @@ export default function App() {
                   <span className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0" style={{ backgroundColor: TAG_COLOUR_HEX[m.tag] || "#e2e8f0" }} />
                 </button>
               ))}
+              {canEdit && (
+                <button
+                  onClick={() => {
+                    const mobsToMove = pinSelected.mobs;
+                    setPinSelected(null);
+                    setTimeout(() => {
+                      const mapRef = livMapRef.current?.map;
+                      if (mapRef) mapRef.setOptions({ gestureHandling: "none" });
+                      const mapDiv = mapRef?.getDiv();
+                      const rect = mapDiv?.getBoundingClientRect() || { left: 0, top: 0, width: 200, height: 200 };
+                      setDraggingMob({
+                        mob: mobsToMove[0],
+                        mobs: mobsToMove,
+                        currentX: rect.left + rect.width / 2,
+                        currentY: rect.top + rect.height / 2,
+                      });
+                    }, 150);
+                  }}
+                  className="w-full bg-amber-500 text-white rounded-2xl py-3 font-bold"
+                >
+                  ↕ Move All {pinSelected.mobs.length} Mobs ({pinSelected.l} head)
+                </button>
+              )}
             </div>
           )}
           <div className="grid grid-cols-2 gap-3 mb-3">
@@ -5524,7 +5598,14 @@ export default function App() {
       const mobCount = selectedMob?.count || 0;
       // Days from either the picker shape (whp/esi) or inventory rows ("21 days" text)
       const daysOf = (v) => parseInt(v) || 0;
-      const parseDose = (item) => { const m = String(item.dosage || "").match(/([\d.]+)/); return m ? Number(m[1]) : ""; };
+      const parseDose = (item) => {
+        // Pull the number AND the unit from dosage text like "5mL per 10kg"
+        const m = String(item.dosage || "").match(/([\d.]+)\s*(mls?|l|litres?|g|kg)?/i);
+        if (!m) return { val: "", unit: null };
+        let u = (m[2] || "").toLowerCase();
+        const unit = u.startsWith("ml") ? "mL" : (u === "l" || u.startsWith("litre")) ? "L" : (u || null);
+        return { val: Number(m[1]), unit };
+      };
       const toggle = (item) => {
         const already = selected.find(x => x.id === item.id);
         const next = already ? selected.filter(x => x.id !== item.id) : [...selected, item];
@@ -5532,12 +5613,13 @@ export default function App() {
         if (already) {
           delete nextDoses[item.id];
         } else {
-          // Prefill dose/head from the inventory dosage; total = dose × head count
-          const dose = parseDose(item);
+          // Prefill dose/head from the inventory dosage; total = dose × head count.
+          // The unit prefers what the dosage text says (e.g. mL doses from a 15 L drum)
+          const pd = parseDose(item);
           nextDoses[item.id] = {
-            dosePerHead: dose === "" ? "" : dose,
-            totalUsed: dose !== "" && mobCount ? Math.round(dose * mobCount * 100) / 100 : "",
-            unit: item.containerUnit || "mL",
+            dosePerHead: pd.val === "" ? "" : pd.val,
+            totalUsed: pd.val !== "" && mobCount ? Math.round(pd.val * mobCount * 100) / 100 : "",
+            unit: pd.unit || item.containerUnit || "mL",
           };
         }
         setFormValues(prev => ({
@@ -5585,6 +5667,19 @@ export default function App() {
                   </button>
                   {on && (
                     <div className="px-3 pb-3 space-y-2">
+                      {["mL", "L"].includes(item.containerUnit || "mL") && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold text-slate-500">Dose units</span>
+                          <div className="flex gap-1">
+                            {["mL", "L"].map(u => (
+                              <button key={u} type="button" onClick={() => setDose(item.id, "unit", u)}
+                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold transition-colors ${unit === u ? "bg-amber-500 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>
+                                {u}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div className="flex gap-2">
                         <div className="flex-1">
                           <label className="text-[11px] font-semibold text-slate-500 block mb-0.5">Dosage per head ({unit})</label>
@@ -5602,6 +5697,9 @@ export default function App() {
                       <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
                         {item.batchNumber && <span>Batch: <b>{item.batchNumber}</b></span>}
                         {item.expiryDate && <span>Expiry: <b>{item.expiryDate}</b></span>}
+                        {item.startingStock != null && item.startingStock !== "" && (
+                          <span>{Math.max(0, Number(item.startingStock) - Number(item.quantityUsed || 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })} {item.containerUnit || ""} left</span>
+                        )}
                         {mobCount > 0 && <span>{mobCount} head</span>}
                       </div>
                     </div>
@@ -5875,11 +5973,18 @@ export default function App() {
                             const reversals = [];
                             // New-format records carry the exact amount: "↳ Title — 4.5 mL/hd · 738 mL used · ..."
                             h.detail.split("\n").forEach(line => {
-                              const m = line.match(/^↳ (.+?) — .*?([\d.]+)\s*\S*\s+used/);
+                              const m = line.match(/^↳ (.+?) — .*?([\d.]+)\s*(\S*)\s+used/);
                               if (!m) return;
                               const invItem = inventory.find(it => it.title === m[1].trim());
-                              const totalDose = Number(m[2]) || 0;
+                              let totalDose = Number(m[2]) || 0;
                               if (!invItem || !totalDose) return;
+                              // Convert the recorded unit back into the inventory's unit
+                              const recUnit = String(m[3] || invItem.containerUnit || "mL").toLowerCase();
+                              const invU = String(invItem.containerUnit || "mL").toLowerCase();
+                              if (recUnit !== invU) {
+                                if ((recUnit === "ml" && invU === "l") || (recUnit === "g" && invU === "kg")) totalDose = totalDose / 1000;
+                                else if ((recUnit === "l" && invU === "ml") || (recUnit === "kg" && invU === "g")) totalDose = totalDose * 1000;
+                              }
                               const newUsed = Math.max(0, (Number(invItem.quantityUsed) || 0) - totalDose);
                               reversals.push({ invItem, newUsed, totalDose });
                             });
@@ -6450,16 +6555,25 @@ export default function App() {
             try {
               await api.updateMob(mobId, { count: remaining });
               await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
-              const newMob = await api.createMob(farmName, {
-                name: `${selectedMob.name} (split)`,
-                desc: selectedMob.desc, count: moveCount,
-                paddock: target.name, dse: selectedMob.dse,
-                species: selectedMob.species, type: selectedMob.type,
-                breed: selectedMob.breed, ageClass: selectedMob.ageClass,
-                mgmtGroup: selectedMob.mgmtGroup, tag: selectedMob.tag, daysInPaddock: 0,
-              });
-              setMobs(prev => [...prev, newMob]);
-              await api.addMobHistory(newMob.id, { action: "Move", detail: `Split from ${selectedMob.name} in ${selectedMob.paddock}`, date: todayStr() });
+              // Same mob already holds a portion in the target paddock? Merge the numbers.
+              const existing = mobs.find(m => m.id !== mobId && m.paddock === target.name && m.name === selectedMob.name && m.species === selectedMob.species);
+              if (existing) {
+                const merged = await api.updateMob(existing.id, { count: Number(existing.count) + moveCount, daysInPaddock: 0 });
+                setMobs(prev => prev.map(m => m.id === existing.id ? { ...m, ...merged } : m));
+                await api.addMobHistory(existing.id, { action: "Move", detail: `Received ${moveCount} head split from ${selectedMob.paddock}`, date: todayStr() });
+              } else {
+                // Identical mob — SAME name and details, just a portion in another paddock
+                const newMob = await api.createMob(farmName, {
+                  name: selectedMob.name,
+                  desc: selectedMob.desc, count: moveCount,
+                  paddock: target.name, dse: selectedMob.dse,
+                  species: selectedMob.species, type: selectedMob.type,
+                  breed: selectedMob.breed, ageClass: selectedMob.ageClass,
+                  mgmtGroup: selectedMob.mgmtGroup, tag: selectedMob.tag, daysInPaddock: 0,
+                });
+                setMobs(prev => [...prev, newMob]);
+                await api.addMobHistory(newMob.id, { action: "Move", detail: `Split ${moveCount} head from ${selectedMob.paddock}`, date: todayStr() });
+              }
             } catch (err) { showToast(err.message || "Couldn't save split"); }
           }}
         />
