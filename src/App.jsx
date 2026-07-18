@@ -1906,6 +1906,86 @@ function WeatherWidget({ farmName, farmCenters }) {
 }
 
 
+// ── Move / Split bottom sheet ────────────────────────────────────────────────
+// Referenced throughout the app but the definition was lost in an earlier
+// refactor — opening it crashed the screen. Move all: pick a paddock. Split:
+// enter how many head, pick a paddock; the split keeps the mob's identity.
+function PaddockMoveSheet({ mob, paddocks, farmName, startAtAction = false, onClose, onMoveAll, onSplit }) {
+  const [action, setAction] = React.useState(startAtAction ? null : "move"); // null = choosing, "move" | "split"
+  const [splitCount, setSplitCount] = React.useState("");
+  const count = Number(mob?.count) || 0;
+  const sortedPaddocks = [...(paddocks || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const splitN = Number(splitCount);
+  const splitValid = splitN > 0 && splitN < count;
+  return (
+    <div className="fixed inset-0 z-[210] flex items-end justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-t-3xl w-full max-w-md mx-auto max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+          <div>
+            <div className="font-bold text-slate-800">{mob?.name}</div>
+            <div className="text-xs text-slate-400">{count.toLocaleString()} head · currently in {mob?.paddock}</div>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"><X size={16} /></button>
+        </div>
+
+        {action === null && (
+          <div className="p-4 space-y-2">
+            <button onClick={() => setAction("move")} className="w-full bg-red-900 text-white rounded-2xl py-4 font-bold">
+              ↕ Move ALL {count.toLocaleString()} head
+            </button>
+            <button onClick={() => setAction("split")} className="w-full bg-amber-500 text-white rounded-2xl py-4 font-bold">
+              🔀 Split off part of the mob
+            </button>
+          </div>
+        )}
+
+        {action === "split" && (
+          <div className="px-4 pt-4 flex-shrink-0">
+            <label className="text-sm font-semibold text-slate-600 block mb-1">Number to split off (of {count.toLocaleString()})</label>
+            <input type="number" inputMode="numeric" autoFocus value={splitCount}
+              onChange={(e) => setSplitCount(e.target.value)}
+              placeholder={`e.g. ${Math.floor(count / 2) || 1}`}
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+            {splitCount !== "" && !splitValid && (
+              <div className="text-xs text-rose-500 mt-1">{splitN >= count ? "That's the whole mob — use Move instead" : "Enter how many head to split off"}</div>
+            )}
+            {splitValid && (
+              <div className="text-xs text-slate-400 mt-1">{splitN} head move · {count - splitN} stay in {mob?.paddock} · same mob name & details</div>
+            )}
+          </div>
+        )}
+
+        {(action === "move" || (action === "split" && splitValid)) && (
+          <>
+            <div className="px-4 pt-3 pb-1 text-xs font-bold text-slate-400 uppercase tracking-wide flex-shrink-0">
+              {action === "move" ? `Move all ${count.toLocaleString()} head to…` : `Move ${splitN} head to…`}
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 pt-1 space-y-2">
+              {sortedPaddocks.map((p) => (
+                <button key={p.id}
+                  disabled={p.name === mob?.paddock}
+                  onClick={() => { if (action === "move") onMoveAll?.(p); else onSplit?.(p, splitN); }}
+                  className={`w-full flex items-center justify-between rounded-2xl px-4 py-3 border text-left ${p.name === mob?.paddock ? "bg-slate-50 border-slate-100 text-slate-300" : "bg-white border-slate-200 hover:bg-amber-50 active:bg-amber-100"}`}>
+                  <span className="font-semibold text-sm">{p.name}{p.name === mob?.paddock ? " (current)" : ""}</span>
+                  <span className="text-xs text-slate-400">{Number(p.ha || 0).toFixed(0)} ha</span>
+                </button>
+              ))}
+              {sortedPaddocks.length === 0 && <div className="text-sm text-slate-400 italic">No paddocks yet</div>}
+            </div>
+          </>
+        )}
+
+        {action !== null && startAtAction && (
+          <div className="px-4 pb-4 pt-2 border-t border-slate-100 flex-shrink-0">
+            <button onClick={() => { setAction(null); setSplitCount(""); }} className="w-full text-slate-500 text-sm font-semibold py-2">← Back</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Stock breakdown — horizontal bar charts of head counts ──────────────────
 const STOCK_BAR_COLOURS = ["#2ea8c9", "#5cb85c", "#f5a623", "#e8c917", "#9b6dd7", "#f78fb3", "#e05252", "#8a97a5"];
 
