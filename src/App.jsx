@@ -171,8 +171,18 @@ const DEFAULT_PADDOCKS_DATA = {
 
 // Approximate polygon area in hectares from a GeoJSON-style ring of [lng, lat] points
 // Returns today's date as YYYY-MM-DD, used to auto-default date fields throughout the app
+// Local-date ISO string. The old toISOString() version used UTC, which in
+// Australia is yesterday until ~10-11am — deaths etc. recorded the day before.
+function isoLocalDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return isoLocalDate(new Date());
+}
+// Display an ISO date (yyyy-mm-dd) as dd/mm/yyyy
+function fmtDMY(d) {
+  const m = String(d || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : (d || "");
 }
 
 // Accurate geodesic polygon area in hectares using the spherical excess formula.
@@ -1369,6 +1379,8 @@ function geojsonToPaddocks(geojson) {
     };
   });
 }
+
+const DEFAULT_DEATH_CAUSES = ["Lambing", "Illness", "Injury", "No Diagnosis", "Transit"];
 
 const ACTION_FIELDS = {
   Recount: [{ label: "New head count", type: "number", placeholder: "e.g. 140" }],
@@ -3097,6 +3109,7 @@ export default function App() {
   const [mapMode, setMapMode] = useState("Livestock");
   const [showSwitchFarm, setShowSwitchFarm] = useState(false);
   const [actionForm, setActionForm] = useState(null);
+  const [historyEdit, setHistoryEdit] = useState(null); // { h, cause, date } — editing a Death record
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [formValues, setFormValues] = useState({});
   const [toast, setToast] = useState(null);
@@ -3394,6 +3407,10 @@ export default function App() {
       setShowMore(false);
       setShowPaddockPicker(true);
       return;
+    }
+    if (name === "Death" && allMobHistory.length === 0) {
+      // So previously used causes appear in the dropdown
+      api.listAllMobHistory(farmName).then(setAllMobHistory).catch(() => {});
     }
     if (name === "Edit") {
       const m = selectedMob;
@@ -5073,7 +5090,7 @@ export default function App() {
               <div className="text-sm font-bold text-slate-700 mb-2">Paddock Record</div>
               <div className="space-y-2">
                 <button
-                  onClick={() => { setFooTargetPaddock(paddockDetail); setFooForm({ date: new Date().toISOString().split("T")[0] }); setShowFoo(true); }}
+                  onClick={() => { setFooTargetPaddock(paddockDetail); setFooForm({ date: todayStr() }); setShowFoo(true); }}
                   className="w-full flex items-center gap-3 bg-green-600 text-white rounded-2xl px-4 py-3 font-bold text-sm"
                 >
                   <span className="text-lg">🌾</span>
@@ -5136,7 +5153,7 @@ export default function App() {
           <div className="space-y-3 mb-4">
             <div>
               <label className="text-sm font-semibold text-slate-600 block mb-1">Date *</label>
-              <input type="date" value={fooForm.date || new Date().toISOString().split("T")[0]}
+              <input type="date" value={fooForm.date || todayStr()}
                 onChange={(e) => setFooForm((p) => ({ ...p, date: e.target.value }))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
             </div>
@@ -5473,7 +5490,7 @@ export default function App() {
             <div key={i} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
               <div className="flex justify-between font-bold text-slate-800">
                 <span>{h.action}</span>
-                <span className="text-slate-400 text-xs font-medium">{h.date}</span>
+                <span className="text-slate-400 text-xs font-medium">{fmtDMY(h.date)}</span>
               </div>
               <div className="text-sm text-red-950 font-medium">{h.mob}</div>
               {h.detail && <div className="text-sm text-slate-400 mt-1 whitespace-pre-line">{h.detail}</div>}
@@ -5888,6 +5905,39 @@ export default function App() {
         </select>
       );
     }
+    // Death cause: dropdown of the standard causes + any previously recorded,
+    // with the option to add a new one (same pattern as management tags)
+    if (field.label === "Cause") {
+      const used = new Set(DEFAULT_DEATH_CAUSES);
+      allMobHistory.forEach(h => {
+        if (h.action === "Death" && h.detail) {
+          const m = String(h.detail).match(/Cause: ([^,\n]+)/);
+          if (m && m[1].trim()) used.add(m[1].trim());
+        }
+      });
+      const options = [...used].sort((a, b) => a.localeCompare(b));
+      const val = formValues["Cause"] || "";
+      const customMode = formValues["_causeCustom"] || (val && !options.includes(val));
+      return (
+        <div>
+          <select
+            value={customMode ? "__custom__" : val}
+            onChange={(e) => {
+              if (e.target.value === "__custom__") setFormValues(prev => ({ ...prev, _causeCustom: true, Cause: "" }));
+              else setFormValues(prev => ({ ...prev, _causeCustom: false, Cause: e.target.value }));
+            }}
+            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
+            <option value="">Select cause...</option>
+            {options.map(o => <option key={o} value={o}>{o}</option>)}
+            <option value="__custom__">+ Add a new cause</option>
+          </select>
+          {customMode && (
+            <input autoFocus value={val} onChange={(e) => setFormValues(prev => ({ ...prev, Cause: e.target.value }))}
+              placeholder="Type new cause..." className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white" />
+          )}
+        </div>
+      );
+    }
     return (
       <input
         type={field.type}
@@ -5964,6 +6014,32 @@ export default function App() {
                   </div>
                   <div className="text-2xl font-bold text-slate-800 mt-1">{selectedMob.paddock || "Unassigned"}</div>
                 </button>
+                {(() => {
+                  // Stocking rate for this mob's paddock — combined across open gates
+                  if (!selectedMob.paddock) return null;
+                  const group = new Set([selectedMob.paddock]);
+                  const openGateLms = landmarks.filter(l => l.type === "Gate" && openGates.includes(String(l.id)) && l.paddockA && l.paddockB);
+                  let grew = true;
+                  while (grew) {
+                    grew = false;
+                    openGateLms.forEach(gt => {
+                      if (group.has(gt.paddockA) && !group.has(gt.paddockB)) { group.add(gt.paddockB); grew = true; }
+                      if (group.has(gt.paddockB) && !group.has(gt.paddockA)) { group.add(gt.paddockA); grew = true; }
+                    });
+                  }
+                  const groupPaddocks = paddocks.filter(p => group.has(p.name));
+                  const ha = groupPaddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0);
+                  const dse = mobs.filter(m => group.has(m.paddock)).reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
+                  if (!ha) return null;
+                  const combined = group.size > 1;
+                  return (
+                    <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 col-span-2">
+                      <div className="text-xs text-slate-400 font-semibold">PADDOCK STOCKING{combined ? " — GATES OPEN, COMBINED" : ""}</div>
+                      <div className="text-2xl font-extrabold text-slate-800 mt-1">{(dse / ha).toFixed(2)} DSE/ha</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE ÷ {ha.toFixed(1)} ha{combined ? ` across ${[...group].join(", ")}` : ` in ${selectedMob.paddock}`}</div>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="text-sm font-bold text-slate-700 mt-6 mb-2">Weights</div>
@@ -5976,7 +6052,7 @@ export default function App() {
                   {selectedMob.lastWeight ? (
                     <>
                       <div className="text-2xl font-extrabold text-slate-800 mt-1">{selectedMob.lastWeight} <span className="text-sm font-medium text-slate-400">kg</span></div>
-                      <div className="text-xs text-slate-400 mt-1">{selectedMob.lastWeightDate}</div>
+                      <div className="text-xs text-slate-400 mt-1">{fmtDMY(selectedMob.lastWeightDate)}</div>
                     </>
                   ) : (
                     <div className="text-sm text-slate-400 mt-2">Tap to add weight</div>
@@ -5992,7 +6068,7 @@ export default function App() {
                       <div className={`text-2xl font-extrabold mt-1 ${selectedMob.lastScore <= 2 ? "text-red-600" : selectedMob.lastScore <= 3 ? "text-amber-600" : "text-green-600"}`}>
                         {selectedMob.lastScore} <span className="text-sm font-medium text-slate-400">/ 5</span>
                       </div>
-                      <div className="text-xs text-slate-400 mt-1">{selectedMob.lastScoreDate}</div>
+                      <div className="text-xs text-slate-400 mt-1">{fmtDMY(selectedMob.lastScoreDate)}</div>
                     </>
                   ) : (
                     <div className="text-sm text-slate-400 mt-2">Tap to score</div>
@@ -6034,10 +6110,18 @@ export default function App() {
                 <div key={h.id ?? i} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-3">
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
-                      <div className="flex justify-between font-bold text-slate-800"><span>{h.action}</span><span className="text-slate-400 text-xs">{h.date}</span></div>
+                      <div className="flex justify-between font-bold text-slate-800"><span>{h.action}</span><span className="text-slate-400 text-xs">{fmtDMY(h.date)}</span></div>
                       {h.detail && <div className="text-sm text-slate-500 mt-1 whitespace-pre-line">{h.detail}</div>}
                       {h.authorName && <div className="text-xs text-slate-400 mt-1">by {h.authorName}</div>}
                     </div>
+                    {canEdit && h.id && h.action === "Death" && (
+                      <button onClick={() => {
+                        const m = String(h.detail || "").match(/Cause: ([^,\n]+)/);
+                        setHistoryEdit({ h, cause: m ? m[1].trim() : "", date: h.date || todayStr(), custom: false });
+                      }} className="ml-2 mt-0.5 text-slate-400 hover:text-amber-600 flex-shrink-0 text-sm" title="Edit cause / date">
+                        ✎
+                      </button>
+                    )}
                     {canEdit && h.id && (
                       <button onClick={async () => {
                         if (!window.confirm(`Delete this ${h.action} record?`)) return;
@@ -6191,6 +6275,55 @@ export default function App() {
             )}
           </Modal>
         )}
+
+        {historyEdit && (() => {
+          const used = new Set(DEFAULT_DEATH_CAUSES);
+          allMobHistory.forEach(x => { if (x.action === "Death" && x.detail) { const mm = String(x.detail).match(/Cause: ([^,\n]+)/); if (mm) used.add(mm[1].trim()); } });
+          (history[selectedMob?.id] || []).forEach(x => { if (x.action === "Death" && x.detail) { const mm = String(x.detail).match(/Cause: ([^,\n]+)/); if (mm) used.add(mm[1].trim()); } });
+          const options = [...used].sort((a, b) => a.localeCompare(b));
+          const customMode = historyEdit.custom || (historyEdit.cause && !options.includes(historyEdit.cause));
+          return (
+            <Modal title="Edit Death Record" onClose={() => setHistoryEdit(null)}>
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Cause</label>
+                  <select value={customMode ? "__custom__" : (historyEdit.cause || "")}
+                    onChange={(e) => setHistoryEdit(prev => ({ ...prev, custom: e.target.value === "__custom__", cause: e.target.value === "__custom__" ? "" : e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
+                    <option value="">Select cause...</option>
+                    {options.map(o => <option key={o} value={o}>{o}</option>)}
+                    <option value="__custom__">+ Add a new cause</option>
+                  </select>
+                  {customMode && (
+                    <input autoFocus value={historyEdit.cause} onChange={(e) => setHistoryEdit(prev => ({ ...prev, cause: e.target.value }))}
+                      placeholder="Type cause..." className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white" />
+                  )}
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Date</label>
+                  <input type="date" value={historyEdit.date || ""} onChange={(e) => setHistoryEdit(prev => ({ ...prev, date: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                </div>
+              </div>
+              <button onClick={async () => {
+                const { h, cause, date } = historyEdit;
+                const newDetail = /Cause: /.test(h.detail || "")
+                  ? String(h.detail).replace(/Cause: [^,\n]*/, `Cause: ${cause || "No Diagnosis"}`)
+                  : `${h.detail ? h.detail + ", " : ""}Cause: ${cause || "No Diagnosis"}`;
+                try {
+                  await api.updateMobHistory(selectedMob.id, h.id, { detail: newDetail, date });
+                  setHistory(prev => ({
+                    ...prev,
+                    [selectedMob.id]: (prev[selectedMob.id] || []).map(x => x.id === h.id ? { ...x, detail: newDetail, date } : x),
+                  }));
+                  setAllMobHistory(prev => prev.map(x => x.id === h.id ? { ...x, detail: newDetail, date } : x));
+                  setHistoryEdit(null);
+                  showToast("Death record updated");
+                } catch (err) { showToast(err.message || "Couldn't update record"); }
+              }} className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold">Save</button>
+            </Modal>
+          );
+        })()}
 
         {actionForm && (
           <Modal title={actionForm} onClose={() => setActionForm(null)}>
@@ -6606,59 +6739,6 @@ export default function App() {
       })()}
 
       {/* ── Insight overlay picker (gear icon on Paddocks map) ── */}
-      {/* ── Paddock picker bottom sheet (from Mob Details paddock tile) ── */}
-      {showPaddockPicker && selectedMob && (
-        <PaddockMoveSheet
-          mob={selectedMob}
-          paddocks={paddocks}
-          farmName={farmName}
-          startAtAction={true}
-          onClose={() => setShowPaddockPicker(false)}
-          onMoveAll={async (target) => {
-            const mobId = selectedMob.id;
-            const detail = `Moved from ${selectedMob.paddock} to ${target.name}`;
-            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: target.name, daysInPaddock: 0 } : m));
-            setShowPaddockPicker(false);
-            showToast(`${selectedMob.name} → ${target.name}`);
-            try {
-              await api.updateMob(mobId, { paddock: target.name, daysInPaddock: 0 });
-              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
-            } catch (err) { showToast(err.message || "Couldn't save move"); }
-          }}
-          onSplit={async (target, moveCount) => {
-            const mobId = selectedMob.id;
-            const remaining = selectedMob.count - moveCount;
-            const detail = `Split: ${moveCount} head moved to ${target.name}, ${remaining} remain in ${selectedMob.paddock}`;
-            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, count: remaining } : m));
-            setShowPaddockPicker(false);
-            showToast(`${moveCount} head → ${target.name}, ${remaining} remain`);
-            try {
-              await api.updateMob(mobId, { count: remaining });
-              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
-              // Same mob already holds a portion in the target paddock? Merge the numbers.
-              const existing = mobs.find(m => m.id !== mobId && m.paddock === target.name && m.name === selectedMob.name && m.species === selectedMob.species);
-              if (existing) {
-                const merged = await api.updateMob(existing.id, { count: Number(existing.count) + moveCount, daysInPaddock: 0 });
-                setMobs(prev => prev.map(m => m.id === existing.id ? { ...m, ...merged } : m));
-                await api.addMobHistory(existing.id, { action: "Move", detail: `Received ${moveCount} head split from ${selectedMob.paddock}`, date: todayStr() });
-              } else {
-                // Identical mob — SAME name and details, just a portion in another paddock
-                const newMob = await api.createMob(farmName, {
-                  name: selectedMob.name,
-                  desc: selectedMob.desc, count: moveCount,
-                  paddock: target.name, dse: selectedMob.dse,
-                  species: selectedMob.species, type: selectedMob.type,
-                  breed: selectedMob.breed, ageClass: selectedMob.ageClass,
-                  mgmtGroup: selectedMob.mgmtGroup, tag: selectedMob.tag, daysInPaddock: 0,
-                });
-                setMobs(prev => [...prev, newMob]);
-                await api.addMobHistory(newMob.id, { action: "Move", detail: `Split ${moveCount} head from ${selectedMob.paddock}`, date: todayStr() });
-              }
-            } catch (err) { showToast(err.message || "Couldn't save split"); }
-          }}
-        />
-      )}
-
       {/* ── Records Screen ── */}
       {showRecords && (() => {
         const RECORD_TYPES = [
@@ -6762,7 +6842,8 @@ export default function App() {
           const header = columns.map(c => c.label).join(",");
           const body = rows.map(r =>
             columns.map(c => {
-              const v = String(r[c.key] || "").replace(/"/g, '""');
+              const raw = (c.key === "date" || c.key === "treatmentDate") ? fmtDMY(r[c.key]) : r[c.key];
+              const v = String(raw || "").replace(/"/g, '""');
               return v.includes(",") ? `"${v}"` : v;
             }).join(",")
           ).join("\n");
@@ -6777,7 +6858,7 @@ export default function App() {
         const toExcel = () => {
           // Simple TSV that Excel opens correctly
           const header = columns.map(c => c.label).join("\t");
-          const body = rows.map(r => columns.map(c => r[c.key] || "").join("\t")).join("\n");
+          const body = rows.map(r => columns.map(c => ((c.key === "date" || c.key === "treatmentDate") ? fmtDMY(r[c.key]) : r[c.key]) || "").join("\t")).join("\n");
           const tsv = `${header}\n${body}`;
           const blob = new Blob([tsv], { type: "application/vnd.ms-excel" });
           const a = document.createElement("a");
@@ -6788,7 +6869,7 @@ export default function App() {
 
         const toPrint = () => {
           const tableRows = rows.map(r =>
-            `<tr>${columns.map(c => `<td>${r[c.key] || ""}</td>`).join("")}</tr>`
+            `<tr>${columns.map(c => `<td>${((c.key === "date" || c.key === "treatmentDate") ? fmtDMY(r[c.key]) : r[c.key]) || ""}</td>`).join("")}</tr>`
           ).join("");
           const html = `
             <html><head><title>${farmName} — ${currentType.label}</title>
@@ -6803,7 +6884,7 @@ export default function App() {
             </style></head>
             <body>
               <h2>${farmName} — ${currentType.label}</h2>
-              <p>Exported ${todayStr()} · ${rows.length} records</p>
+              <p>Exported ${fmtDMY(todayStr())} · ${rows.length} records</p>
               <table>
                 <thead><tr>${columns.map(c => `<th>${c.label}</th>`).join("")}</tr></thead>
                 <tbody>${tableRows}</tbody>
@@ -6949,7 +7030,7 @@ export default function App() {
                     {rows.map((r, i) => (
                       <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
                         {columns.map(c => (
-                          <td key={c.key} className="px-4 py-3 text-slate-700 whitespace-nowrap">{r[c.key] || "—"}</td>
+                          <td key={c.key} className="px-4 py-3 text-slate-700 whitespace-nowrap">{(c.key === "date" || c.key === "treatmentDate") ? (fmtDMY(r[c.key]) || "—") : (r[c.key] || "—")}</td>
                         ))}
                       </tr>
                     ))}
@@ -7673,6 +7754,61 @@ export default function App() {
       {selectedMob && MobDetails()}
       {showMenu && MenuScreen()}
 
+      {/* ── Paddock picker bottom sheet (from Mob Details paddock tile) ── */}
+      {showPaddockPicker && selectedMob && (
+        <PaddockMoveSheet
+          mob={selectedMob}
+          paddocks={paddocks}
+          farmName={farmName}
+          startAtAction={true}
+          onClose={() => setShowPaddockPicker(false)}
+          onMoveAll={async (target) => {
+            const mobId = selectedMob.id;
+            const detail = `Moved from ${selectedMob.paddock} to ${target.name}`;
+            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: target.name, daysInPaddock: 0 } : m));
+            setShowPaddockPicker(false);
+            showToast(`${selectedMob.name} → ${target.name}`);
+            try {
+              await api.updateMob(mobId, { paddock: target.name, daysInPaddock: 0 });
+              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+            } catch (err) { showToast(err.message || "Couldn't save move"); }
+          }}
+          onSplit={async (target, moveCount) => {
+            const mobId = selectedMob.id;
+            const remaining = selectedMob.count - moveCount;
+            const detail = `Split: ${moveCount} head moved to ${target.name}, ${remaining} remain in ${selectedMob.paddock}`;
+            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, count: remaining } : m));
+            setShowPaddockPicker(false);
+            showToast(`${moveCount} head → ${target.name}, ${remaining} remain`);
+            try {
+              await api.updateMob(mobId, { count: remaining });
+              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+              // Same mob already holds a portion in the target paddock? Merge the numbers.
+              const existing = mobs.find(m => m.id !== mobId && m.paddock === target.name && m.name === selectedMob.name && m.species === selectedMob.species);
+              if (existing) {
+                const merged = await api.updateMob(existing.id, { count: Number(existing.count) + moveCount, daysInPaddock: 0 });
+                setMobs(prev => prev.map(m => m.id === existing.id ? { ...m, ...merged } : m));
+                await api.addMobHistory(existing.id, { action: "Move", detail: `Received ${moveCount} head split from ${selectedMob.paddock}`, date: todayStr() });
+              } else {
+                // Identical mob — SAME name and details, just a portion in another paddock
+                const newMob = await api.createMob(farmName, {
+                  name: selectedMob.name,
+                  desc: selectedMob.desc, count: moveCount,
+                  paddock: target.name, dse: selectedMob.dse,
+                  species: selectedMob.species, type: selectedMob.type,
+                  breed: selectedMob.breed, ageClass: selectedMob.ageClass,
+                  mgmtGroup: selectedMob.mgmtGroup, tag: selectedMob.tag, daysInPaddock: 0,
+                });
+                setMobs(prev => [...prev, newMob]);
+                await api.addMobHistory(newMob.id, { action: "Move", detail: `Split ${moveCount} head from ${selectedMob.paddock}`, date: todayStr() });
+              }
+            } catch (err) { showToast(err.message || "Couldn't save split"); }
+          }}
+        />
+      )}
+
+
+
       {/* ── Field Note Detail — outside MapScreen so tap-on-pin works first time ── */}
       {fieldNoteDetail && (() => {
         const note = fieldNoteDetail;
@@ -7721,7 +7857,7 @@ export default function App() {
                   const cat2 = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
                   const taskContent = note.paddock ? `${cat2.icon} ${note.category} — ${note.paddock}: ${note.body.slice(0, 80)}` : `${cat2.icon} ${note.category}: ${note.body.slice(0, 80)}`;
                   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-                  const dueDate = tomorrow.toISOString().slice(0, 10);
+                  const dueDate = isoLocalDate(tomorrow);
                   const dueDay = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][tomorrow.getDay()];
                   const newTask = { id: `fn-${note.id}-${Date.now()}`, farm: note.farmName || farmName, content: taskContent, notes: note.body, color: note.priority === "urgent" ? "red" : "default", assignedStaff: [], completed: false, createdAt: new Date().toISOString(), day: dueDay, date: dueDate, recur: "none", lat: note.lat, lng: note.lng, paddock: note.paddock, fieldNoteId: note.id };
                   try { await api.appendWorkflowTask(newTask); } catch { try { const raw = localStorage.getItem("kwp-workflow-cache"); const cache = raw ? JSON.parse(raw) : {}; cache.tasks = [...(cache.tasks || []), newTask]; localStorage.setItem("kwp-workflow-cache", JSON.stringify(cache)); } catch {} }
@@ -7932,9 +8068,29 @@ export default function App() {
                   locationApprox = true;
                 }
               }
+              // If a paddock is selected and the pin isn't inside it, place the
+              // note at that paddock — not wherever the phone happens to be
+              if (current.paddock) {
+                const pd = paddocks.find(p => p.name === current.paddock);
+                const ring = pd ? geometryToLatLngs(pd.geojson) : null;
+                if (ring?.length) {
+                  let inside = false;
+                  try {
+                    const g = window.google?.maps;
+                    if (g?.geometry?.poly && lat != null) {
+                      const poly = new g.Polygon({ paths: ring.map(([la, ln]) => ({ lat: la, lng: ln })) });
+                      inside = g.geometry.poly.containsLocation(new g.LatLng(lat, lng), poly);
+                    }
+                  } catch {}
+                  if (!inside) {
+                    const c = ring.reduce((acc, [la, ln]) => ({ lat: acc.lat + la / ring.length, lng: acc.lng + ln / ring.length }), { lat: 0, lng: 0 });
+                    lat = c.lat; lng = c.lng; accuracyM = null; locationApprox = false;
+                  }
+                }
+              }
               try {
                 if (isEdit) {
-                  const updated = await api.updateFieldNote(current.id, { body: current.body, category: current.category, priority: current.priority, paddock: current.paddock, photos: current.photos || [] });
+                  const updated = await api.updateFieldNote(current.id, { body: current.body, category: current.category, priority: current.priority, paddock: current.paddock, photos: current.photos || [], lat, lng, accuracyM, locationApprox });
                   setFieldNotes(prev => prev.map(n => n.id === current.id ? { ...n, ...updated } : n));
                   showToast("Note updated");
                 } else {

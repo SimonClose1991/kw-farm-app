@@ -127,6 +127,18 @@ router.post("/:id/transfer", requireAuth, requireEditor, async (req, res) => {
 });
 
 // --- History ---
+// PUT /api/mobs/:id/history/:historyId — edit a history entry (detail / date)
+router.put("/:id/history/:historyId", requireAuth, requireEditor, async (req, res) => {
+  const { detail, date } = req.body;
+  const updates = {};
+  if (detail !== undefined) updates.detail = detail;
+  if (date !== undefined) updates.date = date;
+  const [updated] = await db.update(mobHistory).set(updates)
+    .where(eq(mobHistory.id, Number(req.params.historyId))).returning();
+  if (!updated) return res.status(404).json({ error: "History entry not found" });
+  res.json(updated);
+});
+
 // DELETE /api/mobs/:id/history/:historyId
 router.delete("/:id/history/:historyId", requireAuth, requireEditor, async (req, res) => {
   const [deleted] = await db

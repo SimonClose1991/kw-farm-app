@@ -66,6 +66,7 @@ export const api = {
   transferMob: (id, toFarm, count, date) => request(`/mobs/${id}/transfer`, { method: "POST", body: JSON.stringify({ toFarm, count, date }) }),
   listMobHistory: (id) => request(`/mobs/${id}/history`),
   addMobHistory: (id, entry) => request(`/mobs/${id}/history`, { method: "POST", body: JSON.stringify(entry) }),
+  updateMobHistory: (id, historyId, fields) => request(`/mobs/${id}/history/${historyId}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteMobHistory: (mobId, historyId) => request(`/mobs/${mobId}/history/${historyId}`, { method: "DELETE" }),
   listMobNotes: (id) => request(`/mobs/${id}/notes`),
   addMobNote: (id, text, authorName) => request(`/mobs/${id}/notes`, { method: "POST", body: JSON.stringify({ text, authorName }) }),
