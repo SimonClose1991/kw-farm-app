@@ -2159,6 +2159,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
         </div>
 
         <div className="px-4 pt-4 space-y-3 home-grid md:px-6 md:pt-6">
+          <div className="home-col space-y-3">
           {/* Paddocks summary */}
           <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100">
@@ -2201,6 +2202,9 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
             </div>
           </div>
 
+          </div>
+
+          <div className="home-col space-y-3">
           {/* Stock breakdown — this farm's numbers, tap the arrow to expand */}
           <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
             <button onClick={() => setShowStock(v => !v)} className="w-full flex items-center justify-between px-4 py-3">
@@ -2210,6 +2214,9 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
             {showStock && <div className="px-3 pb-3"><StockBreakdown mobs={fMobs} /></div>}
           </div>
 
+          </div>
+
+          <div className="home-col space-y-3">
           {/* Weather & Schedule — always visible regardless of which farm is open */}
           <WeatherWidget farmName={homeFarm} farmCenters={farmCenters} />
           <MyScheduleWidget currentUser={currentUser} api={api} setTab={setTab} />
@@ -2226,6 +2233,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
               <div className="font-semibold text-stone-700 text-sm">Livestock</div>
               <div className="text-xs text-stone-400 mt-0.5">Mobs & actions</div>
             </button>
+          </div>
           </div>
         </div>
       </div>
@@ -2273,6 +2281,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
 
     <div className="px-4 pt-4 space-y-3 home-grid md:px-6 md:pt-6">
 
+      <div className="home-col space-y-3">
       {/* Stock breakdown — all farms combined, tap the arrow to expand */}
       <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
         <button onClick={() => setShowStock(v => !v)} className="w-full flex items-center justify-between px-4 py-3">
@@ -2287,7 +2296,9 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
 
       {/* ── My Schedule ── */}
       <MyScheduleWidget currentUser={currentUser} api={api} setTab={setTab} />
+      </div>
 
+      <div className="home-col space-y-3">
       {/* ── Workflow — clean card, amber accent ── */}
       <button
         onClick={() => setTab("workflow")}
@@ -2311,7 +2322,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
           <button
             key={name}
             onClick={() => enterFarm(name)}
-            className="bg-white rounded-2xl p-4 border border-stone-200/80 text-left hover:border-amber-300 transition-colors group"
+            className="bg-white rounded-2xl p-4 border border-stone-200/80 text-left hover:border-amber-300 transition-colors group md:min-h-[7.5rem]"
           >
             <div className="flex items-start justify-between mb-2">
               <div className="font-semibold text-stone-800 text-sm leading-tight">{name}</div>
@@ -2326,7 +2337,9 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
           </button>
         ))}
       </div>
+      </div>
 
+      <div className="home-col space-y-3">
       {/* ── Feeding Systems — clean 2-col ── */}
       <div className="flex items-center justify-between pt-1 px-0.5">
         <span className="text-xs font-semibold text-stone-400 uppercase tracking-widest">Feeding Systems</span>
@@ -2374,6 +2387,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
           📡 Offline — changes will sync when you reconnect
         </div>
       )}
+      </div>
     </div>
   </div>
   ); // end all-farms return
@@ -6479,9 +6493,525 @@ export default function App() {
         </div>
       </div>
 
+    </div>
+  );
+
+  const updateNewMob = (key, val) => setNewMobForm((prev) => ({ ...prev, [key]: val }));
+
+  const AddMobModal = () => {
+    const species = newMobForm.species || "Cattle";
+    const breedOptions = [...(BREEDS_DEFAULT[species] || []), ...(customBreeds[species] || []).filter((b) => !(BREEDS_DEFAULT[species] || []).includes(b))];
+    const ageOptions = AGE_CLASSES[species];
+
+    const saveMob = async () => {
+      if (!newMobForm.name) { showToast("Mob name is required"); return; }
+      if (!newMobForm.paddock) { showToast("Please select a paddock"); return; }
+      if (!newMobForm.size) { showToast("Please enter a mob size"); return; }
+      const fields = {
+        name: newMobForm.name,
+        desc: `${newMobForm.breed || species} ${(newMobForm.ageClass || "").toLowerCase()}${newMobForm.dob ? " · " + newMobForm.dob : ""}`.trim(),
+        count: Number(newMobForm.size),
+        paddock: newMobForm.paddock,
+        dse: newMobForm.dse ? Number(newMobForm.dse) : (species === "Sheep" || species === "Rams" ? 1.5 : 8),
+        species,
+        type: ageOptions?.includes(newMobForm.ageClass) ? newMobForm.ageClass : (species === "Sheep" || species === "Rams" ? "Ewes" : species === "Bulls" ? "Bulls" : "Cows"),
+        breed: newMobForm.breed || "Mixed",
+        ageClass: newMobForm.ageClass || "Adult",
+        mgmtGroup: newMobForm.mgmtGroup || "Unassigned",
+        tag: newMobForm.tagColour || "Unassigned",
+        whp: editingMobId ? (mobs.find((m) => m.id === editingMobId)?.whp || 0) : 0,
+      };
+      try {
+        if (editingMobId) {
+          const updated = await api.updateMob(editingMobId, fields);
+          setMobs((prev) => prev.map((m) => (m.id === editingMobId ? updated : m)));
+          markChanged();
+          showToast("Mob updated");
+        } else {
+          const created = await api.createMob(farmName, fields);
+          setMobs((prev) => [...prev, created]);
+          markChanged();
+          showToast("Mob created");
+        }
+      } catch (err) {
+        showToast(err.message || "Couldn't save mob to the server");
+        return;
+      }
+      // Remember custom breeds for future use, both locally and on the server
+      if (newMobForm.breed && !(BREEDS_DEFAULT[species] || []).includes(newMobForm.breed)) {
+        setCustomBreeds((prev) => ({
+          ...prev,
+          [species]: [...new Set([...(prev[species] || []), newMobForm.breed])],
+        }));
+        api.addBreed(species, newMobForm.breed).catch(() => {});
+      }
+      setEditingMobId(null);
+      setShowAddMob(false);
+    };
+
+    return (
+      <div className="fixed inset-0 bg-slate-50 z-40 flex flex-col max-w-md md:max-w-xl mx-auto md:border-x md:border-stone-200 md:shadow-2xl">
+        <div className="bg-white border-b border-stone-200 flex items-center justify-between px-4 py-4">
+          <button onClick={() => { setShowAddMob(false); setEditingMobId(null); }} className="text-sm font-semibold text-slate-300">CANCEL</button>
+          <h1 className="text-base font-bold">{editingMobId ? "Edit Mob" : "Add Mob"}</h1>
+          <div className="w-14" />
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Species *</label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { id: "Cattle", emoji: "🐄" },
+                { id: "Sheep",  emoji: "🐑" },
+                { id: "Bulls",  emoji: "🐂" },
+                { id: "Rams",   emoji: "🐏" },
+              ].map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => updateNewMob("species", s.id)}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-2xl border font-semibold ${species === s.id ? "border-red-900 bg-amber-200 text-red-950" : "border-slate-200 bg-white text-slate-600"}`}
+                >
+                  <span className={`w-4 h-4 rounded-full border-2 ${species === s.id ? "border-red-900 bg-red-900" : "border-slate-300"}`} />
+                  <span>{s.emoji} {s.id}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Mob name *</label>
+            <p className="text-xs text-slate-400 mb-2">A name to help identify the group of animals.</p>
+            <input value={newMobForm.name || ""} onChange={(e) => updateNewMob("name", e.target.value)} placeholder="e.g. Coleraine cows" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Breed *</label>
+            <select value={breedOptions.includes(newMobForm.breed || "") ? (newMobForm.breed || "") : "__custom__"}
+              onChange={(e) => {
+                if (e.target.value === "__custom__") updateNewMob("breed", "");
+                else updateNewMob("breed", e.target.value);
+              }}
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
+              <option value="">Select a breed...</option>
+              {breedOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+              <option value="__custom__">+ Enter a different breed</option>
+            </select>
+            {(!newMobForm.breed || !breedOptions.includes(newMobForm.breed)) && (
+              <input
+                value={newMobForm.breed || ""}
+                onChange={(e) => updateNewMob("breed", e.target.value)}
+                placeholder="Type breed name..."
+                className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white"
+              />
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Age class *</label>
+            <select value={newMobForm.ageClass || ""} onChange={(e) => updateNewMob("ageClass", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+              <option value="">Make a selection</option>
+              {ageOptions.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Date of birth *</label>
+            <p className="text-xs text-slate-400 mb-2">Select a day, month or year of birth, or skip tracking.</p>
+            <div className="flex gap-2 flex-wrap">
+              {["Day", "Month", "Year", "Do not track"].map((opt) => (
+                <button
+                  key={opt}
+                  onClick={() => updateNewMob("dobOption", opt)}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border font-medium text-sm ${newMobForm.dobOption === opt ? "border-red-900 bg-amber-200 text-red-950" : "border-slate-200 bg-white text-slate-600"}`}
+                >
+                  <span className={`w-3.5 h-3.5 rounded-full border-2 ${newMobForm.dobOption === opt ? "border-red-900 bg-red-900" : "border-slate-300"}`} />
+                  {opt}
+                </button>
+              ))}
+            </div>
+            {newMobForm.dobOption && newMobForm.dobOption !== "Do not track" && (
+              <input
+                type={newMobForm.dobOption === "Year" ? "number" : newMobForm.dobOption === "Month" ? "month" : "date"}
+                placeholder={`Select ${newMobForm.dobOption.toLowerCase()}`}
+                value={newMobForm.dob || ""}
+                onChange={(e) => updateNewMob("dob", e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mt-2"
+              />
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Management Tag</label>
+            <p className="text-xs text-slate-400 mb-2">Assign to a group of animals to manage or report on.</p>
+            {(() => {
+              // Only tags currently in use — keeps everyone using identical spellings
+              const usedTags = [...new Set(mobs.map(m => m.mgmtGroup).filter(t => t && t !== "Unassigned"))]
+                .sort((a, b) => a.localeCompare(b));
+              const val = newMobForm.mgmtGroup || "";
+              const customMode = newMobForm._mgmtCustom || (val && !usedTags.includes(val));
+              return (<>
+                <select
+                  value={customMode ? "__custom__" : val}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") { updateNewMob("_mgmtCustom", true); updateNewMob("mgmtGroup", ""); }
+                    else { updateNewMob("_mgmtCustom", false); updateNewMob("mgmtGroup", e.target.value); }
+                  }}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
+                  <option value="">No management tag</option>
+                  {usedTags.map((t) => <option key={t} value={t}>{t}</option>)}
+                  <option value="__custom__">+ Add a new tag</option>
+                </select>
+                {customMode && (
+                  <input value={val} onChange={(e) => updateNewMob("mgmtGroup", e.target.value)}
+                    placeholder="Type new tag name..." autoFocus
+                    className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white" />
+                )}
+              </>);
+            })()}
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Tag colour *</label>
+            <select value={newMobForm.tagColour || ""} onChange={(e) => updateNewMob("tagColour", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+              <option value="">Select a tag colour...</option>
+              {TAG_COLOURS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Average weight</label>
+            <div className="flex gap-2">
+              <input type="number" value={newMobForm.avgWeight || ""} onChange={(e) => updateNewMob("avgWeight", e.target.value)} className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              <div className="bg-slate-100 rounded-xl px-4 py-2.5 font-semibold text-slate-500 text-sm flex items-center">kg</div>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">DSE per head</label>
+            <input type="number" step="0.1" inputMode="decimal" value={newMobForm.dse || ""} onChange={(e) => updateNewMob("dse", e.target.value)} placeholder={species === "Sheep" ? "e.g. 1.5" : "e.g. 6"} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Mob description</label>
+            <textarea value={newMobForm.description || ""} onChange={(e) => updateNewMob("description", e.target.value)} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Paddock *</label>
+            <p className="text-xs text-slate-400 mb-2">Assign animals to a paddock.</p>
+            <select value={newMobForm.paddock || ""} onChange={(e) => updateNewMob("paddock", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+              <option value="">Make a selection</option>
+              {[...paddocks].sort((a, b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-sm font-bold text-slate-700 block mb-2">Mob size *</label>
+            <p className="text-xs text-slate-400 mb-2">Number of head</p>
+            <input type="number" value={newMobForm.size || ""} onChange={(e) => updateNewMob("size", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+          </div>
+        </div>
+        <div className="flex gap-2 p-4 border-t border-slate-100 bg-white">
+          <button onClick={() => { setShowAddMob(false); setEditingMobId(null); }} className="flex-1 border border-slate-200 rounded-2xl py-3 font-bold text-slate-500">Cancel</button>
+          <button onClick={saveMob} className="flex-1 bg-red-900 text-white rounded-2xl py-3 font-bold">{editingMobId ? "Save Changes" : "Save"}</button>
+        </div>
+      </div>
+    );
+  };
+
+  if (showSplash || authLoading) {
+    return (
+      <div className="max-w-md mx-auto min-h-screen bg-stone-50 flex flex-col items-center justify-center gap-6 px-8">
+        <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-48 rounded-xl shadow-2xl" />
+        {apiWaking && (
+          <div className="text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <p className="text-white/60 text-sm font-medium">Server waking up — this takes about 15 seconds on first load…</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Password setup screen (invite link from email) ───────────────────────
+
+  if (locked && loggedInEmail) {
+    return (
+      <div className="max-w-md mx-auto min-h-screen font-sans bg-stone-50 flex flex-col items-center justify-center px-6">
+        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6 text-center">
+          <div className="w-16 h-16 rounded-full bg-orange-50 text-red-950 flex items-center justify-center text-2xl font-extrabold mx-auto mb-4">
+            {(currentUser.name || currentUser.email)[0].toUpperCase()}
+          </div>
+          <div className="text-lg font-extrabold text-slate-800">Welcome back</div>
+          <div className="text-sm text-slate-400 mb-6">{currentUser.name} · {currentUser.email}</div>
+          <button onClick={() => setLocked(false)} className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold">Continue</button>
+          <button
+            onClick={() => { setAuthToken(null); setCurrentAccount(null); setLoggedInEmail(null); setLocked(false); setLoginEmail(""); setStayLoggedIn(true); }}
+            className="w-full text-slate-400 text-sm font-semibold mt-3"
+          >
+            Use a different account
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!loggedInEmail) {
+    return (
+      <div className="max-w-md mx-auto min-h-screen font-sans bg-stone-50 flex flex-col items-center justify-center px-6">
+        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6">
+          <div className="text-center mb-6">
+            <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-32 mx-auto mb-3 rounded-lg shadow" />
+            <div className="text-sm text-slate-400 mt-1">Sign in with your invited account</div>
+          </div>
+          <div className="space-y-3 mb-2">
+            <div>
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Email</label>
+              <input
+                type="email"
+                value={loginEmail}
+                onChange={(e) => { setLoginEmail(e.target.value); setLoginError(""); }}
+                placeholder="name@example.com"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Password</label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(e) => { setLoginPassword(e.target.value); setLoginError(""); }}
+                placeholder="••••••••"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
+              />
+            </div>
+          </div>
+          <button
+            onClick={() => setStayLoggedIn((v) => !v)}
+            className="w-full flex items-center gap-2 mb-2 text-left"
+          >
+            <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center ${stayLoggedIn ? "bg-red-900 border-red-900" : "border-slate-300"}`}>
+              {stayLoggedIn && <Check size={14} className="text-white" />}
+            </span>
+            <span className="text-sm font-medium text-slate-600">Stay logged in on this device</span>
+          </button>
+          {loginError && <p className="text-sm text-rose-500 font-medium mb-2">{loginError}</p>}
+          <button
+            onClick={async (e) => {
+              const btn = e.currentTarget;
+              const email = loginEmail.trim().toLowerCase();
+              if (!email || !loginPassword) { setLoginError("Please enter your email and password."); return; }
+              setLoginError("");
+              btn.disabled = true;
+              btn.textContent = "Signing in…";
+              try {
+                const { token, account } = await api.login(email, loginPassword);
+                setAuthToken(token);
+                setCurrentAccount(account);
+                setLoggedInEmail(account.email);
+                setLoginPassword("");
+              } catch (err) {
+                btn.disabled = false;
+                btn.textContent = "Sign in";
+                setLoginError(err.message === "Couldn't reach the server — check your connection."
+                  ? "Server is starting up — wait 15 seconds and try again."
+                  : (err.message || "Couldn't sign in. Please try again."));
+              }
+            }}
+            className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
+          >
+            Sign in
+          </button>
+          <p className="text-xs text-slate-400 mt-4 text-center">
+            Only people invited by an Admin (via Menu → Accounts) can access this farm's data. Ask your farm Admin for an invite.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Desktop layout: sidebar nav + content panel on wide screens ──
+  const DesktopSidebar = () => (
+    <div className="hidden md:flex flex-col w-56 min-h-screen bg-white border-r border-stone-200 fixed left-0 top-0 bottom-0 z-30">
+      <div className="px-4 py-4 border-b border-stone-100">
+        <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-full rounded-lg" />
+        {/* Farm switcher — no more digging through the drawer */}
+        <select
+          value={farmName}
+          onChange={(e) => {
+            setFarmName(e.target.value);
+            setHomeFarm(null);
+            setAllMobHistory([]);
+            showToast(`Switched to ${e.target.value}`);
+          }}
+          className="w-full mt-3 border border-stone-200 rounded-xl px-2 py-1.5 text-sm font-semibold text-stone-700 bg-stone-50"
+        >
+          {accessibleFarms.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
+      </div>
+      <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
+        {[
+          { id: "home", icon: "🏠", label: "Home" },
+          { id: "map", icon: "🗺️", label: "Map" },
+          { id: "livestock", icon: "🐄", label: "Livestock" },
+          { id: "workflow", icon: "📋", label: "Workflow" },
+          { id: "cattle_feeding", icon: "🐄", label: "Cattle Feeding" },
+          { id: "sheep_feeding", icon: "🐑", label: "Sheep Feeding" },
+        ].map(({ id, icon, label }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors text-left ${tab === id ? "bg-stone-100 text-stone-900 font-semibold" : "text-stone-500 hover:bg-stone-50 hover:text-stone-800"}`}
+          >
+            <span className="text-base flex-shrink-0">{icon}</span>
+            <span>{label}</span>
+            {tab === id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-stone-100 space-y-0.5">
+        <div className="text-[10px] font-bold text-stone-300 tracking-widest px-3 pt-1 pb-1">MANAGE</div>
+        {[
+          { icon: "📋", label: "Records & Export", onClick: () => {
+              setShowRecords(true);
+              setRecordsLoading(true);
+              api.listAllMobHistory(farmName)
+                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+                .catch(() => setRecordsLoading(false));
+            } },
+          { icon: "💉", label: "Inventory", onClick: () => setShowInventory(true) },
+          { icon: "📍", label: "Field Notes", onClick: () => setShowFieldNotes(true) },
+          { icon: "🌱", label: "Paddock List", onClick: () => setShowPaddockList(true) },
+          { icon: "🌧️", label: "Rainfall", onClick: () => setShowRainfall(true) },
+          { icon: "✨", label: "All Farms", onClick: () => setShowAllFarms(true) },
+          { icon: "👤", label: "Accounts", onClick: () => setShowAccounts(true) },
+          { icon: "⚙️", label: "Settings", onClick: () => setShowSettings(true) },
+        ].map(({ icon, label, onClick }) => (
+          <button key={label} onClick={onClick}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium text-stone-500 hover:bg-stone-50 hover:text-stone-800 text-left">
+            <span className="text-base flex-shrink-0">{icon}</span>
+            <span>{label}</span>
+          </button>
+        ))}
+        <button onClick={handleSync}
+          className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium text-stone-500 hover:bg-stone-50 hover:text-stone-800 text-left">
+          <span className={`text-base flex-shrink-0 ${syncing ? "animate-spin inline-block" : ""}`}>🔄</span>
+          <span>{syncing ? "Syncing…" : "Synchronise"}</span>
+          {(syncCount + pendingChanges) > 0 && (
+            <span className="ml-auto bg-amber-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center font-bold">{syncCount + pendingChanges}</span>
+          )}
+        </button>
+        <div className="flex items-center justify-between px-3 pt-2">
+          <div className="text-xs text-stone-400 truncate">{currentUser.name} · {currentUser.role}</div>
+          <button
+            onClick={() => {
+              if (stayLoggedIn) {
+                setLocked(true);
+              } else {
+                setAuthToken(null);
+                setCurrentAccount(null);
+                setLoggedInEmail(null);
+                setLoginEmail("");
+              }
+            }}
+            className="text-xs font-semibold text-rose-400 hover:text-rose-600 flex-shrink-0 ml-2"
+          >
+            Log out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="md:flex min-h-screen bg-slate-100">
+      <DesktopSidebar />
+      <div className="md:ml-56 flex-1">
+    <div className="max-w-md md:max-w-none mx-auto bg-stone-50 min-h-screen font-sans relative">
+      {tab === "home" && <HomeScreen
+        setTab={setTab} setFarmName={setFarmName}
+        setFarmsMobs={setFarmsMobs} setFarmsPaddocks={setFarmsPaddocks} setFarmsLandmarks={setFarmsLandmarks}
+        farmsMobs={farmsMobs} farmsPaddocks={farmsPaddocks} farmName={farmName}
+        totalCattle={totalCattle} totalSheep={totalSheep} totalDSE={totalDSE}
+        farmSummaries={farmSummaries} rainfall={rainfall} setShowRainfall={setShowRainfall}
+        isOnline={isOnline} pendingChanges={pendingChanges} syncCount={syncCount}
+        syncing={syncing} handleSync={handleSync} setShowPaddockList={setShowPaddockList}
+        paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
+        currentUser={currentUser} homeFarm={homeFarm} setHomeFarm={setHomeFarm}
+      />}
+      {tab === "map" && MapScreen()}
+      {tab === "livestock" && LivestockScreen()}
+      {tab === "moblist" && MobListScreen()}
+      {tab === "mobactivity" && MobActivityScreen()}
+      {tab === "workflow" && <WorkflowScreen setTab={setTab} currentAccount={currentAccount} />}
+      {tab === "cattle_feeding" && <CattleFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
+      {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
+      <div className="md:hidden"><BottomNav /></div>
+      {selectedMob && MobDetails()}
+      {showMenu && MenuScreen()}
+
+      {/* ── Paddock picker bottom sheet (from Mob Details paddock tile) ── */}
+      {showPaddockPicker && selectedMob && (
+        <PaddockMoveSheet
+          mob={selectedMob}
+          paddocks={paddocks}
+          farmName={farmName}
+          startAtAction={true}
+          onClose={() => setShowPaddockPicker(false)}
+          onMoveAll={async (target) => {
+            const mobId = selectedMob.id;
+            const detail = `Moved from ${selectedMob.paddock} to ${target.name}`;
+            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: target.name, daysInPaddock: 0 } : m));
+            setShowPaddockPicker(false);
+            showToast(`${selectedMob.name} → ${target.name}`);
+            try {
+              await api.updateMob(mobId, { paddock: target.name, daysInPaddock: 0 });
+              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+            } catch (err) { showToast(err.message || "Couldn't save move"); }
+          }}
+          onSplit={async (target, moveCount) => {
+            const mobId = selectedMob.id;
+            const remaining = selectedMob.count - moveCount;
+            const detail = `Split: ${moveCount} head moved to ${target.name}, ${remaining} remain in ${selectedMob.paddock}`;
+            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, count: remaining } : m));
+            setShowPaddockPicker(false);
+            showToast(`${moveCount} head → ${target.name}, ${remaining} remain`);
+            try {
+              await api.updateMob(mobId, { count: remaining });
+              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+              // Same mob already holds a portion in the target paddock? Merge the numbers.
+              const existing = mobs.find(m => m.id !== mobId && m.paddock === target.name && m.name === selectedMob.name && m.species === selectedMob.species);
+              if (existing) {
+                const merged = await api.updateMob(existing.id, { count: Number(existing.count) + moveCount, daysInPaddock: 0 });
+                setMobs(prev => prev.map(m => m.id === existing.id ? { ...m, ...merged } : m));
+                await api.addMobHistory(existing.id, { action: "Move", detail: `Received ${moveCount} head split from ${selectedMob.paddock}`, date: todayStr() });
+              } else {
+                // Identical mob — SAME name and details, just a portion in another paddock
+                const newMob = await api.createMob(farmName, {
+                  name: selectedMob.name,
+                  desc: selectedMob.desc, count: moveCount,
+                  paddock: target.name, dse: selectedMob.dse,
+                  species: selectedMob.species, type: selectedMob.type,
+                  breed: selectedMob.breed, ageClass: selectedMob.ageClass,
+                  mgmtGroup: selectedMob.mgmtGroup, tag: selectedMob.tag, daysInPaddock: 0,
+                });
+                setMobs(prev => [...prev, newMob]);
+                await api.addMobHistory(newMob.id, { action: "Move", detail: `Split ${moveCount} head from ${selectedMob.paddock}`, date: todayStr() });
+              }
+            } catch (err) { showToast(err.message || "Couldn't save split"); }
+          }}
+        />
+      )}
+
+      {/* ── Feature screens (Records, Inventory, etc.) — moved out of the
+          phone drawer so they open from the desktop sidebar too ── */}
       {showSwitchFarm && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 px-6">
-          <div className="bg-white rounded-3xl w-full overflow-hidden shadow-2xl">
+          <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl">
             <div className="text-center font-extrabold py-4 border-b border-slate-100 text-slate-800">Switch farm</div>
             {accessibleFarms.map((f) => (
               <button key={f} onClick={() => {
@@ -7346,519 +7876,7 @@ export default function App() {
           </div>
         </Modal>
       )}
-    </div>
-  );
 
-  const updateNewMob = (key, val) => setNewMobForm((prev) => ({ ...prev, [key]: val }));
-
-  const AddMobModal = () => {
-    const species = newMobForm.species || "Cattle";
-    const breedOptions = [...(BREEDS_DEFAULT[species] || []), ...(customBreeds[species] || []).filter((b) => !(BREEDS_DEFAULT[species] || []).includes(b))];
-    const ageOptions = AGE_CLASSES[species];
-
-    const saveMob = async () => {
-      if (!newMobForm.name) { showToast("Mob name is required"); return; }
-      if (!newMobForm.paddock) { showToast("Please select a paddock"); return; }
-      if (!newMobForm.size) { showToast("Please enter a mob size"); return; }
-      const fields = {
-        name: newMobForm.name,
-        desc: `${newMobForm.breed || species} ${(newMobForm.ageClass || "").toLowerCase()}${newMobForm.dob ? " · " + newMobForm.dob : ""}`.trim(),
-        count: Number(newMobForm.size),
-        paddock: newMobForm.paddock,
-        dse: newMobForm.dse ? Number(newMobForm.dse) : (species === "Sheep" || species === "Rams" ? 1.5 : 8),
-        species,
-        type: ageOptions?.includes(newMobForm.ageClass) ? newMobForm.ageClass : (species === "Sheep" || species === "Rams" ? "Ewes" : species === "Bulls" ? "Bulls" : "Cows"),
-        breed: newMobForm.breed || "Mixed",
-        ageClass: newMobForm.ageClass || "Adult",
-        mgmtGroup: newMobForm.mgmtGroup || "Unassigned",
-        tag: newMobForm.tagColour || "Unassigned",
-        whp: editingMobId ? (mobs.find((m) => m.id === editingMobId)?.whp || 0) : 0,
-      };
-      try {
-        if (editingMobId) {
-          const updated = await api.updateMob(editingMobId, fields);
-          setMobs((prev) => prev.map((m) => (m.id === editingMobId ? updated : m)));
-          markChanged();
-          showToast("Mob updated");
-        } else {
-          const created = await api.createMob(farmName, fields);
-          setMobs((prev) => [...prev, created]);
-          markChanged();
-          showToast("Mob created");
-        }
-      } catch (err) {
-        showToast(err.message || "Couldn't save mob to the server");
-        return;
-      }
-      // Remember custom breeds for future use, both locally and on the server
-      if (newMobForm.breed && !(BREEDS_DEFAULT[species] || []).includes(newMobForm.breed)) {
-        setCustomBreeds((prev) => ({
-          ...prev,
-          [species]: [...new Set([...(prev[species] || []), newMobForm.breed])],
-        }));
-        api.addBreed(species, newMobForm.breed).catch(() => {});
-      }
-      setEditingMobId(null);
-      setShowAddMob(false);
-    };
-
-    return (
-      <div className="fixed inset-0 bg-slate-50 z-40 flex flex-col max-w-md md:max-w-xl mx-auto md:border-x md:border-stone-200 md:shadow-2xl">
-        <div className="bg-white border-b border-stone-200 flex items-center justify-between px-4 py-4">
-          <button onClick={() => { setShowAddMob(false); setEditingMobId(null); }} className="text-sm font-semibold text-slate-300">CANCEL</button>
-          <h1 className="text-base font-bold">{editingMobId ? "Edit Mob" : "Add Mob"}</h1>
-          <div className="w-14" />
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-5">
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Species *</label>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { id: "Cattle", emoji: "🐄" },
-                { id: "Sheep",  emoji: "🐑" },
-                { id: "Bulls",  emoji: "🐂" },
-                { id: "Rams",   emoji: "🐏" },
-              ].map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => updateNewMob("species", s.id)}
-                  className={`flex items-center justify-center gap-2 py-3 rounded-2xl border font-semibold ${species === s.id ? "border-red-900 bg-amber-200 text-red-950" : "border-slate-200 bg-white text-slate-600"}`}
-                >
-                  <span className={`w-4 h-4 rounded-full border-2 ${species === s.id ? "border-red-900 bg-red-900" : "border-slate-300"}`} />
-                  <span>{s.emoji} {s.id}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Mob name *</label>
-            <p className="text-xs text-slate-400 mb-2">A name to help identify the group of animals.</p>
-            <input value={newMobForm.name || ""} onChange={(e) => updateNewMob("name", e.target.value)} placeholder="e.g. Coleraine cows" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Breed *</label>
-            <select value={breedOptions.includes(newMobForm.breed || "") ? (newMobForm.breed || "") : "__custom__"}
-              onChange={(e) => {
-                if (e.target.value === "__custom__") updateNewMob("breed", "");
-                else updateNewMob("breed", e.target.value);
-              }}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
-              <option value="">Select a breed...</option>
-              {breedOptions.map((b) => <option key={b} value={b}>{b}</option>)}
-              <option value="__custom__">+ Enter a different breed</option>
-            </select>
-            {(!newMobForm.breed || !breedOptions.includes(newMobForm.breed)) && (
-              <input
-                value={newMobForm.breed || ""}
-                onChange={(e) => updateNewMob("breed", e.target.value)}
-                placeholder="Type breed name..."
-                className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white"
-              />
-            )}
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Age class *</label>
-            <select value={newMobForm.ageClass || ""} onChange={(e) => updateNewMob("ageClass", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
-              <option value="">Make a selection</option>
-              {ageOptions.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Date of birth *</label>
-            <p className="text-xs text-slate-400 mb-2">Select a day, month or year of birth, or skip tracking.</p>
-            <div className="flex gap-2 flex-wrap">
-              {["Day", "Month", "Year", "Do not track"].map((opt) => (
-                <button
-                  key={opt}
-                  onClick={() => updateNewMob("dobOption", opt)}
-                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border font-medium text-sm ${newMobForm.dobOption === opt ? "border-red-900 bg-amber-200 text-red-950" : "border-slate-200 bg-white text-slate-600"}`}
-                >
-                  <span className={`w-3.5 h-3.5 rounded-full border-2 ${newMobForm.dobOption === opt ? "border-red-900 bg-red-900" : "border-slate-300"}`} />
-                  {opt}
-                </button>
-              ))}
-            </div>
-            {newMobForm.dobOption && newMobForm.dobOption !== "Do not track" && (
-              <input
-                type={newMobForm.dobOption === "Year" ? "number" : newMobForm.dobOption === "Month" ? "month" : "date"}
-                placeholder={`Select ${newMobForm.dobOption.toLowerCase()}`}
-                value={newMobForm.dob || ""}
-                onChange={(e) => updateNewMob("dob", e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mt-2"
-              />
-            )}
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Management Tag</label>
-            <p className="text-xs text-slate-400 mb-2">Assign to a group of animals to manage or report on.</p>
-            {(() => {
-              // Only tags currently in use — keeps everyone using identical spellings
-              const usedTags = [...new Set(mobs.map(m => m.mgmtGroup).filter(t => t && t !== "Unassigned"))]
-                .sort((a, b) => a.localeCompare(b));
-              const val = newMobForm.mgmtGroup || "";
-              const customMode = newMobForm._mgmtCustom || (val && !usedTags.includes(val));
-              return (<>
-                <select
-                  value={customMode ? "__custom__" : val}
-                  onChange={(e) => {
-                    if (e.target.value === "__custom__") { updateNewMob("_mgmtCustom", true); updateNewMob("mgmtGroup", ""); }
-                    else { updateNewMob("_mgmtCustom", false); updateNewMob("mgmtGroup", e.target.value); }
-                  }}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
-                  <option value="">No management tag</option>
-                  {usedTags.map((t) => <option key={t} value={t}>{t}</option>)}
-                  <option value="__custom__">+ Add a new tag</option>
-                </select>
-                {customMode && (
-                  <input value={val} onChange={(e) => updateNewMob("mgmtGroup", e.target.value)}
-                    placeholder="Type new tag name..." autoFocus
-                    className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white" />
-                )}
-              </>);
-            })()}
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Tag colour *</label>
-            <select value={newMobForm.tagColour || ""} onChange={(e) => updateNewMob("tagColour", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
-              <option value="">Select a tag colour...</option>
-              {TAG_COLOURS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Average weight</label>
-            <div className="flex gap-2">
-              <input type="number" value={newMobForm.avgWeight || ""} onChange={(e) => updateNewMob("avgWeight", e.target.value)} className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
-              <div className="bg-slate-100 rounded-xl px-4 py-2.5 font-semibold text-slate-500 text-sm flex items-center">kg</div>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">DSE per head</label>
-            <input type="number" step="0.1" inputMode="decimal" value={newMobForm.dse || ""} onChange={(e) => updateNewMob("dse", e.target.value)} placeholder={species === "Sheep" ? "e.g. 1.5" : "e.g. 6"} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Mob description</label>
-            <textarea value={newMobForm.description || ""} onChange={(e) => updateNewMob("description", e.target.value)} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Paddock *</label>
-            <p className="text-xs text-slate-400 mb-2">Assign animals to a paddock.</p>
-            <select value={newMobForm.paddock || ""} onChange={(e) => updateNewMob("paddock", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
-              <option value="">Make a selection</option>
-              {[...paddocks].sort((a, b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-sm font-bold text-slate-700 block mb-2">Mob size *</label>
-            <p className="text-xs text-slate-400 mb-2">Number of head</p>
-            <input type="number" value={newMobForm.size || ""} onChange={(e) => updateNewMob("size", e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
-          </div>
-        </div>
-        <div className="flex gap-2 p-4 border-t border-slate-100 bg-white">
-          <button onClick={() => { setShowAddMob(false); setEditingMobId(null); }} className="flex-1 border border-slate-200 rounded-2xl py-3 font-bold text-slate-500">Cancel</button>
-          <button onClick={saveMob} className="flex-1 bg-red-900 text-white rounded-2xl py-3 font-bold">{editingMobId ? "Save Changes" : "Save"}</button>
-        </div>
-      </div>
-    );
-  };
-
-  if (showSplash || authLoading) {
-    return (
-      <div className="max-w-md mx-auto min-h-screen bg-stone-50 flex flex-col items-center justify-center gap-6 px-8">
-        <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-48 rounded-xl shadow-2xl" />
-        {apiWaking && (
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-              <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-            </div>
-            <p className="text-white/60 text-sm font-medium">Server waking up — this takes about 15 seconds on first load…</p>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ── Password setup screen (invite link from email) ───────────────────────
-
-  if (locked && loggedInEmail) {
-    return (
-      <div className="max-w-md mx-auto min-h-screen font-sans bg-stone-50 flex flex-col items-center justify-center px-6">
-        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6 text-center">
-          <div className="w-16 h-16 rounded-full bg-orange-50 text-red-950 flex items-center justify-center text-2xl font-extrabold mx-auto mb-4">
-            {(currentUser.name || currentUser.email)[0].toUpperCase()}
-          </div>
-          <div className="text-lg font-extrabold text-slate-800">Welcome back</div>
-          <div className="text-sm text-slate-400 mb-6">{currentUser.name} · {currentUser.email}</div>
-          <button onClick={() => setLocked(false)} className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold">Continue</button>
-          <button
-            onClick={() => { setAuthToken(null); setCurrentAccount(null); setLoggedInEmail(null); setLocked(false); setLoginEmail(""); setStayLoggedIn(true); }}
-            className="w-full text-slate-400 text-sm font-semibold mt-3"
-          >
-            Use a different account
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!loggedInEmail) {
-    return (
-      <div className="max-w-md mx-auto min-h-screen font-sans bg-stone-50 flex flex-col items-center justify-center px-6">
-        <div className="bg-white rounded-2xl border border-stone-200 w-full p-6">
-          <div className="text-center mb-6">
-            <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-32 mx-auto mb-3 rounded-lg shadow" />
-            <div className="text-sm text-slate-400 mt-1">Sign in with your invited account</div>
-          </div>
-          <div className="space-y-3 mb-2">
-            <div>
-              <label className="text-sm font-semibold text-slate-600 block mb-1">Email</label>
-              <input
-                type="email"
-                value={loginEmail}
-                onChange={(e) => { setLoginEmail(e.target.value); setLoginError(""); }}
-                placeholder="name@example.com"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-semibold text-slate-600 block mb-1">Password</label>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => { setLoginPassword(e.target.value); setLoginError(""); }}
-                placeholder="••••••••"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white"
-              />
-            </div>
-          </div>
-          <button
-            onClick={() => setStayLoggedIn((v) => !v)}
-            className="w-full flex items-center gap-2 mb-2 text-left"
-          >
-            <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center ${stayLoggedIn ? "bg-red-900 border-red-900" : "border-slate-300"}`}>
-              {stayLoggedIn && <Check size={14} className="text-white" />}
-            </span>
-            <span className="text-sm font-medium text-slate-600">Stay logged in on this device</span>
-          </button>
-          {loginError && <p className="text-sm text-rose-500 font-medium mb-2">{loginError}</p>}
-          <button
-            onClick={async (e) => {
-              const btn = e.currentTarget;
-              const email = loginEmail.trim().toLowerCase();
-              if (!email || !loginPassword) { setLoginError("Please enter your email and password."); return; }
-              setLoginError("");
-              btn.disabled = true;
-              btn.textContent = "Signing in…";
-              try {
-                const { token, account } = await api.login(email, loginPassword);
-                setAuthToken(token);
-                setCurrentAccount(account);
-                setLoggedInEmail(account.email);
-                setLoginPassword("");
-              } catch (err) {
-                btn.disabled = false;
-                btn.textContent = "Sign in";
-                setLoginError(err.message === "Couldn't reach the server — check your connection."
-                  ? "Server is starting up — wait 15 seconds and try again."
-                  : (err.message || "Couldn't sign in. Please try again."));
-              }
-            }}
-            className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold mt-2 disabled:opacity-60"
-          >
-            Sign in
-          </button>
-          <p className="text-xs text-slate-400 mt-4 text-center">
-            Only people invited by an Admin (via Menu → Accounts) can access this farm's data. Ask your farm Admin for an invite.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Desktop layout: sidebar nav + content panel on wide screens ──
-  const DesktopSidebar = () => (
-    <div className="hidden md:flex flex-col w-56 min-h-screen bg-white border-r border-stone-200 fixed left-0 top-0 bottom-0 z-30">
-      <div className="px-4 py-4 border-b border-stone-100">
-        <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-full rounded-lg" />
-        {/* Farm switcher — no more digging through the drawer */}
-        <select
-          value={farmName}
-          onChange={(e) => {
-            setFarmName(e.target.value);
-            setHomeFarm(null);
-            setAllMobHistory([]);
-            showToast(`Switched to ${e.target.value}`);
-          }}
-          className="w-full mt-3 border border-stone-200 rounded-xl px-2 py-1.5 text-sm font-semibold text-stone-700 bg-stone-50"
-        >
-          {accessibleFarms.map((f) => <option key={f} value={f}>{f}</option>)}
-        </select>
-      </div>
-      <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
-        {[
-          { id: "home", icon: "🏠", label: "Home" },
-          { id: "map", icon: "🗺️", label: "Map" },
-          { id: "livestock", icon: "🐄", label: "Livestock" },
-          { id: "workflow", icon: "📋", label: "Workflow" },
-          { id: "cattle_feeding", icon: "🐄", label: "Cattle Feeding" },
-          { id: "sheep_feeding", icon: "🐑", label: "Sheep Feeding" },
-        ].map(({ id, icon, label }) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors text-left ${tab === id ? "bg-stone-100 text-stone-900 font-semibold" : "text-stone-500 hover:bg-stone-50 hover:text-stone-800"}`}
-          >
-            <span className="text-base flex-shrink-0">{icon}</span>
-            <span>{label}</span>
-            {tab === id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />}
-          </button>
-        ))}
-      </nav>
-      <div className="p-3 border-t border-stone-100 space-y-0.5">
-        <div className="text-[10px] font-bold text-stone-300 tracking-widest px-3 pt-1 pb-1">MANAGE</div>
-        {[
-          { icon: "📋", label: "Records & Export", onClick: () => {
-              setShowRecords(true);
-              setRecordsLoading(true);
-              api.listAllMobHistory(farmName)
-                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
-                .catch(() => setRecordsLoading(false));
-            } },
-          { icon: "💉", label: "Inventory", onClick: () => setShowInventory(true) },
-          { icon: "📍", label: "Field Notes", onClick: () => setShowFieldNotes(true) },
-          { icon: "🌱", label: "Paddock List", onClick: () => setShowPaddockList(true) },
-          { icon: "🌧️", label: "Rainfall", onClick: () => setShowRainfall(true) },
-          { icon: "✨", label: "All Farms", onClick: () => setShowAllFarms(true) },
-          { icon: "👤", label: "Accounts", onClick: () => setShowAccounts(true) },
-          { icon: "⚙️", label: "Settings", onClick: () => setShowSettings(true) },
-        ].map(({ icon, label, onClick }) => (
-          <button key={label} onClick={onClick}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium text-stone-500 hover:bg-stone-50 hover:text-stone-800 text-left">
-            <span className="text-base flex-shrink-0">{icon}</span>
-            <span>{label}</span>
-          </button>
-        ))}
-        <button onClick={handleSync}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium text-stone-500 hover:bg-stone-50 hover:text-stone-800 text-left">
-          <span className={`text-base flex-shrink-0 ${syncing ? "animate-spin inline-block" : ""}`}>🔄</span>
-          <span>{syncing ? "Syncing…" : "Synchronise"}</span>
-          {(syncCount + pendingChanges) > 0 && (
-            <span className="ml-auto bg-amber-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center font-bold">{syncCount + pendingChanges}</span>
-          )}
-        </button>
-        <div className="flex items-center justify-between px-3 pt-2">
-          <div className="text-xs text-stone-400 truncate">{currentUser.name} · {currentUser.role}</div>
-          <button
-            onClick={() => {
-              if (stayLoggedIn) {
-                setLocked(true);
-              } else {
-                setAuthToken(null);
-                setCurrentAccount(null);
-                setLoggedInEmail(null);
-                setLoginEmail("");
-              }
-            }}
-            className="text-xs font-semibold text-rose-400 hover:text-rose-600 flex-shrink-0 ml-2"
-          >
-            Log out
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="md:flex min-h-screen bg-slate-100">
-      <DesktopSidebar />
-      <div className="md:ml-56 flex-1">
-    <div className="max-w-md md:max-w-none mx-auto bg-stone-50 min-h-screen font-sans relative">
-      {tab === "home" && <HomeScreen
-        setTab={setTab} setFarmName={setFarmName}
-        setFarmsMobs={setFarmsMobs} setFarmsPaddocks={setFarmsPaddocks} setFarmsLandmarks={setFarmsLandmarks}
-        farmsMobs={farmsMobs} farmsPaddocks={farmsPaddocks} farmName={farmName}
-        totalCattle={totalCattle} totalSheep={totalSheep} totalDSE={totalDSE}
-        farmSummaries={farmSummaries} rainfall={rainfall} setShowRainfall={setShowRainfall}
-        isOnline={isOnline} pendingChanges={pendingChanges} syncCount={syncCount}
-        syncing={syncing} handleSync={handleSync} setShowPaddockList={setShowPaddockList}
-        paddocks={paddocks} LOGO_DATA_URI={LOGO_DATA_URI} api={api} farmCenters={FARM_CENTERS}
-        currentUser={currentUser} homeFarm={homeFarm} setHomeFarm={setHomeFarm}
-      />}
-      {tab === "map" && MapScreen()}
-      {tab === "livestock" && LivestockScreen()}
-      {tab === "moblist" && MobListScreen()}
-      {tab === "mobactivity" && MobActivityScreen()}
-      {tab === "workflow" && <WorkflowScreen setTab={setTab} currentAccount={currentAccount} />}
-      {tab === "cattle_feeding" && <CattleFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
-      {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
-      <div className="md:hidden"><BottomNav /></div>
-      {selectedMob && MobDetails()}
-      {showMenu && MenuScreen()}
-
-      {/* ── Paddock picker bottom sheet (from Mob Details paddock tile) ── */}
-      {showPaddockPicker && selectedMob && (
-        <PaddockMoveSheet
-          mob={selectedMob}
-          paddocks={paddocks}
-          farmName={farmName}
-          startAtAction={true}
-          onClose={() => setShowPaddockPicker(false)}
-          onMoveAll={async (target) => {
-            const mobId = selectedMob.id;
-            const detail = `Moved from ${selectedMob.paddock} to ${target.name}`;
-            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, paddock: target.name, daysInPaddock: 0 } : m));
-            setShowPaddockPicker(false);
-            showToast(`${selectedMob.name} → ${target.name}`);
-            try {
-              await api.updateMob(mobId, { paddock: target.name, daysInPaddock: 0 });
-              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
-            } catch (err) { showToast(err.message || "Couldn't save move"); }
-          }}
-          onSplit={async (target, moveCount) => {
-            const mobId = selectedMob.id;
-            const remaining = selectedMob.count - moveCount;
-            const detail = `Split: ${moveCount} head moved to ${target.name}, ${remaining} remain in ${selectedMob.paddock}`;
-            setMobs(prev => prev.map(m => m.id === mobId ? { ...m, count: remaining } : m));
-            setShowPaddockPicker(false);
-            showToast(`${moveCount} head → ${target.name}, ${remaining} remain`);
-            try {
-              await api.updateMob(mobId, { count: remaining });
-              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
-              // Same mob already holds a portion in the target paddock? Merge the numbers.
-              const existing = mobs.find(m => m.id !== mobId && m.paddock === target.name && m.name === selectedMob.name && m.species === selectedMob.species);
-              if (existing) {
-                const merged = await api.updateMob(existing.id, { count: Number(existing.count) + moveCount, daysInPaddock: 0 });
-                setMobs(prev => prev.map(m => m.id === existing.id ? { ...m, ...merged } : m));
-                await api.addMobHistory(existing.id, { action: "Move", detail: `Received ${moveCount} head split from ${selectedMob.paddock}`, date: todayStr() });
-              } else {
-                // Identical mob — SAME name and details, just a portion in another paddock
-                const newMob = await api.createMob(farmName, {
-                  name: selectedMob.name,
-                  desc: selectedMob.desc, count: moveCount,
-                  paddock: target.name, dse: selectedMob.dse,
-                  species: selectedMob.species, type: selectedMob.type,
-                  breed: selectedMob.breed, ageClass: selectedMob.ageClass,
-                  mgmtGroup: selectedMob.mgmtGroup, tag: selectedMob.tag, daysInPaddock: 0,
-                });
-                setMobs(prev => [...prev, newMob]);
-                await api.addMobHistory(newMob.id, { action: "Move", detail: `Split ${moveCount} head from ${selectedMob.paddock}`, date: todayStr() });
-              }
-            } catch (err) { showToast(err.message || "Couldn't save split"); }
-          }}
-        />
-      )}
 
 
 
