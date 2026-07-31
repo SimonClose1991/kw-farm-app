@@ -3454,7 +3454,6 @@ export default function App() {
       setShowPaddockPicker(true);
       return;
     }
-    if (name === "Start Lambing") prefill["Season"] = inferLambingSeason(todayStr());
     if (name === "Death" && allMobHistory.length === 0) {
       // So previously used causes appear in the dropdown
       api.listAllMobHistory(farmName).then(setAllMobHistory).catch(() => {});
@@ -3487,6 +3486,7 @@ export default function App() {
     });
     if (name === "Ent/mgmt group" && m.mgmtGroup && m.mgmtGroup !== "Unassigned") prefill["Management group"] = m.mgmtGroup;
     if (name === "Recount") prefill["New head count"] = m.count;
+    if (name === "Start Lambing") prefill["Season"] = inferLambingSeason(todayStr());
     if (name === "Copy") {
       prefill["New mob name"] = `${m.name} (copy)`;
       prefill["Copy to paddock"] = m.paddock;
