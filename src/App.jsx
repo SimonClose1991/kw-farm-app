@@ -1419,6 +1419,7 @@ const ACTION_FIELDS = {
   "Start Lambing": [
     { label: "Season", type: "text" },
     { label: "Lambing paddock", type: "select", options: [] },
+    { label: "Ewes at start", type: "number", placeholder: "head count going into lambing" },
     { label: "Date", type: "date" },
     { label: "Notes", type: "text", placeholder: "Backdate to when they went into the paddock" },
   ],
@@ -3487,7 +3488,7 @@ export default function App() {
     });
     if (name === "Ent/mgmt group" && m.mgmtGroup && m.mgmtGroup !== "Unassigned") prefill["Management group"] = m.mgmtGroup;
     if (name === "Recount") prefill["New head count"] = m.count;
-    if (name === "Start Lambing") { prefill["Season"] = inferLambingSeason(todayStr()); prefill["Lambing paddock"] = m.paddock || ""; }
+    if (name === "Start Lambing") { prefill["Season"] = inferLambingSeason(todayStr()); prefill["Lambing paddock"] = m.paddock || ""; prefill["Ewes at start"] = m.count; }
     if (name === "Copy") {
       prefill["New mob name"] = `${m.name} (copy)`;
       prefill["Copy to paddock"] = m.paddock;
@@ -7618,7 +7619,7 @@ export default function App() {
                 allMobHistory.forEach(h => {
                   if (h.action === "Start Lambing") {
                     const season = (String(h.detail || "").match(/Season: ([^,\n]+)/) || [])[1]?.trim() || inferLambingSeason(h.date);
-                    (startsByMob[h.mobId] = startsByMob[h.mobId] || []).push({ date: String(h.date || ""), season, paddock: h.paddock || null, end: null });
+                    (startsByMob[h.mobId] = startsByMob[h.mobId] || []).push({ date: String(h.date || ""), season, paddock: h.paddock || null, end: null, ewes: num(/Ewes at start: ([\d.]+)/, h.detail) || null });
                   } else if (h.action === "End Lambing") {
                     (endsByMob[h.mobId] = endsByMob[h.mobId] || []).push(String(h.date || ""));
                   }
@@ -7654,9 +7655,9 @@ export default function App() {
                   const s = seasonOf(h.mobId, date, h.action);
                   const key = s ? s.key : date.slice(0, 4); // no Start Lambing recorded → plain year bucket
                   const mk = `${h.mobId}|${key}`;
-                  const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, mgmtGroup: null, seasonKey: key, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
+                  const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, mgmtGroup: null, seasonKey: key, startEwes: null, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
                   if (h.mgmtGroup && h.mgmtGroup !== "Unassigned") e.mgmtGroup = h.mgmtGroup;
-                  if (s) { e.lambStart = s.date; e.lambEnd = s.end; e.lambPaddock = s.paddock; e.hasSeason = true; }
+                  if (s) { e.lambStart = s.date; e.lambEnd = s.end; e.lambPaddock = s.paddock; e.hasSeason = true; if (s.ewes) e.startEwes = s.ewes; }
                   if (h.action === "Scan") {
                     const singles = num(/Singles \(head\): ([\d.]+)/, h.detail);
                     const twins = num(/Twins \(head\): ([\d.]+)/, h.detail);
@@ -7705,8 +7706,10 @@ export default function App() {
                     }
                     return s + d.n;
                   }, 0);
-                  // Starting ewes ≈ current count + ewes lost during lambing
-                  if (!e.ewes) e.ewes = (mob ? (Number(mob.count) || 0) : 0) + (e.lambStart ? e.deaths : 0);
+                  // Ewes = the count recorded at Start Lambing — frozen for the season,
+                  // never the live count (boxing up / sales would corrupt the rates)
+                  if (e.startEwes) e.ewes = e.startEwes;
+                  else if (!e.ewes) e.ewes = (mob ? (Number(mob.count) || 0) : 0) + (e.lambStart ? e.deaths : 0);
                   e.paddock = e.lambPaddock || e.paddock || e.scanPaddock || mob?.paddock || "—";
                   e.days = e.lambStart ? Math.max(0, Math.round((new Date(e.lambEnd || todayStr()) - new Date(e.lambStart)) / 86400000)) : null;
                   e.active = !!e.lambStart && !e.lambEnd;
@@ -7865,7 +7868,7 @@ export default function App() {
                         );
                       })()}
 
-                      <div className="text-[11px] text-slate-400 mt-1">Survival = lambs marked ÷ scanned foetuses. Paddock = nominated lambing paddock (Start Lambing). With a Start Lambing date, only deaths from that date (to End Lambing) count as lambing mortality — backdate the start to capture deaths already recorded.</div>
+                      <div className="text-[11px] text-slate-400 mt-1">Survival = lambs marked ÷ scanned foetuses. Ewes = the "Ewes at start" number from the Start Lambing record (falls back to scan totals). Paddock = nominated lambing paddock. Only deaths between Start and End Lambing count as lambing mortality — backdate the start to capture deaths already recorded.</div>
                     </>)}
                   </div>
                 );
