@@ -45,7 +45,8 @@ const MORE_ACTIONS = [
   ["Death", "💀"], ["Sale", "🚚"],
   ["Transfer", "🚛"], ["DSE", "🌿"],
   ["Scan", "🔍"], ["Mark", "🏷️"],
-  ["Wean", "🐑"],
+  ["Wean", "🐑"], ["Start Lambing", "🐣"],
+  ["End Lambing", "🏁"],
 ];
 const MOB_ACTIONS = [
   ["Edit", "✏️"], ["Copy", "📋"], ["Delete", "🗑️"],
@@ -1382,6 +1383,15 @@ function geojsonToPaddocks(geojson) {
 }
 
 const DEFAULT_DEATH_CAUSES = ["Lambing", "Illness", "Injury", "No Diagnosis", "Transit"];
+const LAMBING_SEASONS = ["Winter", "Spring", "Autumn", "Summer"];
+// Sensible default season from a date (southern hemisphere)
+function inferLambingSeason(dateStr) {
+  const m = Number(String(dateStr || "").slice(5, 7));
+  if (m >= 6 && m <= 8) return "Winter";
+  if (m >= 9 && m <= 11) return "Spring";
+  if (m >= 3 && m <= 5) return "Autumn";
+  return "Summer";
+}
 
 const ACTION_FIELDS = {
   Recount: [{ label: "New head count", type: "number", placeholder: "e.g. 140" }],
@@ -1406,6 +1416,15 @@ const ACTION_FIELDS = {
     { label: "Notes", type: "text", placeholder: "e.g. Scanned by Elders" },
   ],
   Score: [{ label: "_score_counter", type: "score_counter" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining assessment" }],
+  "Start Lambing": [
+    { label: "Season", type: "text" },
+    { label: "Date", type: "date" },
+    { label: "Notes", type: "text", placeholder: "Backdate to when they went into the paddock" },
+  ],
+  "End Lambing": [
+    { label: "Date", type: "date" },
+    { label: "Notes", type: "text" },
+  ],
   Mark: [
     { label: "Lambs marked", type: "number", placeholder: "e.g. 209" },
     { label: "Date", type: "date" },
@@ -3435,6 +3454,7 @@ export default function App() {
       setShowPaddockPicker(true);
       return;
     }
+    if (name === "Start Lambing") prefill["Season"] = inferLambingSeason(todayStr());
     if (name === "Death" && allMobHistory.length === 0) {
       // So previously used causes appear in the dropdown
       api.listAllMobHistory(farmName).then(setAllMobHistory).catch(() => {});
@@ -3552,6 +3572,8 @@ export default function App() {
     }
     if (name === "ADG" && formValues["Assumed ADG (kg/day)"]) patch.assumedADG = Number(formValues["Assumed ADG (kg/day)"]);
     if (name === "Ent/mgmt group" && formValues["Management group"]) patch.mgmtGroup = formValues["Management group"];
+    if (name === "Start Lambing") { patch.lambingStart = formValues["Date"] || todayStr(); patch.lambingEnd = null; patch.lambingSeason = formValues["Season"] || inferLambingSeason(formValues["Date"] || todayStr()); }
+    if (name === "End Lambing") { patch.lambingEnd = formValues["Date"] || todayStr(); }
     if (name === "WEC" && formValues["WEC count (epg)"]) {
       patch.wec = { count: formValues["WEC count (epg)"], date: formValues["Date"] || todayStr(), notes: formValues["Notes"] || "" };
     }
@@ -5932,6 +5954,29 @@ export default function App() {
         </select>
       );
     }
+    // Lambing season: Winter/Spring/etc + add-your-own
+    if (field.label === "Season") {
+      const val = formValues["Season"] || "";
+      const customMode = formValues["_seasonCustom"] || (val && !LAMBING_SEASONS.includes(val));
+      return (
+        <div>
+          <select
+            value={customMode ? "__custom__" : val}
+            onChange={(e) => {
+              if (e.target.value === "__custom__") setFormValues(prev => ({ ...prev, _seasonCustom: true, Season: "" }));
+              else setFormValues(prev => ({ ...prev, _seasonCustom: false, Season: e.target.value }));
+            }}
+            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white mb-2">
+            {LAMBING_SEASONS.map(o => <option key={o} value={o}>{o}</option>)}
+            <option value="__custom__">+ Name a different season</option>
+          </select>
+          {customMode && (
+            <input autoFocus value={val} onChange={(e) => setFormValues(prev => ({ ...prev, Season: e.target.value }))}
+              placeholder="e.g. Early Winter" className="w-full border border-amber-200 rounded-xl px-3 py-2.5 bg-white" />
+          )}
+        </div>
+      );
+    }
     // Death cause: dropdown of the standard causes + any previously recorded,
     // with the option to add a new one (same pattern as management tags)
     if (field.label === "Cause") {
@@ -7559,16 +7604,52 @@ export default function App() {
               ) : recordsType === "lambing" ? (() => {
                 // ── Lambing Performance: derived from Scan / Mark / Wean / Death records ──
                 const num = (re, s) => { const m = String(s || "").match(re); return m ? Number(m[1]) : 0; };
-                const SEASON_ACTIONS = ["Scan", "Mark", "Wean", "Death"];
-                const YEARS = [...new Set(allMobHistory
-                  .filter(h => SEASON_ACTIONS.includes(h.action))
-                  .map(h => String(h.date || "").slice(0, 4)).filter(y => /^\d{4}$/.test(y)))].sort().reverse();
-                const year = YEARS.includes(lambingYear) ? lambingYear : (YEARS[0] || String(new Date().getFullYear()));
+                const SEASON_ACTIONS = ["Scan", "Mark", "Wean", "Death", "Start Lambing", "End Lambing"];
 
-                const byMob = {};
+                // ── 1) Each mob's lambing windows, named: "Winter 2026", "Spring 2026" ──
+                const startsByMob = {};
+                const endsByMob = {};
                 allMobHistory.forEach(h => {
-                  if (String(h.date || "").slice(0, 4) !== year || !SEASON_ACTIONS.includes(h.action)) return;
-                  const e = byMob[h.mobId] = byMob[h.mobId] || { mobId: h.mobId, mobName: h.mobName, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false };
+                  if (h.action === "Start Lambing") {
+                    const season = (String(h.detail || "").match(/Season: ([^,\n]+)/) || [])[1]?.trim() || inferLambingSeason(h.date);
+                    (startsByMob[h.mobId] = startsByMob[h.mobId] || []).push({ date: String(h.date || ""), season, paddock: h.paddock || null, end: null });
+                  } else if (h.action === "End Lambing") {
+                    (endsByMob[h.mobId] = endsByMob[h.mobId] || []).push(String(h.date || ""));
+                  }
+                });
+                Object.entries(startsByMob).forEach(([mid, list]) => {
+                  list.sort((a, b) => (a.date < b.date ? -1 : 1));
+                  const ends = (endsByMob[mid] || []).sort();
+                  list.forEach((s, i) => {
+                    const nextStart = list[i + 1]?.date || null;
+                    s.end = ends.find(en => en >= s.date && (!nextStart || en < nextStart)) || null;
+                    s.key = `${s.season} ${s.date.slice(0, 4)}`;
+                  });
+                });
+
+                // ── 2) Attribute every event to a (mob, season) ──
+                // Marks/weans/deaths follow the season the mob most recently STARTED;
+                // scans attach to the UPCOMING season (scanning happens pre-lambing).
+                const seasonOf = (mobId, date, action) => {
+                  const list = startsByMob[mobId];
+                  if (!list?.length) return null;
+                  if (action === "Scan") {
+                    const upcoming = list.find(s => s.date >= date);
+                    if (upcoming) return upcoming;
+                  }
+                  let chosen = null;
+                  list.forEach(s => { if (s.date <= date) chosen = s; });
+                  return chosen || list[0];
+                };
+                const entryFor = {};
+                allMobHistory.forEach(h => {
+                  if (!SEASON_ACTIONS.includes(h.action)) return;
+                  const date = String(h.date || "");
+                  const s = seasonOf(h.mobId, date, h.action);
+                  const key = s ? s.key : date.slice(0, 4); // no Start Lambing recorded → plain year bucket
+                  const mk = `${h.mobId}|${key}`;
+                  const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, seasonKey: key, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
+                  if (s) { e.lambStart = s.date; e.lambEnd = s.end; e.lambPaddock = s.paddock; e.hasSeason = true; }
                   if (h.action === "Scan") {
                     const singles = num(/Singles \(head\): ([\d.]+)/, h.detail);
                     const twins = num(/Twins \(head\): ([\d.]+)/, h.detail);
@@ -7588,13 +7669,40 @@ export default function App() {
                     const n = num(/Number weaned: ([\d.]+)/, h.detail);
                     if (n) { e.weaned += n; e.hasSeason = true; }
                   } else if (h.action === "Death") {
-                    e.deaths += num(/Number of deaths: ([\d.]+)/, h.detail);
+                    e.deathEvents.push({ date, n: num(/Number of deaths: ([\d.]+)/, h.detail) });
                   }
                 });
-                const seasonMobs = Object.values(byMob).filter(e => e.hasSeason).map(e => {
+
+                // ── 3) Season chips + Full Year rollups ──
+                const allKeys = [...new Set(Object.values(entryFor).filter(e => e.hasSeason).map(e => e.seasonKey))];
+                const keyYear = (k) => Number((String(k).match(/(\d{4})/) || [])[1] || 0);
+                const chipYears = [...new Set(allKeys.map(keyYear))].sort((a, b) => b - a);
+                const chips = [];
+                chipYears.forEach(y => {
+                  const ks = allKeys.filter(k => keyYear(k) === y).sort();
+                  chips.push(...ks);
+                  if (ks.length > 1) chips.push(`${y} — Full Year`);
+                });
+                const year = chips.includes(lambingYear) ? lambingYear : (chips[0] || String(new Date().getFullYear()));
+                const isRollup = / — Full Year$/.test(year);
+                const selYear = keyYear(year);
+
+                const seasonMobs = Object.values(entryFor).filter(e =>
+                  e.hasSeason && (isRollup ? keyYear(e.seasonKey) === selYear : e.seasonKey === year)
+                ).map(e => {
                   const mob = mobs.find(m => m.id === e.mobId);
-                  if (!e.ewes) e.ewes = mob ? (Number(mob.count) || 0) : 0;
-                  e.paddock = e.paddock || e.scanPaddock || mob?.paddock || "—";
+                  // With a nominated lambing window, only deaths inside it count
+                  e.deaths = e.deathEvents.reduce((s, d) => {
+                    if (e.lambStart) {
+                      return (d.date >= e.lambStart && (!e.lambEnd || d.date <= e.lambEnd)) ? s + d.n : s;
+                    }
+                    return s + d.n;
+                  }, 0);
+                  // Starting ewes ≈ current count + ewes lost during lambing
+                  if (!e.ewes) e.ewes = (mob ? (Number(mob.count) || 0) : 0) + (e.lambStart ? e.deaths : 0);
+                  e.paddock = e.lambPaddock || e.paddock || e.scanPaddock || mob?.paddock || "—";
+                  e.days = e.lambStart ? Math.max(0, Math.round((new Date(e.lambEnd || todayStr()) - new Date(e.lambStart)) / 86400000)) : null;
+                  e.active = !!e.lambStart && !e.lambEnd;
                   return e;
                 });
 
@@ -7604,8 +7712,10 @@ export default function App() {
 
                 const byPaddock = {};
                 seasonMobs.forEach(e => {
-                  const p = byPaddock[e.paddock] = byPaddock[e.paddock] || { paddock: e.paddock, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0 };
+                  const p = byPaddock[e.paddock] = byPaddock[e.paddock] || { paddock: e.paddock, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, days: null, live: false };
                   p.ewes += e.ewes; p.foetuses += e.foetuses; p.marked += e.marked; p.weaned += e.weaned; p.deaths += e.deaths;
+                  if (e.days != null) p.days = Math.max(p.days || 0, e.days);
+                  if (e.active) p.live = true;
                 });
                 const league = Object.values(byPaddock)
                   .map(p => {
@@ -7623,7 +7733,7 @@ export default function App() {
                   const blob = new Blob([`${header}\n${body}`], { type: "text/csv" });
                   const a = document.createElement("a");
                   a.href = URL.createObjectURL(blob);
-                  a.download = `${farmName}-lambing-${year}.csv`;
+                  a.download = `${farmName}-lambing-${year.replace(/[^\w-]+/g, "-")}.csv`;
                   a.click();
                 };
 
@@ -7632,7 +7742,7 @@ export default function App() {
                     {/* Year switcher */}
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">Season</span>
-                      {(YEARS.length ? YEARS : [year]).map(y => (
+                      {(chips.length ? chips : [year]).map(y => (
                         <button key={y} onClick={() => setLambingYear(y)}
                           className={`px-3 py-1.5 rounded-full text-sm font-bold transition-colors ${y === year ? "bg-red-900 text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
                           {y}
@@ -7645,7 +7755,7 @@ export default function App() {
                       <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2 text-center">
                         <div className="text-3xl">🐑</div>
                         <div>No lambing data for {year} yet.</div>
-                        <div className="text-xs max-w-xs">Record a <b>Scan</b>, <b>Mark</b> or <b>Wean</b> on a mob (mob → More actions) and it appears here automatically.</div>
+                        <div className="text-xs max-w-xs">Tap <b>Start Lambing</b> on a mob when it goes into its lambing paddock (backdate if needed), or record a <b>Scan</b>, <b>Mark</b> or <b>Wean</b> — it appears here automatically.</div>
                       </div>
                     ) : (<>
                       {/* Management funnel */}
@@ -7681,7 +7791,7 @@ export default function App() {
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                           <table className="w-full text-sm border-collapse">
                             <thead><tr className="bg-slate-50 border-b border-slate-200">
-                              {["#", "Paddock", "Ewes", "Ha", "Ewes/Ha", "Foetuses", "Marked", "Survival", "Ewe Dths", "Mort %"].map(hd => (
+                              {["#", "Paddock", "Ewes", "Days", "Ha", "Ewes/Ha", "Foetuses", "Marked", "Survival", "Ewe Dths", "Mort %"].map(hd => (
                                 <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                               ))}
                             </tr></thead>
@@ -7689,8 +7799,9 @@ export default function App() {
                               {league.map((p, i) => (
                                 <tr key={p.paddock} className="border-b border-slate-100">
                                   <td className="px-3 py-2 font-bold text-slate-400">{i + 1}</td>
-                                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{p.paddock}</td>
+                                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{p.paddock}{p.live && <span className="ml-1.5 text-[10px] font-bold text-green-600 bg-green-50 border border-green-200 rounded-full px-1.5 py-0.5 align-middle">● LIVE</span>}</td>
                                   <td className="px-3 py-2">{p.ewes.toLocaleString()}</td>
+                                  <td className="px-3 py-2">{p.days != null ? p.days : "—"}</td>
                                   <td className="px-3 py-2">{p.ha > 0 ? p.ha.toFixed(0) : "—"}</td>
                                   <td className="px-3 py-2">{p.ha > 0 ? (p.ewes / p.ha).toFixed(1) : "—"}</td>
                                   <td className="px-3 py-2">{p.foetuses.toLocaleString()}</td>
@@ -7711,27 +7822,30 @@ export default function App() {
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                           <table className="w-full text-sm border-collapse">
                             <thead><tr className="bg-slate-50 border-b border-slate-200">
-                              {["Mob", "Paddock", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths"].map(hd => (
+                              {["Mob", "Paddock", "Started", "Days", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths", "Mort %"].map(hd => (
                                 <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                               ))}
                             </tr></thead>
                             <tbody>
                               {seasonMobs.sort((a, b) => (b.foetuses > 0 ? b.marked / b.foetuses : -1) - (a.foetuses > 0 ? a.marked / a.foetuses : -1)).map(e => (
-                                <tr key={e.mobId} className="border-b border-slate-100">
-                                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{e.mobName}</td>
+                                <tr key={`${e.mobId}|${e.seasonKey}`} className="border-b border-slate-100">
+                                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{e.mobName}{e.active && <span className="ml-1.5">🐣</span>}{isRollup && <span className="ml-1.5 text-[10px] text-slate-400 font-medium">{e.seasonKey}</span>}</td>
                                   <td className="px-3 py-2 whitespace-nowrap">{e.paddock}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">{e.lambStart ? fmtDMY(e.lambStart) : "—"}</td>
+                                  <td className="px-3 py-2">{e.days != null ? e.days : "—"}</td>
                                   <td className="px-3 py-2">{e.ewes.toLocaleString()}</td>
                                   <td className="px-3 py-2">{e.foetuses.toLocaleString()}</td>
                                   <td className="px-3 py-2">{e.marked.toLocaleString()}</td>
                                   <td className="px-3 py-2 font-bold">{e.foetuses > 0 ? pct(e.marked, e.foetuses) : "—"}</td>
                                   <td className="px-3 py-2">{e.weaned > 0 ? e.weaned.toLocaleString() : "—"}</td>
                                   <td className="px-3 py-2">{e.deaths}</td>
+                                  <td className="px-3 py-2 font-semibold">{pct(e.deaths, e.ewes)}</td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
                         </div>
-                        <div className="text-[11px] text-slate-400 mt-2">Survival = lambs marked ÷ scanned foetuses. Paddock is where the mob was when marked (or scanned). Deaths count all causes for mobs in the season.</div>
+                        <div className="text-[11px] text-slate-400 mt-2">Survival = lambs marked ÷ scanned foetuses. Paddock = nominated lambing paddock (Start Lambing), else where marked/scanned. With a Start Lambing date, only deaths from that date (to End Lambing) count as lambing mortality — backdate the start to capture deaths already recorded.</div>
                       </div>
                     </>)}
                   </div>
