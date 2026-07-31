@@ -7868,6 +7868,49 @@ export default function App() {
                         );
                       })()}
 
+                      {/* By mob group — same-named mobs (splits/portions) reunited */}
+                      {(() => {
+                        const byName = {};
+                        seasonMobs.forEach(e => {
+                          const g = byName[e.mobName] = byName[e.mobName] || { name: e.mobName, mobsIn: 0, paddocks: new Set(), ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0 };
+                          g.mobsIn += 1;
+                          if (e.paddock && e.paddock !== "—") g.paddocks.add(e.paddock);
+                          g.ewes += e.ewes; g.foetuses += e.foetuses; g.marked += e.marked; g.weaned += e.weaned; g.deaths += e.deaths;
+                        });
+                        const groups = Object.values(byName).sort((a, b) =>
+                          (b.foetuses > 0 ? b.marked / b.foetuses : -1) - (a.foetuses > 0 ? a.marked / a.foetuses : -1));
+                        if (groups.length === 0) return null;
+                        return (
+                          <div>
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">By mob group — {year}</div>
+                            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
+                              <table className="w-full text-sm border-collapse">
+                                <thead><tr className="bg-slate-50 border-b border-slate-200">
+                                  {["Mob", "Paddocks", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths", "Mort %"].map(hd => (
+                                    <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
+                                  ))}
+                                </tr></thead>
+                                <tbody>
+                                  {groups.map(g => (
+                                    <tr key={g.name} className="border-b border-slate-100">
+                                      <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{g.name}</td>
+                                      <td className="px-3 py-2 text-xs text-slate-500 max-w-[220px] truncate" title={[...g.paddocks].join(", ")}>{g.paddocks.size > 0 ? [...g.paddocks].join(", ") : "—"}</td>
+                                      <td className="px-3 py-2">{g.ewes.toLocaleString()}</td>
+                                      <td className="px-3 py-2">{g.foetuses.toLocaleString()}</td>
+                                      <td className="px-3 py-2">{g.marked.toLocaleString()}</td>
+                                      <td className="px-3 py-2 font-bold">{g.foetuses > 0 ? pct(g.marked, g.foetuses) : "—"}</td>
+                                      <td className="px-3 py-2">{g.weaned > 0 ? g.weaned.toLocaleString() : "—"}</td>
+                                      <td className="px-3 py-2">{g.deaths}</td>
+                                      <td className="px-3 py-2 font-semibold">{pct(g.deaths, g.ewes)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       <div className="text-[11px] text-slate-400 mt-1">Survival = lambs marked ÷ scanned foetuses. Ewes = the "Ewes at start" number from the Start Lambing record (falls back to scan totals). Paddock = nominated lambing paddock. Only deaths between Start and End Lambing count as lambing mortality — backdate the start to capture deaths already recorded.</div>
                     </>)}
                   </div>
