@@ -1418,6 +1418,7 @@ const ACTION_FIELDS = {
   Score: [{ label: "_score_counter", type: "score_counter" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining assessment" }],
   "Start Lambing": [
     { label: "Season", type: "text" },
+    { label: "Lambing paddock", type: "select", options: [] },
     { label: "Date", type: "date" },
     { label: "Notes", type: "text", placeholder: "Backdate to when they went into the paddock" },
   ],
@@ -3486,7 +3487,7 @@ export default function App() {
     });
     if (name === "Ent/mgmt group" && m.mgmtGroup && m.mgmtGroup !== "Unassigned") prefill["Management group"] = m.mgmtGroup;
     if (name === "Recount") prefill["New head count"] = m.count;
-    if (name === "Start Lambing") prefill["Season"] = inferLambingSeason(todayStr());
+    if (name === "Start Lambing") { prefill["Season"] = inferLambingSeason(todayStr()); prefill["Lambing paddock"] = m.paddock || ""; }
     if (name === "Copy") {
       prefill["New mob name"] = `${m.name} (copy)`;
       prefill["Copy to paddock"] = m.paddock;
@@ -3682,7 +3683,12 @@ export default function App() {
       };
     });
     try {
-      const created = await api.addMobHistory(mobId, { action: name, detail: summary || "Recorded", date: historyDate });
+      const created = await api.addMobHistory(mobId, {
+        action: name, detail: summary || "Recorded", date: historyDate,
+        // Start Lambing: pin the season to the NOMINATED paddock, not wherever
+        // the mob happens to be standing (it may already be boxed up)
+        ...(name === "Start Lambing" && formValues["Lambing paddock"] ? { paddock: formValues["Lambing paddock"] } : {}),
+      });
       // Update local entry with server-assigned id so it can be deleted later
       if (created?.id) {
         setHistory(prev => ({
@@ -5944,7 +5950,7 @@ export default function App() {
         options = inventory.map((i) => i.title);
       } else if (field.label === "Transfer to property") {
         options = Object.keys(farmsMobs).filter((f) => f !== farmName);
-      } else if (field.label === "Move to paddock" || field.label === "Copy to paddock") {
+      } else if (field.label === "Move to paddock" || field.label === "Copy to paddock" || field.label === "Lambing paddock") {
         options = paddocks.map((p) => p.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       }
       return (
@@ -7648,7 +7654,8 @@ export default function App() {
                   const s = seasonOf(h.mobId, date, h.action);
                   const key = s ? s.key : date.slice(0, 4); // no Start Lambing recorded → plain year bucket
                   const mk = `${h.mobId}|${key}`;
-                  const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, seasonKey: key, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
+                  const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, mgmtGroup: null, seasonKey: key, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
+                  if (h.mgmtGroup && h.mgmtGroup !== "Unassigned") e.mgmtGroup = h.mgmtGroup;
                   if (s) { e.lambStart = s.date; e.lambEnd = s.end; e.lambPaddock = s.paddock; e.hasSeason = true; }
                   if (h.action === "Scan") {
                     const singles = num(/Singles \(head\): ([\d.]+)/, h.detail);
@@ -7816,37 +7823,49 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Mob table */}
-                      <div>
-                        <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">By mob — {year}</div>
-                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
-                          <table className="w-full text-sm border-collapse">
-                            <thead><tr className="bg-slate-50 border-b border-slate-200">
-                              {["Mob", "Paddock", "Started", "Days", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths", "Mort %"].map(hd => (
-                                <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
-                              ))}
-                            </tr></thead>
-                            <tbody>
-                              {seasonMobs.sort((a, b) => (b.foetuses > 0 ? b.marked / b.foetuses : -1) - (a.foetuses > 0 ? a.marked / a.foetuses : -1)).map(e => (
-                                <tr key={`${e.mobId}|${e.seasonKey}`} className="border-b border-slate-100">
-                                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{e.mobName}{e.active && <span className="ml-1.5">🐣</span>}{isRollup && <span className="ml-1.5 text-[10px] text-slate-400 font-medium">{e.seasonKey}</span>}</td>
-                                  <td className="px-3 py-2 whitespace-nowrap">{e.paddock}</td>
-                                  <td className="px-3 py-2 whitespace-nowrap">{e.lambStart ? fmtDMY(e.lambStart) : "—"}</td>
-                                  <td className="px-3 py-2">{e.days != null ? e.days : "—"}</td>
-                                  <td className="px-3 py-2">{e.ewes.toLocaleString()}</td>
-                                  <td className="px-3 py-2">{e.foetuses.toLocaleString()}</td>
-                                  <td className="px-3 py-2">{e.marked.toLocaleString()}</td>
-                                  <td className="px-3 py-2 font-bold">{e.foetuses > 0 ? pct(e.marked, e.foetuses) : "—"}</td>
-                                  <td className="px-3 py-2">{e.weaned > 0 ? e.weaned.toLocaleString() : "—"}</td>
-                                  <td className="px-3 py-2">{e.deaths}</td>
-                                  <td className="px-3 py-2 font-semibold">{pct(e.deaths, e.ewes)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="text-[11px] text-slate-400 mt-2">Survival = lambs marked ÷ scanned foetuses. Paddock = nominated lambing paddock (Start Lambing), else where marked/scanned. With a Start Lambing date, only deaths from that date (to End Lambing) count as lambing mortality — backdate the start to capture deaths already recorded.</div>
-                      </div>
+                      {/* By class — mobs aggregated by management tag (Singles/Twins/etc.) */}
+                      {(() => {
+                        const byTag = {};
+                        seasonMobs.forEach(e => {
+                          const t = e.mgmtGroup;
+                          if (!t) return;
+                          const g = byTag[t] = byTag[t] || { tag: t, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0 };
+                          g.ewes += e.ewes; g.foetuses += e.foetuses; g.marked += e.marked; g.weaned += e.weaned; g.deaths += e.deaths;
+                        });
+                        const tags = Object.values(byTag).sort((a, b) =>
+                          (b.foetuses > 0 ? b.marked / b.foetuses : -1) - (a.foetuses > 0 ? a.marked / a.foetuses : -1));
+                        if (tags.length === 0) return null;
+                        return (
+                          <div>
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">By class (management tag) — {year}</div>
+                            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
+                              <table className="w-full text-sm border-collapse">
+                                <thead><tr className="bg-slate-50 border-b border-slate-200">
+                                  {["Class", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths", "Mort %"].map(hd => (
+                                    <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
+                                  ))}
+                                </tr></thead>
+                                <tbody>
+                                  {tags.map(g => (
+                                    <tr key={g.tag} className="border-b border-slate-100">
+                                      <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{g.tag}</td>
+                                      <td className="px-3 py-2">{g.ewes.toLocaleString()}</td>
+                                      <td className="px-3 py-2">{g.foetuses.toLocaleString()}</td>
+                                      <td className="px-3 py-2">{g.marked.toLocaleString()}</td>
+                                      <td className="px-3 py-2 font-bold">{g.foetuses > 0 ? pct(g.marked, g.foetuses) : "—"}</td>
+                                      <td className="px-3 py-2">{g.weaned > 0 ? g.weaned.toLocaleString() : "—"}</td>
+                                      <td className="px-3 py-2">{g.deaths}</td>
+                                      <td className="px-3 py-2 font-semibold">{pct(g.deaths, g.ewes)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      <div className="text-[11px] text-slate-400 mt-1">Survival = lambs marked ÷ scanned foetuses. Paddock = nominated lambing paddock (Start Lambing). With a Start Lambing date, only deaths from that date (to End Lambing) count as lambing mortality — backdate the start to capture deaths already recorded.</div>
                     </>)}
                   </div>
                 );
