@@ -102,6 +102,7 @@ app.use("/api/field-notes", fieldNotesRoutes);
     await db.execute(sql`ALTER TABLE spray_inventory ADD COLUMN IF NOT EXISTS starting_stock NUMERIC`);
     await db.execute(sql`ALTER TABLE spray_inventory ADD COLUMN IF NOT EXISTS quantity_used NUMERIC DEFAULT 0`);
     await db.execute(sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS is_open BOOLEAN DEFAULT false`);
+    await db.execute(sql`ALTER TABLE mob_history ADD COLUMN IF NOT EXISTS paddock TEXT`);
     console.log("schema migrations complete");
   } catch (err) {
     console.error("field_notes table setup error:", err.message);

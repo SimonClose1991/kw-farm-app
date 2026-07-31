@@ -44,7 +44,8 @@ const MORE_ACTIONS = [
   ["Treat", "💉"], ["Weigh", "⚖️"],
   ["Death", "💀"], ["Sale", "🚚"],
   ["Transfer", "🚛"], ["DSE", "🌿"],
-  ["Scan", "🔍"],
+  ["Scan", "🔍"], ["Mark", "🏷️"],
+  ["Wean", "🐑"],
 ];
 const MOB_ACTIONS = [
   ["Edit", "✏️"], ["Copy", "📋"], ["Delete", "🗑️"],
@@ -1405,6 +1406,17 @@ const ACTION_FIELDS = {
     { label: "Notes", type: "text", placeholder: "e.g. Scanned by Elders" },
   ],
   Score: [{ label: "_score_counter", type: "score_counter" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining assessment" }],
+  Mark: [
+    { label: "Lambs marked", type: "number", placeholder: "e.g. 209" },
+    { label: "Date", type: "date" },
+    { label: "Notes", type: "text", placeholder: "e.g. Marked in Dead Dog" },
+  ],
+  Wean: [
+    { label: "Number weaned", type: "number", placeholder: "e.g. 195" },
+    { label: "Avg weaning weight (kg)", type: "number", placeholder: "optional" },
+    { label: "Date", type: "date" },
+    { label: "Notes", type: "text" },
+  ],
   Merge: [{ label: "Merge into mob", type: "select", options: [] }],
   Copy: [
     { label: "New mob name", type: "text", placeholder: "e.g. Coleraine cows 2" },
@@ -3164,6 +3176,7 @@ export default function App() {
   const [recordsDateFrom, setRecordsDateFrom] = useState("");
   const [recordsFilters, setRecordsFilters] = useState({}); // column key → selected value
   const [recordsSort, setRecordsSort] = useState(null); // { key, dir } from tapping a column header
+  const [lambingYear, setLambingYear] = useState(String(new Date().getFullYear()));
   const [recordsDateTo, setRecordsDateTo] = useState("");
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [allMobHistory, setAllMobHistory] = useState([]); // all mob history across all mobs
@@ -7278,6 +7291,7 @@ export default function App() {
           { id: "weights",    label: "Weights",         action: "Weigh"  },
           { id: "scores",     label: "Cond. Scores",    action: "Score"  },
           { id: "moves",      label: "Mob Moves",       action: "Move"   },
+          { id: "lambing",    label: "Lambing Performance", action: null },
           { id: "spray",      label: "Spray Records",   action: null     },
           { id: "rainfall",   label: "Rainfall",        action: null     },
         ];
@@ -7288,7 +7302,10 @@ export default function App() {
         let rows = [];
         let columns = [];
 
-        if (recordsType === "rainfall") {
+        if (recordsType === "lambing") {
+          rows = [];
+          columns = [];
+        } else if (recordsType === "rainfall") {
           rows = [...rainfall].sort((a, b) => (a.date < b.date ? 1 : -1));
           columns = [
             { key: "date",  label: "Date" },
@@ -7462,7 +7479,7 @@ export default function App() {
                     setRecordsFilters({});
                     setRecordsSort(null);
                     // Always refetch so records entered by others show up fresh
-                    if (t.action !== null) {
+                    if (t.action !== null || t.id === "lambing") {
                       setRecordsLoading(true);
                       try {
                         const h = await api.listAllMobHistory(farmName);
@@ -7526,18 +7543,200 @@ export default function App() {
               </div>
             )}
             {/* Export buttons */}
+            {recordsType !== "lambing" && (
             <div className="flex gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex-shrink-0">
               <div className="text-xs text-slate-400 font-semibold self-center mr-1">Export:</div>
               <button onClick={toCSV} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">CSV</button>
               <button onClick={toExcel} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">Excel</button>
               <button onClick={toPrint} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">Print / PDF</button>
             </div>
+            )}
 
             {/* Table */}
             <div className="flex-1 overflow-auto">
               {recordsLoading ? (
                 <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading records…</div>
-              ) : rows.length === 0 ? (
+              ) : recordsType === "lambing" ? (() => {
+                // ── Lambing Performance: derived from Scan / Mark / Wean / Death records ──
+                const num = (re, s) => { const m = String(s || "").match(re); return m ? Number(m[1]) : 0; };
+                const SEASON_ACTIONS = ["Scan", "Mark", "Wean", "Death"];
+                const YEARS = [...new Set(allMobHistory
+                  .filter(h => SEASON_ACTIONS.includes(h.action))
+                  .map(h => String(h.date || "").slice(0, 4)).filter(y => /^\d{4}$/.test(y)))].sort().reverse();
+                const year = YEARS.includes(lambingYear) ? lambingYear : (YEARS[0] || String(new Date().getFullYear()));
+
+                const byMob = {};
+                allMobHistory.forEach(h => {
+                  if (String(h.date || "").slice(0, 4) !== year || !SEASON_ACTIONS.includes(h.action)) return;
+                  const e = byMob[h.mobId] = byMob[h.mobId] || { mobId: h.mobId, mobName: h.mobName, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false };
+                  if (h.action === "Scan") {
+                    const singles = num(/Singles \(head\): ([\d.]+)/, h.detail);
+                    const twins = num(/Twins \(head\): ([\d.]+)/, h.detail);
+                    const trips = num(/Triplets \(head\): ([\d.]+)/, h.detail);
+                    const empty = num(/Empty \(head\): ([\d.]+)/, h.detail);
+                    const late = num(/Late scans \/ uncertain \(head\): ([\d.]+)/, h.detail);
+                    if (singles + twins + trips + empty + late > 0) {
+                      e.ewes = singles + twins + trips + empty + late;
+                      e.foetuses = singles + twins * 2 + trips * 3;
+                      e.hasSeason = true;
+                      e.scanPaddock = h.paddock || e.scanPaddock;
+                    }
+                  } else if (h.action === "Mark") {
+                    const n = num(/Lambs marked: ([\d.]+)/, h.detail);
+                    if (n) { e.marked += n; e.hasSeason = true; e.paddock = h.paddock || e.paddock; }
+                  } else if (h.action === "Wean") {
+                    const n = num(/Number weaned: ([\d.]+)/, h.detail);
+                    if (n) { e.weaned += n; e.hasSeason = true; }
+                  } else if (h.action === "Death") {
+                    e.deaths += num(/Number of deaths: ([\d.]+)/, h.detail);
+                  }
+                });
+                const seasonMobs = Object.values(byMob).filter(e => e.hasSeason).map(e => {
+                  const mob = mobs.find(m => m.id === e.mobId);
+                  if (!e.ewes) e.ewes = mob ? (Number(mob.count) || 0) : 0;
+                  e.paddock = e.paddock || e.scanPaddock || mob?.paddock || "—";
+                  return e;
+                });
+
+                const sum = (k) => seasonMobs.reduce((s, e) => s + e[k], 0);
+                const tEwes = sum("ewes"), tFoet = sum("foetuses"), tMarked = sum("marked"), tWeaned = sum("weaned"), tDeaths = sum("deaths");
+                const pct = (a, b) => b > 0 ? `${(a / b * 100).toFixed(1)}%` : "—";
+
+                const byPaddock = {};
+                seasonMobs.forEach(e => {
+                  const p = byPaddock[e.paddock] = byPaddock[e.paddock] || { paddock: e.paddock, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0 };
+                  p.ewes += e.ewes; p.foetuses += e.foetuses; p.marked += e.marked; p.weaned += e.weaned; p.deaths += e.deaths;
+                });
+                const league = Object.values(byPaddock)
+                  .map(p => {
+                    const pd = paddocks.find(x => x.name === p.paddock);
+                    return { ...p, ha: pd ? Number(pd.ha) || 0 : 0, surv: p.foetuses > 0 ? p.marked / p.foetuses : null };
+                  })
+                  .sort((a, b) => (b.surv ?? -1) - (a.surv ?? -1));
+
+                const exportLeagueCSV = () => {
+                  const header = "Rank,Paddock,Ewes,Ha,Ewes/Ha,Foetuses,Lambs Marked,Survival %,Weaned,Ewe Deaths,Ewe Mort %";
+                  const body = league.map((p, i) =>
+                    [i + 1, p.paddock, p.ewes, p.ha.toFixed(1), p.ha > 0 ? (p.ewes / p.ha).toFixed(1) : "", p.foetuses, p.marked,
+                     p.surv != null ? (p.surv * 100).toFixed(1) : "", p.weaned, p.deaths, p.ewes > 0 ? (p.deaths / p.ewes * 100).toFixed(1) : ""].join(",")
+                  ).join("\n");
+                  const blob = new Blob([`${header}\n${body}`], { type: "text/csv" });
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `${farmName}-lambing-${year}.csv`;
+                  a.click();
+                };
+
+                return (
+                  <div className="p-4 space-y-4 max-w-4xl">
+                    {/* Year switcher */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">Season</span>
+                      {(YEARS.length ? YEARS : [year]).map(y => (
+                        <button key={y} onClick={() => setLambingYear(y)}
+                          className={`px-3 py-1.5 rounded-full text-sm font-bold transition-colors ${y === year ? "bg-red-900 text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
+                          {y}
+                        </button>
+                      ))}
+                      <button onClick={exportLeagueCSV} className="ml-auto px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">CSV</button>
+                    </div>
+
+                    {seasonMobs.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2 text-center">
+                        <div className="text-3xl">🐑</div>
+                        <div>No lambing data for {year} yet.</div>
+                        <div className="text-xs max-w-xs">Record a <b>Scan</b>, <b>Mark</b> or <b>Wean</b> on a mob (mob → More actions) and it appears here automatically.</div>
+                      </div>
+                    ) : (<>
+                      {/* Management funnel */}
+                      <div className="bg-gradient-to-br from-red-950 to-red-900 text-white rounded-2xl p-4">
+                        <div className="text-xs font-semibold uppercase tracking-wide opacity-80 mb-2">Season funnel — where the lambs went</div>
+                        <div className="flex items-center gap-2 flex-wrap text-center">
+                          <div className="flex-1 min-w-[90px]"><div className="text-2xl font-extrabold">{tFoet.toLocaleString()}</div><div className="text-[10px] opacity-70 font-semibold">SCANNED FOETUSES</div></div>
+                          <div className="text-xl opacity-50">→</div>
+                          <div className="flex-1 min-w-[90px]"><div className="text-2xl font-extrabold">{tMarked.toLocaleString()}</div><div className="text-[10px] opacity-70 font-semibold">MARKED · {pct(tMarked, tFoet)} SURVIVAL</div></div>
+                          <div className="text-xl opacity-50">→</div>
+                          <div className="flex-1 min-w-[90px]"><div className="text-2xl font-extrabold">{tWeaned > 0 ? tWeaned.toLocaleString() : "—"}</div><div className="text-[10px] opacity-70 font-semibold">WEANED{tWeaned > 0 ? ` · ${pct(tWeaned, tMarked)} OF MARKED` : ""}</div></div>
+                        </div>
+                      </div>
+
+                      {/* KPI tiles */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {[
+                          ["LAMB SURVIVAL", pct(tMarked, tFoet)],
+                          ["MARKING % (per ewe)", pct(tMarked, tEwes)],
+                          ["WEANING % (per ewe)", tWeaned > 0 ? pct(tWeaned, tEwes) : "—"],
+                          ["EWE MORTALITY", pct(tDeaths, tEwes)],
+                        ].map(([label, value]) => (
+                          <div key={label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                            <div className="text-xl font-extrabold text-slate-800">{value}</div>
+                            <div className="text-[10px] text-slate-400 font-semibold tracking-wide mt-0.5">{label}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Paddock league table */}
+                      <div>
+                        <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Paddock rankings — {year}</div>
+                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
+                          <table className="w-full text-sm border-collapse">
+                            <thead><tr className="bg-slate-50 border-b border-slate-200">
+                              {["#", "Paddock", "Ewes", "Ha", "Ewes/Ha", "Foetuses", "Marked", "Survival", "Ewe Dths", "Mort %"].map(hd => (
+                                <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
+                              ))}
+                            </tr></thead>
+                            <tbody>
+                              {league.map((p, i) => (
+                                <tr key={p.paddock} className="border-b border-slate-100">
+                                  <td className="px-3 py-2 font-bold text-slate-400">{i + 1}</td>
+                                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{p.paddock}</td>
+                                  <td className="px-3 py-2">{p.ewes.toLocaleString()}</td>
+                                  <td className="px-3 py-2">{p.ha > 0 ? p.ha.toFixed(0) : "—"}</td>
+                                  <td className="px-3 py-2">{p.ha > 0 ? (p.ewes / p.ha).toFixed(1) : "—"}</td>
+                                  <td className="px-3 py-2">{p.foetuses.toLocaleString()}</td>
+                                  <td className="px-3 py-2">{p.marked.toLocaleString()}</td>
+                                  <td className={`px-3 py-2 font-bold ${p.surv == null ? "text-slate-300" : p.surv >= 0.9 ? "text-green-600" : p.surv >= 0.75 ? "text-amber-600" : "text-rose-600"}`}>{p.surv != null ? `${(p.surv * 100).toFixed(1)}%` : "—"}</td>
+                                  <td className="px-3 py-2">{p.deaths}</td>
+                                  <td className="px-3 py-2">{pct(p.deaths, p.ewes)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* Mob table */}
+                      <div>
+                        <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">By mob — {year}</div>
+                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
+                          <table className="w-full text-sm border-collapse">
+                            <thead><tr className="bg-slate-50 border-b border-slate-200">
+                              {["Mob", "Paddock", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths"].map(hd => (
+                                <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
+                              ))}
+                            </tr></thead>
+                            <tbody>
+                              {seasonMobs.sort((a, b) => (b.foetuses > 0 ? b.marked / b.foetuses : -1) - (a.foetuses > 0 ? a.marked / a.foetuses : -1)).map(e => (
+                                <tr key={e.mobId} className="border-b border-slate-100">
+                                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{e.mobName}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">{e.paddock}</td>
+                                  <td className="px-3 py-2">{e.ewes.toLocaleString()}</td>
+                                  <td className="px-3 py-2">{e.foetuses.toLocaleString()}</td>
+                                  <td className="px-3 py-2">{e.marked.toLocaleString()}</td>
+                                  <td className="px-3 py-2 font-bold">{e.foetuses > 0 ? pct(e.marked, e.foetuses) : "—"}</td>
+                                  <td className="px-3 py-2">{e.weaned > 0 ? e.weaned.toLocaleString() : "—"}</td>
+                                  <td className="px-3 py-2">{e.deaths}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-2">Survival = lambs marked ÷ scanned foetuses. Paddock is where the mob was when marked (or scanned). Deaths count all causes for mobs in the season.</div>
+                      </div>
+                    </>)}
+                  </div>
+                );
+              })() : rows.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2">
                   <div className="text-3xl">📋</div>
                   <div>No {currentType.label.toLowerCase()} recorded yet for {farmName}</div>

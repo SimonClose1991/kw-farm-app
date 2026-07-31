@@ -61,6 +61,7 @@ export const mobHistory = pgTable("mob_history", {
   date: text("date").notNull(),
   action: text("action").notNull(),
   detail: text("detail"),
+  paddock: text("paddock"), // paddock the mob was in AT THE TIME of the event
   authorName: text("author_name"),
   createdAt: timestamp("created_at").defaultNow(),
 });

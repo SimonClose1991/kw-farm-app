@@ -159,9 +159,16 @@ router.get("/:id/history", requireAuth, async (req, res) => {
 router.post("/:id/history", requireAuth, requireEditor, async (req, res) => {
   const { date, action, detail } = req.body;
   const authorName = req.user?.name || null;
+  // Record the paddock the mob is in RIGHT NOW — so per-paddock performance
+  // reports (lambing etc.) attribute events correctly even after later moves
+  let paddock = req.body.paddock || null;
+  if (!paddock) {
+    const [mobRow] = await db.select({ paddock: mobs.paddock }).from(mobs).where(eq(mobs.id, Number(req.params.id)));
+    paddock = mobRow?.paddock || null;
+  }
   const [created] = await db
     .insert(mobHistory)
-    .values({ mobId: Number(req.params.id), date: date || new Date().toISOString().slice(0, 10), action, detail, authorName })
+    .values({ mobId: Number(req.params.id), date: date || new Date().toISOString().slice(0, 10), action, detail, authorName, paddock })
     .returning();
   res.status(201).json(created);
 });
@@ -205,7 +212,7 @@ router.get("/history", requireAuth, async (req, res) => {
   const allHistory = [];
   for (const mob of farmMobs) {
     const history = await db.select().from(mobHistory).where(eq(mobHistory.mobId, mob.id));
-    history.forEach(h => allHistory.push({ ...h, mobName: mob.name, species: mob.species, breed: mob.breed, ageClass: mob.ageClass, tag: mob.tag, paddock: mob.paddock, mgmtGroup: mob.mgmtGroup }));
+    history.forEach(h => allHistory.push({ ...h, mobName: mob.name, species: mob.species, breed: mob.breed, ageClass: mob.ageClass, tag: mob.tag, paddock: h.paddock || mob.paddock, mgmtGroup: mob.mgmtGroup }));
   }
   // Sort by date descending
   allHistory.sort((a, b) => (a.date < b.date ? 1 : -1));
