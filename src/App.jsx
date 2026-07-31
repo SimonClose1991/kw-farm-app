@@ -1416,9 +1416,9 @@ const ACTION_FIELDS = {
 
 function Modal({ title, onClose, children }) {
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end z-[250]">
-      <div className="bg-white rounded-t-3xl w-full max-w-md mx-auto max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-        <div className="flex justify-center pt-3 flex-shrink-0"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end md:items-center md:justify-center z-[250]">
+      <div className="bg-white rounded-t-3xl md:rounded-3xl w-full max-w-md md:max-w-lg mx-auto max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+        <div className="flex justify-center pt-3 flex-shrink-0 md:hidden"><div className="w-10 h-1.5 bg-slate-200 rounded-full" /></div>
         <div className="flex justify-between items-center px-5 pt-2 pb-3 flex-shrink-0 border-b border-slate-100">
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center"><X size={16} /></button>
           <h2 className="font-bold text-lg text-slate-800">{title}</h2>
@@ -1930,9 +1930,9 @@ function PaddockMoveSheet({ mob, paddocks, farmName, startAtAction = false, onCl
   const splitN = Number(splitCount);
   const splitValid = splitN > 0 && splitN < count;
   return (
-    <div className="fixed inset-0 z-[210] flex items-end justify-center">
+    <div className="fixed inset-0 z-[210] flex items-end md:items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-t-3xl w-full max-w-md mx-auto max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+      <div className="relative bg-white rounded-t-3xl md:rounded-3xl w-full max-w-md md:max-w-lg mx-auto max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
           <div>
             <div className="font-bold text-slate-800">{mob?.name}</div>
@@ -2158,7 +2158,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
           </div>
         </div>
 
-        <div className="px-4 pt-4 space-y-3">
+        <div className="px-4 pt-4 space-y-3 home-grid md:px-6 md:pt-6">
           {/* Paddocks summary */}
           <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100">
@@ -2271,7 +2271,7 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
       </div>
     </div>
 
-    <div className="px-4 pt-4 space-y-3">
+    <div className="px-4 pt-4 space-y-3 home-grid md:px-6 md:pt-6">
 
       {/* Stock breakdown — all farms combined, tap the arrow to expand */}
       <div className="bg-white rounded-2xl border border-stone-200/80 overflow-hidden">
@@ -5956,7 +5956,7 @@ export default function App() {
     const mobHistory = history[selectedMob.id] || [];
     const mobNotes = notes[selectedMob.id] || [];
     return (
-      <div className="fixed inset-0 bg-slate-50 z-30 flex flex-col max-w-md mx-auto">
+      <div className="fixed inset-0 bg-slate-50 z-30 flex flex-col max-w-md md:max-w-2xl mx-auto md:border-x md:border-stone-200 md:shadow-2xl">
         <div className="bg-white/80 backdrop-blur-md flex items-center justify-between px-4 py-4 border-b border-slate-100">
           <button className="text-slate-400 text-sm font-semibold" onClick={() => { setSelectedMobId(null); setDragMobId(null); }}>CLOSE</button>
           <h1 className="text-base font-bold text-slate-800">Mob Details</h1>
@@ -7403,7 +7403,7 @@ export default function App() {
     };
 
     return (
-      <div className="fixed inset-0 bg-slate-50 z-40 flex flex-col max-w-md mx-auto">
+      <div className="fixed inset-0 bg-slate-50 z-40 flex flex-col max-w-md md:max-w-xl mx-auto md:border-x md:border-stone-200 md:shadow-2xl">
         <div className="bg-white border-b border-stone-200 flex items-center justify-between px-4 py-4">
           <button onClick={() => { setShowAddMob(false); setEditingMobId(null); }} className="text-sm font-semibold text-slate-300">CANCEL</button>
           <h1 className="text-base font-bold">{editingMobId ? "Edit Mob" : "Add Mob"}</h1>
@@ -7690,9 +7690,21 @@ export default function App() {
   // ── Desktop layout: sidebar nav + content panel on wide screens ──
   const DesktopSidebar = () => (
     <div className="hidden md:flex flex-col w-56 min-h-screen bg-white border-r border-stone-200 fixed left-0 top-0 bottom-0 z-30">
-      <div className="px-4 py-5 border-b border-stone-100">
+      <div className="px-4 py-4 border-b border-stone-100">
         <img src={LOGO_DATA_URI} alt="Kurra-Wirra" className="w-full rounded-lg" />
-        <div className="text-xs text-stone-400 mt-2 text-center font-medium">{farmName}</div>
+        {/* Farm switcher — no more digging through the drawer */}
+        <select
+          value={farmName}
+          onChange={(e) => {
+            setFarmName(e.target.value);
+            setHomeFarm(null);
+            setAllMobHistory([]);
+            showToast(`Switched to ${e.target.value}`);
+          }}
+          className="w-full mt-3 border border-stone-200 rounded-xl px-2 py-1.5 text-sm font-semibold text-stone-700 bg-stone-50"
+        >
+          {accessibleFarms.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
       </div>
       <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
         {[
@@ -7714,15 +7726,56 @@ export default function App() {
           </button>
         ))}
       </nav>
-      <div className="p-3 border-t border-stone-100">
-        <button onClick={() => setShowMenu(true)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-stone-500 hover:bg-stone-50 hover:text-stone-800">
-          <span className="text-base flex-shrink-0">☰</span>
-          <span>Menu</span>
+      <div className="p-3 border-t border-stone-100 space-y-0.5">
+        <div className="text-[10px] font-bold text-stone-300 tracking-widest px-3 pt-1 pb-1">MANAGE</div>
+        {[
+          { icon: "📋", label: "Records & Export", onClick: () => {
+              setShowRecords(true);
+              setRecordsLoading(true);
+              api.listAllMobHistory(farmName)
+                .then(h => { setAllMobHistory(h); setRecordsLoading(false); })
+                .catch(() => setRecordsLoading(false));
+            } },
+          { icon: "💉", label: "Inventory", onClick: () => setShowInventory(true) },
+          { icon: "📍", label: "Field Notes", onClick: () => setShowFieldNotes(true) },
+          { icon: "🌱", label: "Paddock List", onClick: () => setShowPaddockList(true) },
+          { icon: "🌧️", label: "Rainfall", onClick: () => setShowRainfall(true) },
+          { icon: "✨", label: "All Farms", onClick: () => setShowAllFarms(true) },
+          { icon: "👤", label: "Accounts", onClick: () => setShowAccounts(true) },
+          { icon: "⚙️", label: "Settings", onClick: () => setShowSettings(true) },
+        ].map(({ icon, label, onClick }) => (
+          <button key={label} onClick={onClick}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium text-stone-500 hover:bg-stone-50 hover:text-stone-800 text-left">
+            <span className="text-base flex-shrink-0">{icon}</span>
+            <span>{label}</span>
+          </button>
+        ))}
+        <button onClick={handleSync}
+          className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium text-stone-500 hover:bg-stone-50 hover:text-stone-800 text-left">
+          <span className={`text-base flex-shrink-0 ${syncing ? "animate-spin inline-block" : ""}`}>🔄</span>
+          <span>{syncing ? "Syncing…" : "Synchronise"}</span>
           {(syncCount + pendingChanges) > 0 && (
             <span className="ml-auto bg-amber-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center font-bold">{syncCount + pendingChanges}</span>
           )}
         </button>
-        <div className="text-xs text-stone-400 px-3 pt-2 truncate">{currentUser.name} · {currentUser.role}</div>
+        <div className="flex items-center justify-between px-3 pt-2">
+          <div className="text-xs text-stone-400 truncate">{currentUser.name} · {currentUser.role}</div>
+          <button
+            onClick={() => {
+              if (stayLoggedIn) {
+                setLocked(true);
+              } else {
+                setAuthToken(null);
+                setCurrentAccount(null);
+                setLoggedInEmail(null);
+                setLoginEmail("");
+              }
+            }}
+            className="text-xs font-semibold text-rose-400 hover:text-rose-600 flex-shrink-0 ml-2"
+          >
+            Log out
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -8193,7 +8246,7 @@ export default function App() {
       })()}
 
       {showAccounts && (
-        <div className="fixed inset-0 bg-slate-50 z-40 flex flex-col max-w-md mx-auto">
+        <div className="fixed inset-0 bg-slate-50 z-40 flex flex-col max-w-md md:max-w-xl mx-auto md:border-x md:border-stone-200 md:shadow-2xl">
           <div className="bg-slate-800 text-white flex items-center justify-between px-4 py-4 flex-shrink-0">
             <button onClick={() => setShowAccounts(false)} className="text-sm font-semibold text-slate-300">CLOSE</button>
             <h1 className="text-base font-bold">Accounts</h1>
