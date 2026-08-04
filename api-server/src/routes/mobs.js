@@ -127,6 +127,20 @@ router.post("/:id/transfer", requireAuth, requireEditor, async (req, res) => {
 });
 
 // --- History ---
+// POST /api/mobs/:id/copy-history  body: { fromMobId }
+// Copies another mob's full history onto this one — used by Split/Copy so
+// treatments (drench WHP evidence), scans and records follow the animals.
+router.post("/:id/copy-history", requireAuth, requireEditor, async (req, res) => {
+  const toId = Number(req.params.id);
+  const fromId = Number(req.body.fromMobId);
+  if (!fromId) return res.status(400).json({ error: "fromMobId is required" });
+  const rows = await db.select().from(mobHistory).where(eq(mobHistory.mobId, fromId));
+  if (rows.length === 0) return res.json({ copied: 0 });
+  const values = rows.map(({ id, createdAt, ...r }) => ({ ...r, mobId: toId }));
+  await db.insert(mobHistory).values(values);
+  res.json({ copied: values.length });
+});
+
 // PUT /api/mobs/:id/history/:historyId — edit a history entry (detail / date)
 router.put("/:id/history/:historyId", requireAuth, requireEditor, async (req, res) => {
   const { detail, date } = req.body;
