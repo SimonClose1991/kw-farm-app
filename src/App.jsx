@@ -7656,7 +7656,10 @@ export default function App() {
                   if (!SEASON_ACTIONS.includes(h.action)) return;
                   const date = String(h.date || "");
                   const s = seasonOf(h.mobId, date, h.action);
-                  const key = s ? s.key : date.slice(0, 4); // no Start Lambing recorded → plain year bucket
+                  // A season only exists once Start Lambing is recorded — scans and
+                  // other events wait in the mob's history until then
+                  if (!s) return;
+                  const key = s.key;
                   const mk = `${h.mobId}|${key}`;
                   const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, mgmtGroup: null, seasonKey: key, startEwes: null, startFoetuses: null, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
                   if (h.mgmtGroup && h.mgmtGroup !== "Unassigned") e.mgmtGroup = h.mgmtGroup;
@@ -7770,7 +7773,7 @@ export default function App() {
                       <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2 text-center">
                         <div className="text-3xl">🐑</div>
                         <div>No lambing data for {year} yet.</div>
-                        <div className="text-xs max-w-xs">Tap <b>Start Lambing</b> on a mob when it goes into its lambing paddock (backdate if needed), or record a <b>Scan</b>, <b>Mark</b> or <b>Wean</b> — it appears here automatically.</div>
+                        <div className="text-xs max-w-xs">Tap <b>Start Lambing</b> on a mob when it goes into its lambing paddock (backdate if needed) — that opens the season here. Scans recorded beforehand attach to it automatically.</div>
                       </div>
                     ) : (<>
                       {/* Management funnel */}
