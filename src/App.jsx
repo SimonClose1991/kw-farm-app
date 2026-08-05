@@ -3101,10 +3101,9 @@ export default function App() {
   const [showMenu, setShowMenu] = useState(false);
   const pendingMenuAction = React.useRef(null); // kept for any legacy references
   const [showPaddockList, setShowPaddockList] = useState(false);
-  const [homeFarm, setHomeFarm] = useState(() => {
-    // Open the app straight onto the saved home farm's dashboard
-    try { return localStorage.getItem("kw_home_farm") || null; } catch { return null; }
-  });
+  // Always land on the All Farms dashboard — the home farm preference only
+  // sets which farm Map/Livestock/etc. point at (farmName below)
+  const [homeFarm, setHomeFarm] = useState(null);
   const [dragMobId, setDragMobId] = useState(null);
   const [draggingMob, setDraggingMob] = useState(null);
   const livMapRef = React.useRef(null); // livestock map
