@@ -1384,6 +1384,22 @@ function geojsonToPaddocks(geojson) {
 
 const DEFAULT_DEATH_CAUSES = ["Lambing", "Illness", "Injury", "No Diagnosis", "Transit"];
 const LAMBING_SEASONS = ["Winter", "Spring", "Autumn", "Summer"];
+// Breeding actions never shown on male mobs (nothing to lamb/calve)
+const BREEDING_ACTIONS = ["Scan", "Mark", "Wean", "Start Lambing", "End Lambing", "Start Calving", "End Calving"];
+const isCattleMob = (m) => m?.species === "Cattle" || m?.species === "Bulls";
+const isMaleMob = (m) => ["Rams", "Bulls", "Wethers", "Steers"].includes(m?.type) || m?.species === "Rams" || m?.species === "Bulls";
+const CATTLE_SCAN_FIELDS = [
+  { label: "Date scanned", type: "date" },
+  { label: "Dry (head)", type: "number", placeholder: "e.g. 5" },
+  { label: "Single (head)", type: "number", placeholder: "e.g. 82" },
+  { label: "Twins (head)", type: "number", placeholder: "e.g. 3" },
+  { label: "Notes", type: "text", placeholder: "e.g. Preg tested by vet" },
+];
+const CATTLE_MARK_FIELDS = [
+  { label: "Calves marked", type: "number", placeholder: "e.g. 85" },
+  { label: "Date", type: "date" },
+  { label: "Notes", type: "text" },
+];
 // Sensible default season from a date (southern hemisphere)
 function inferLambingSeason(dateStr) {
   const m = Number(String(dateStr || "").slice(5, 7));
@@ -1425,6 +1441,18 @@ const ACTION_FIELDS = {
     { label: "Notes", type: "text", placeholder: "Backdate to when they went into the paddock" },
   ],
   "End Lambing": [
+    { label: "Date", type: "date" },
+    { label: "Notes", type: "text" },
+  ],
+  "Start Calving": [
+    { label: "Season", type: "text" },
+    { label: "Calving paddock", type: "select", options: [] },
+    { label: "Cows at start", type: "number", placeholder: "head count going into calving" },
+    { label: "Expected calves (preg tested)", type: "number", placeholder: "optional — from preg testing" },
+    { label: "Date", type: "date" },
+    { label: "Notes", type: "text", placeholder: "Backdate to when they went into the paddock" },
+  ],
+  "End Calving": [
     { label: "Date", type: "date" },
     { label: "Notes", type: "text" },
   ],
@@ -2378,7 +2406,19 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
           >
             <div className="flex items-start justify-between mb-2">
               <div className="font-semibold text-stone-800 text-sm leading-tight">{name}</div>
-              <div className="w-1 h-5 rounded-full bg-amber-400 opacity-50 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2" />
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  try {
+                    if (homePref === name) { localStorage.removeItem("kw_home_farm"); setHomePref(null); }
+                    else { localStorage.setItem("kw_home_farm", name); setHomePref(name); }
+                  } catch {}
+                }}
+                title={homePref === name ? "Home farm — the app opens here. Tap to unset." : "Set as home farm — the app will open here"}
+                className={`text-base leading-none flex-shrink-0 ml-2 cursor-pointer ${homePref === name ? "text-amber-500" : "text-stone-300 hover:text-amber-400"}`}
+              >
+                {homePref === name ? "★" : "☆"}
+              </span>
             </div>
             <div className="space-y-0.5">
               {cattle > 0 && <div className="text-xs text-stone-500">🐄 {cattle.toLocaleString()}</div>}
@@ -3507,12 +3547,18 @@ export default function App() {
     }
     const m = selectedMob;
     const prefill = {};
-    (ACTION_FIELDS[name] || []).forEach((f) => {
+    const fieldsForAction = (n) => {
+      if (n === "Scan" && isCattleMob(selectedMob)) return CATTLE_SCAN_FIELDS;
+      if (n === "Mark" && isCattleMob(selectedMob)) return CATTLE_MARK_FIELDS;
+      return ACTION_FIELDS[n] || [];
+    };
+    fieldsForAction(name).forEach((f) => {
       if (f.type === "date") prefill[f.label] = todayStr();
     });
     if (name === "Ent/mgmt group" && m.mgmtGroup && m.mgmtGroup !== "Unassigned") prefill["Management group"] = m.mgmtGroup;
     if (name === "Recount") prefill["New head count"] = m.count;
     if (name === "Start Lambing") { prefill["Season"] = inferLambingSeason(todayStr()); prefill["Lambing paddock"] = m.paddock || ""; prefill["Ewes at start"] = m.count; }
+    if (name === "Start Calving") { prefill["Season"] = inferLambingSeason(todayStr()); prefill["Calving paddock"] = m.paddock || ""; prefill["Cows at start"] = m.count; }
     if (name === "Copy") {
       prefill["New mob name"] = `${m.name} (copy)`;
       prefill["Copy to paddock"] = m.paddock;
@@ -3600,6 +3646,8 @@ export default function App() {
     if (name === "Ent/mgmt group" && formValues["Management group"]) patch.mgmtGroup = formValues["Management group"];
     if (name === "Start Lambing") { patch.lambingStart = formValues["Date"] || todayStr(); patch.lambingEnd = null; patch.lambingSeason = formValues["Season"] || inferLambingSeason(formValues["Date"] || todayStr()); }
     if (name === "End Lambing") { patch.lambingEnd = formValues["Date"] || todayStr(); }
+    if (name === "Start Calving") { patch.calvingStart = formValues["Date"] || todayStr(); patch.calvingEnd = null; patch.calvingSeason = formValues["Season"] || inferLambingSeason(formValues["Date"] || todayStr()); }
+    if (name === "End Calving") { patch.calvingEnd = formValues["Date"] || todayStr(); }
     if (name === "WEC" && formValues["WEC count (epg)"]) {
       patch.wec = { count: formValues["WEC count (epg)"], date: formValues["Date"] || todayStr(), notes: formValues["Notes"] || "" };
     }
@@ -3718,6 +3766,7 @@ export default function App() {
         // Start Lambing: pin the season to the NOMINATED paddock, not wherever
         // the mob happens to be standing (it may already be boxed up)
         ...(name === "Start Lambing" && formValues["Lambing paddock"] ? { paddock: formValues["Lambing paddock"] } : {}),
+        ...(name === "Start Calving" && formValues["Calving paddock"] ? { paddock: formValues["Calving paddock"] } : {}),
       });
       // Update local entry with server-assigned id so it can be deleted later
       if (created?.id) {
@@ -5980,7 +6029,7 @@ export default function App() {
         options = inventory.map((i) => i.title);
       } else if (field.label === "Transfer to property") {
         options = Object.keys(farmsMobs).filter((f) => f !== farmName);
-      } else if (field.label === "Move to paddock" || field.label === "Copy to paddock" || field.label === "Lambing paddock") {
+      } else if (field.label === "Move to paddock" || field.label === "Copy to paddock" || field.label === "Lambing paddock" || field.label === "Calving paddock") {
         options = paddocks.map((p) => p.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       }
       return (
@@ -6358,7 +6407,15 @@ export default function App() {
         {showMore && (
           <Modal title="More Options" onClose={() => setShowMore(false)}>
             <div className="grid grid-cols-3 gap-3 mb-4">
-              {[...MORE_ACTIONS, ...QUICK_ACTIONS].filter(([label]) => canEdit || WORKER_ACTIONS.includes(label)).map(([label, icon], i) => (
+              {[...MORE_ACTIONS, ...QUICK_ACTIONS]
+                .filter(([label]) => canEdit || WORKER_ACTIONS.includes(label))
+                .filter(([label]) => !(isMaleMob(selectedMob) && BREEDING_ACTIONS.includes(label)))
+                .map(([label, icon]) => {
+                  if (isCattleMob(selectedMob) && label === "Start Lambing") return ["Start Calving", "🐮"];
+                  if (isCattleMob(selectedMob) && label === "End Lambing") return ["End Calving", "🏁"];
+                  return [label, icon];
+                })
+                .map(([label, icon], i) => (
                 <button key={i} onClick={() => openAction(label)} className="border border-slate-100 bg-slate-50 rounded-2xl flex flex-col items-center justify-center py-4 gap-1 active:bg-slate-100">
                   <span className="text-xl">{icon}</span>
                   <span className="text-xs font-semibold text-center text-slate-700">{label}</span>
@@ -6451,7 +6508,9 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-3 mb-4">
-                {ACTION_FIELDS[actionForm]?.map((f) => (
+                {((actionForm === "Scan" && isCattleMob(selectedMob)) ? CATTLE_SCAN_FIELDS
+                  : (actionForm === "Mark" && isCattleMob(selectedMob)) ? CATTLE_MARK_FIELDS
+                  : ACTION_FIELDS[actionForm] || []).map((f) => (
                   <div key={f.label}>
                     {f.type !== "score_counter" && <label className="text-sm font-semibold text-slate-600 block mb-1">{f.label}</label>}
                     {renderField(f)}
@@ -7370,6 +7429,7 @@ export default function App() {
           { id: "scores",     label: "Cond. Scores",    action: "Score"  },
           { id: "moves",      label: "Mob Moves",       action: "Move"   },
           { id: "lambing",    label: "Lambing Performance", action: null },
+          { id: "calving",    label: "Calving Performance", action: null },
           { id: "spray",      label: "Spray Records",   action: null     },
           { id: "rainfall",   label: "Rainfall",        action: null     },
         ];
@@ -7380,7 +7440,7 @@ export default function App() {
         let rows = [];
         let columns = [];
 
-        if (recordsType === "lambing") {
+        if (recordsType === "lambing" || recordsType === "calving") {
           rows = [];
           columns = [];
         } else if (recordsType === "rainfall") {
@@ -7557,7 +7617,7 @@ export default function App() {
                     setRecordsFilters({});
                     setRecordsSort(null);
                     // Always refetch so records entered by others show up fresh
-                    if (t.action !== null || t.id === "lambing") {
+                    if (t.action !== null || t.id === "lambing" || t.id === "calving") {
                       setRecordsLoading(true);
                       try {
                         const h = await api.listAllMobHistory(farmName);
@@ -7621,7 +7681,7 @@ export default function App() {
               </div>
             )}
             {/* Export buttons */}
-            {recordsType !== "lambing" && (
+            {recordsType !== "lambing" && recordsType !== "calving" && (
             <div className="flex gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex-shrink-0">
               <div className="text-xs text-slate-400 font-semibold self-center mr-1">Export:</div>
               <button onClick={toCSV} className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-50">CSV</button>
@@ -7634,19 +7694,25 @@ export default function App() {
             <div className="flex-1 overflow-auto">
               {recordsLoading ? (
                 <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading records…</div>
-              ) : recordsType === "lambing" ? (() => {
+              ) : (recordsType === "lambing" || recordsType === "calving") ? (() => {
+                const isCalving = recordsType === "calving";
+                // Terminology swaps between the two reports
+                const T = isCalving
+                  ? { dam: "Cows", damL: "cow", surv: "CALF SURVIVAL", foet: "EXPECTED CALVES", mort: "COW MORTALITY", dths: "Cow Dths", word: "calving", startAction: "Start Calving" }
+                  : { dam: "Ewes", damL: "ewe", surv: "LAMB SURVIVAL", foet: "SCANNED FOETUSES", mort: "EWE MORTALITY", dths: "Ewe Dths", word: "lambing", startAction: "Start Lambing" };
+                const speciesMatch = (sp) => isCalving ? (sp === "Cattle" || sp === "Bulls") : !(sp === "Cattle" || sp === "Bulls");
                 // ── Lambing Performance: derived from Scan / Mark / Wean / Death records ──
                 const num = (re, s) => { const m = String(s || "").match(re); return m ? Number(m[1]) : 0; };
-                const SEASON_ACTIONS = ["Scan", "Mark", "Wean", "Death", "Start Lambing", "End Lambing"];
+                const SEASON_ACTIONS = ["Scan", "Mark", "Wean", "Death", "Start Lambing", "End Lambing", "Start Calving", "End Calving"];
 
                 // ── 1) Each mob's lambing windows, named: "Winter 2026", "Spring 2026" ──
                 const startsByMob = {};
                 const endsByMob = {};
                 allMobHistory.forEach(h => {
-                  if (h.action === "Start Lambing") {
+                  if (h.action === "Start Lambing" || h.action === "Start Calving") {
                     const season = (String(h.detail || "").match(/Season: ([^,\n]+)/) || [])[1]?.trim() || inferLambingSeason(h.date);
-                    (startsByMob[h.mobId] = startsByMob[h.mobId] || []).push({ date: String(h.date || ""), season, paddock: h.paddock || null, end: null, ewes: num(/Ewes at start: ([\d.]+)/, h.detail) || null, foet: num(/Foetuses \(scanned\): ([\d.]+)/, h.detail) || null });
-                  } else if (h.action === "End Lambing") {
+                    (startsByMob[h.mobId] = startsByMob[h.mobId] || []).push({ date: String(h.date || ""), season, paddock: h.paddock || null, end: null, ewes: num(/(?:Ewes|Cows) at start: ([\d.]+)/, h.detail) || null, foet: num(/(?:Foetuses \(scanned\)|Expected calves \(preg tested\)): ([\d.]+)/, h.detail) || null });
+                  } else if (h.action === "End Lambing" || h.action === "End Calving") {
                     (endsByMob[h.mobId] = endsByMob[h.mobId] || []).push(String(h.date || ""));
                   }
                 });
@@ -7684,14 +7750,14 @@ export default function App() {
                   if (!s) return;
                   const key = s.key;
                   const mk = `${h.mobId}|${key}`;
-                  const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, mgmtGroup: null, seasonKey: key, startEwes: null, startFoetuses: null, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
+                  const e = entryFor[mk] = entryFor[mk] || { mobId: h.mobId, mobName: h.mobName, mgmtGroup: null, species: h.species || null, seasonKey: key, startEwes: null, startFoetuses: null, ewes: 0, foetuses: 0, marked: 0, weaned: 0, deaths: 0, paddock: null, scanPaddock: null, hasSeason: false, lambStart: null, lambEnd: null, lambPaddock: null, deathEvents: [] };
                   if (h.mgmtGroup && h.mgmtGroup !== "Unassigned") e.mgmtGroup = h.mgmtGroup;
                   if (s) { e.lambStart = s.date; e.lambEnd = s.end; e.lambPaddock = s.paddock; e.hasSeason = true; if (s.ewes) e.startEwes = s.ewes; if (s.foet) e.startFoetuses = s.foet; }
                   if (h.action === "Scan") {
-                    const singles = num(/Singles \(head\): ([\d.]+)/, h.detail);
+                    const singles = num(/Singles? \(head\): ([\d.]+)/, h.detail);
                     const twins = num(/Twins \(head\): ([\d.]+)/, h.detail);
                     const trips = num(/Triplets \(head\): ([\d.]+)/, h.detail);
-                    const empty = num(/Empty \(head\): ([\d.]+)/, h.detail);
+                    const empty = num(/Empty \(head\): ([\d.]+)/, h.detail) + num(/Dry \(head\): ([\d.]+)/, h.detail);
                     const late = num(/Late scans \/ uncertain \(head\): ([\d.]+)/, h.detail);
                     if (singles + twins + trips + empty + late > 0) {
                       e.ewes = singles + twins + trips + empty + late;
@@ -7700,7 +7766,7 @@ export default function App() {
                       e.scanPaddock = h.paddock || e.scanPaddock;
                     }
                   } else if (h.action === "Mark") {
-                    const n = num(/Lambs marked: ([\d.]+)/, h.detail);
+                    const n = num(/(?:Lambs|Calves) marked: ([\d.]+)/, h.detail);
                     if (n) { e.marked += n; e.hasSeason = true; e.paddock = h.paddock || e.paddock; }
                   } else if (h.action === "Wean") {
                     const n = num(/Number weaned: ([\d.]+)/, h.detail);
@@ -7711,7 +7777,7 @@ export default function App() {
                 });
 
                 // ── 3) Season chips + Full Year rollups ──
-                const allKeys = [...new Set(Object.values(entryFor).filter(e => e.hasSeason).map(e => e.seasonKey))];
+                const allKeys = [...new Set(Object.values(entryFor).filter(e => e.hasSeason && speciesMatch(e.species)).map(e => e.seasonKey))];
                 const keyYear = (k) => Number((String(k).match(/(\d{4})/) || [])[1] || 0);
                 const chipYears = [...new Set(allKeys.map(keyYear))].sort((a, b) => b - a);
                 const chips = [];
@@ -7725,7 +7791,7 @@ export default function App() {
                 const selYear = keyYear(year);
 
                 const seasonMobs = Object.values(entryFor).filter(e =>
-                  e.hasSeason && (isRollup ? keyYear(e.seasonKey) === selYear : e.seasonKey === year)
+                  e.hasSeason && speciesMatch(e.species) && (isRollup ? keyYear(e.seasonKey) === selYear : e.seasonKey === year)
                 ).map(e => {
                   const mob = mobs.find(m => m.id === e.mobId);
                   // With a nominated lambing window, only deaths inside it count
@@ -7766,7 +7832,7 @@ export default function App() {
                   .sort((a, b) => (b.surv ?? -1) - (a.surv ?? -1));
 
                 const exportLeagueCSV = () => {
-                  const header = "Rank,Paddock,Ewes,Ha,Ewes/Ha,Foetuses,Lambs Marked,Survival %,Weaned,Ewe Deaths,Ewe Mort %";
+                  const header = `Rank,Paddock,${T.dam},Ha,${T.dam}/Ha,${isCalving ? "Expected Calves" : "Foetuses"},Marked,Survival %,Weaned,${T.dam} Deaths,Mort %`;
                   const body = league.map((p, i) =>
                     [i + 1, p.paddock, p.ewes, p.ha.toFixed(1), p.ha > 0 ? (p.ewes / p.ha).toFixed(1) : "", p.foetuses, p.marked,
                      p.surv != null ? (p.surv * 100).toFixed(1) : "", p.weaned, p.deaths, p.ewes > 0 ? (p.deaths / p.ewes * 100).toFixed(1) : ""].join(",")
@@ -7774,7 +7840,7 @@ export default function App() {
                   const blob = new Blob([`${header}\n${body}`], { type: "text/csv" });
                   const a = document.createElement("a");
                   a.href = URL.createObjectURL(blob);
-                  a.download = `${farmName}-lambing-${year.replace(/[^\w-]+/g, "-")}.csv`;
+                  a.download = `${farmName}-${T.word}-${year.replace(/[^\w-]+/g, "-")}.csv`;
                   a.click();
                 };
 
@@ -7782,7 +7848,7 @@ export default function App() {
                   <div className="p-4 space-y-4 max-w-4xl">
                     {/* Year switcher */}
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">Season</span>
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">{isCalving ? "Calving season" : "Lambing season"}</span>
                       {(chips.length ? chips : [year]).map(y => (
                         <button key={y} onClick={() => setLambingYear(y)}
                           className={`px-3 py-1.5 rounded-full text-sm font-bold transition-colors ${y === year ? "bg-red-900 text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
@@ -7795,15 +7861,15 @@ export default function App() {
                     {seasonMobs.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2 text-center">
                         <div className="text-3xl">🐑</div>
-                        <div>No lambing data for {year} yet.</div>
-                        <div className="text-xs max-w-xs">Tap <b>Start Lambing</b> on a mob when it goes into its lambing paddock (backdate if needed) — that opens the season here. Scans recorded beforehand attach to it automatically.</div>
+                        <div>No {T.word} data for {year} yet.</div>
+                        <div className="text-xs max-w-xs">Tap <b>{T.startAction}</b> on a mob when it goes into its {T.word} paddock (backdate if needed) — that opens the season here. Scans recorded beforehand attach to it automatically.</div>
                       </div>
                     ) : (<>
                       {/* Management funnel */}
                       <div className="bg-gradient-to-br from-red-950 to-red-900 text-white rounded-2xl p-4">
                         <div className="text-xs font-semibold uppercase tracking-wide opacity-80 mb-2">Season funnel — where the lambs went</div>
                         <div className="flex items-center gap-2 flex-wrap text-center">
-                          <div className="flex-1 min-w-[90px]"><div className="text-2xl font-extrabold">{tFoet.toLocaleString()}</div><div className="text-[10px] opacity-70 font-semibold">SCANNED FOETUSES</div></div>
+                          <div className="flex-1 min-w-[90px]"><div className="text-2xl font-extrabold">{tFoet.toLocaleString()}</div><div className="text-[10px] opacity-70 font-semibold">{T.foet}</div></div>
                           <div className="text-xl opacity-50">→</div>
                           <div className="flex-1 min-w-[90px]"><div className="text-2xl font-extrabold">{tMarked.toLocaleString()}</div><div className="text-[10px] opacity-70 font-semibold">MARKED · {pct(tMarked, tFoet)} SURVIVAL</div></div>
                           <div className="text-xl opacity-50">→</div>
@@ -7814,10 +7880,10 @@ export default function App() {
                       {/* KPI tiles */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         {[
-                          ["LAMB SURVIVAL", pct(tMarked, tFoet)],
-                          ["MARKING % (per ewe)", pct(tMarked, tEwes)],
-                          ["WEANING % (per ewe)", tWeaned > 0 ? pct(tWeaned, tEwes) : "—"],
-                          ["EWE MORTALITY", pct(tDeaths, tEwes)],
+                          [T.surv, pct(tMarked, tFoet)],
+                          [`MARKING % (per ${T.damL})`, pct(tMarked, tEwes)],
+                          [`WEANING % (per ${T.damL})`, tWeaned > 0 ? pct(tWeaned, tEwes) : "—"],
+                          [T.mort, pct(tDeaths, tEwes)],
                         ].map(([label, value]) => (
                           <div key={label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
                             <div className="text-xl font-extrabold text-slate-800">{value}</div>
@@ -7832,7 +7898,7 @@ export default function App() {
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                           <table className="w-full text-sm border-collapse">
                             <thead><tr className="bg-slate-50 border-b border-slate-200">
-                              {["#", "Paddock", "Ewes", "Days", "Ha", "Ewes/Ha", "Foetuses", "Marked", "Survival", "Ewe Dths", "Mort %"].map(hd => (
+                              {["#", "Paddock", T.dam, "Days", "Ha", `${T.dam}/Ha`, isCalving ? "Exp. Calves" : "Foetuses", "Marked", "Survival", T.dths, "Mort %"].map(hd => (
                                 <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                               ))}
                             </tr></thead>
@@ -7875,7 +7941,7 @@ export default function App() {
                             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                               <table className="w-full text-sm border-collapse">
                                 <thead><tr className="bg-slate-50 border-b border-slate-200">
-                                  {["Class", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths", "Mort %"].map(hd => (
+                                  {["Class", T.dam, isCalving ? "Exp. Calves" : "Foetuses", "Marked", "Survival", "Weaned", T.dths, "Mort %"].map(hd => (
                                     <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                                   ))}
                                 </tr></thead>
@@ -7917,7 +7983,7 @@ export default function App() {
                             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                               <table className="w-full text-sm border-collapse">
                                 <thead><tr className="bg-slate-50 border-b border-slate-200">
-                                  {["Mob", "Paddocks", "Ewes", "Foetuses", "Marked", "Survival", "Weaned", "Ewe Dths", "Mort %"].map(hd => (
+                                  {["Mob", "Paddocks", T.dam, isCalving ? "Exp. Calves" : "Foetuses", "Marked", "Survival", "Weaned", T.dths, "Mort %"].map(hd => (
                                     <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                                   ))}
                                 </tr></thead>
@@ -7942,7 +8008,7 @@ export default function App() {
                         );
                       })()}
 
-                      <div className="text-[11px] text-slate-400 mt-1">Survival = lambs marked ÷ foetuses. Foetuses = the number typed on Start Lambing, else calculated from the Scan record (singles + twins×2 + triplets×3). Ewes = the "Ewes at start" number (falls back to scan totals). Paddock = nominated lambing paddock. Only deaths between Start and End Lambing count as lambing mortality — backdate the start to capture deaths already recorded.</div>
+                      <div className="text-[11px] text-slate-400 mt-1">Survival = marked ÷ {isCalving ? "expected calves" : "foetuses"} (typed on {T.startAction}, else from the Scan record). {T.dam} = the "at start" number. Paddock = nominated {T.word} paddock. Only deaths between Start and End count as {T.word} mortality — backdate to capture deaths already recorded.</div>
                     </>)}
                   </div>
                 );
