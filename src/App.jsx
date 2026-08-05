@@ -1402,7 +1402,7 @@ const ACTION_FIELDS = {
   Treat: [{ label: "_treatment_picker", type: "treatment_picker" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining" }],
   Weigh: [{ label: "Average weight (kg)", type: "number" }, { label: "Date", type: "date" }],
   ADG: [{ label: "Assumed ADG (kg/day)", type: "number", placeholder: "e.g. 0.2" }],
-  Death: [{ label: "Number of deaths", type: "number" }, { label: "Cause", type: "text" }],
+  Death: [{ label: "Number of deaths", type: "number" }, { label: "Cause", type: "text" }, { label: "Date", type: "date" }],
   Sale: [{ label: "Number sold", type: "number" }, { label: "Sale price ($/hd)", type: "number" }],
   Transfer: [{ label: "Transfer to property", type: "select", options: [] }, { label: "Number transferred", type: "number" }, { label: "Date moved", type: "date" }],
   DSE: [{ label: "DSE rating per head", type: "number", placeholder: "e.g. 1.5" }],
@@ -2123,6 +2123,9 @@ function StockBreakdown({ mobs }) {
 function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFarmsLandmarks, farmsMobs, farmsPaddocks, farmName, totalCattle, totalSheep, totalDSE, farmSummaries, rainfall, setShowRainfall, isOnline, pendingChanges, syncCount, syncing, handleSync, setShowPaddockList, paddocks, LOGO_DATA_URI, api, farmCenters, currentUser, homeFarm, setHomeFarm }) {
   const [dashLoading, setDashLoading] = React.useState(false);
   const [showStock, setShowStock] = React.useState(false); // stock breakdown collapse
+  const [homePref, setHomePref] = React.useState(() => {
+    try { return localStorage.getItem("kw_home_farm"); } catch { return null; }
+  });
 
   const enterFarm = async (name) => {
     setFarmName(name);
@@ -2185,8 +2188,23 @@ function HomeScreen({ setTab, setFarmName, setFarmsMobs, setFarmsPaddocks, setFa
           </div>
           <div className="flex items-end justify-between">
             <div>
-              <div className="font-bold text-2xl tracking-tight text-stone-900">{homeFarm}</div>
+              <div className="flex items-center gap-2">
+                <div className="font-bold text-2xl tracking-tight text-stone-900">{homeFarm}</div>
+                <button
+                  onClick={() => {
+                    try {
+                      if (homePref === homeFarm) { localStorage.removeItem("kw_home_farm"); setHomePref(null); }
+                      else { localStorage.setItem("kw_home_farm", homeFarm); setHomePref(homeFarm); }
+                    } catch {}
+                  }}
+                  title={homePref === homeFarm ? "This is your home farm — the app opens here. Tap to unset." : "Set as home farm — the app will open here"}
+                  className={`text-xl leading-none ${homePref === homeFarm ? "text-amber-500" : "text-stone-300 hover:text-amber-400"}`}
+                >
+                  {homePref === homeFarm ? "★" : "☆"}
+                </button>
+              </div>
               <div className="text-xs text-stone-400 mt-0.5 font-medium">{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" })}</div>
+              {homePref === homeFarm && <div className="text-[10px] text-amber-600 font-semibold mt-0.5">HOME FARM — the app opens here</div>}
             </div>
             <div className="w-1 h-10 rounded-full bg-amber-500 opacity-60" />
           </div>
@@ -3043,7 +3061,10 @@ export default function App() {
   const [showMenu, setShowMenu] = useState(false);
   const pendingMenuAction = React.useRef(null); // kept for any legacy references
   const [showPaddockList, setShowPaddockList] = useState(false);
-  const [homeFarm, setHomeFarm] = useState(null); // which farm dashboard is open on home screen
+  const [homeFarm, setHomeFarm] = useState(() => {
+    // Open the app straight onto the saved home farm's dashboard
+    try { return localStorage.getItem("kw_home_farm") || null; } catch { return null; }
+  });
   const [dragMobId, setDragMobId] = useState(null);
   const [draggingMob, setDraggingMob] = useState(null);
   const livMapRef = React.useRef(null); // livestock map
@@ -3054,7 +3075,9 @@ export default function App() {
   const [showPaddockPicker, setShowPaddockPicker] = useState(false); // bottom-sheet paddock picker in mob details
   const [showInsightPicker, setShowInsightPicker] = useState(false); // insight overlay picker on map
   const [farmsMobs, setFarmsMobs] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
-  const [farmName, setFarmName] = useState("Arundale");
+  const [farmName, setFarmName] = useState(() => {
+    try { return localStorage.getItem("kw_home_farm") || "Arundale"; } catch { return "Arundale"; }
+  });
   const [farmsPaddocks, setFarmsPaddocks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const paddocks = farmsPaddocks[farmName] || [];
   const setPaddocks = (updater) => {
