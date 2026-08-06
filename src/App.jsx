@@ -182,6 +182,24 @@ function todayStr() {
   return isoLocalDate(new Date());
 }
 // Display an ISO date (yyyy-mm-dd) as dd/mm/yyyy
+// Parse a history detail like "Lambs marked: 209, Date: 2026-08-01, Notes: x"
+// into editable label/value pairs. Multi-line or free-text details fall back
+// to raw text editing.
+function parseHistoryDetail(detail) {
+  const text = String(detail || "");
+  if (!text.trim()) return { ok: false, pairs: [], restLines: [] };
+  const [first, ...restLines] = text.split("\n");
+  const parts = first.split(/, (?=[A-Z][^:]*: )/);
+  const pairs = [];
+  let ok = true;
+  parts.forEach(p => {
+    const m = p.match(/^([^:]+): ([\s\S]*)$/);
+    if (m) pairs.push({ label: m[1], value: m[2] });
+    else ok = false;
+  });
+  return { ok: ok && pairs.length > 0, pairs, restLines };
+}
+
 function fmtDMY(d) {
   const m = String(d || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : (d || "");
@@ -6278,6 +6296,18 @@ export default function App() {
                         ✎
                       </button>
                     )}
+                    {canEdit && h.id && h.action !== "Death" && (
+                      <button onClick={() => {
+                        const parsed = parseHistoryDetail(h.detail);
+                        setHistoryEdit({
+                          h, generic: true, date: h.date || todayStr(),
+                          useRaw: !parsed.ok, raw: String(h.detail || ""),
+                          pairs: parsed.pairs, restLines: parsed.restLines,
+                        });
+                      }} className="ml-2 mt-0.5 text-slate-400 hover:text-amber-600 flex-shrink-0 text-sm" title="Edit this record">
+                        ✎
+                      </button>
+                    )}
                     {canEdit && h.id && (
                       <button onClick={async () => {
                         if (!window.confirm(`Delete this ${h.action} record?`)) return;
@@ -6440,7 +6470,56 @@ export default function App() {
           </Modal>
         )}
 
-        {historyEdit && (() => {
+        {historyEdit?.generic && (
+          <Modal title={`Edit ${historyEdit.h.action} Record`} onClose={() => setHistoryEdit(null)}>
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Date</label>
+                <input type="date" value={historyEdit.date || ""} onChange={(e) => setHistoryEdit(prev => ({ ...prev, date: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+              {historyEdit.useRaw ? (
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Detail</label>
+                  <textarea value={historyEdit.raw} onChange={(e) => setHistoryEdit(prev => ({ ...prev, raw: e.target.value }))}
+                    rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm" />
+                </div>
+              ) : (
+                historyEdit.pairs.map((p, i) => (
+                  <div key={p.label}>
+                    <label className="text-sm font-semibold text-slate-600 block mb-1">{p.label}</label>
+                    <input value={p.value}
+                      type={/^[\d.]*$/.test(p.value) ? "number" : "text"}
+                      onChange={(e) => setHistoryEdit(prev => ({
+                        ...prev,
+                        pairs: prev.pairs.map((x, xi) => xi === i ? { ...x, value: e.target.value } : x),
+                      }))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  </div>
+                ))
+              )}
+              <div className="text-[11px] text-slate-400">Note: editing a record fixes the history and reports, but doesn't re-adjust mob counts or inventory — use Recount if the head count needs correcting.</div>
+            </div>
+            <button onClick={async () => {
+              const { h } = historyEdit;
+              const newDetail = historyEdit.useRaw
+                ? historyEdit.raw
+                : [historyEdit.pairs.map(p => `${p.label}: ${p.value}`).join(", "), ...historyEdit.restLines].filter(Boolean).join("\n");
+              try {
+                await api.updateMobHistory(selectedMob.id, h.id, { detail: newDetail, date: historyEdit.date });
+                setHistory(prev => ({
+                  ...prev,
+                  [selectedMob.id]: (prev[selectedMob.id] || []).map(x => x.id === h.id ? { ...x, detail: newDetail, date: historyEdit.date } : x),
+                }));
+                setAllMobHistory(prev => prev.map(x => x.id === h.id ? { ...x, detail: newDetail, date: historyEdit.date } : x));
+                setHistoryEdit(null);
+                showToast(`${h.action} record updated`);
+              } catch (err) { showToast(err.message || "Couldn't update record"); }
+            }} className="w-full bg-red-900 text-white rounded-2xl py-3.5 font-bold">Save</button>
+          </Modal>
+        )}
+
+        {historyEdit && !historyEdit.generic && (() => {
           const used = new Set(DEFAULT_DEATH_CAUSES);
           allMobHistory.forEach(x => { if (x.action === "Death" && x.detail) { const mm = String(x.detail).match(/Cause: ([^,\n]+)/); if (mm) used.add(mm[1].trim()); } });
           (history[selectedMob?.id] || []).forEach(x => { if (x.action === "Death" && x.detail) { const mm = String(x.detail).match(/Cause: ([^,\n]+)/); if (mm) used.add(mm[1].trim()); } });
@@ -7831,9 +7910,10 @@ export default function App() {
                   .sort((a, b) => (b.surv ?? -1) - (a.surv ?? -1));
 
                 const exportLeagueCSV = () => {
-                  const header = `Rank,Paddock,${T.dam},Ha,${T.dam}/Ha,${isCalving ? "Expected Calves" : "Foetuses"},Marked,Survival %,Weaned,${T.dam} Deaths,Mort %`;
+                  const header = `Rank,Paddock,${T.dam},Ha,${T.dam}/Ha,${isCalving ? "Expected Calves" : "Foetuses"},Marked,${isCalving ? "Calving" : "Lambing"} %,Survival %,Weaned,${T.dam} Deaths,Mort %`;
                   const body = league.map((p, i) =>
                     [i + 1, p.paddock, p.ewes, p.ha.toFixed(1), p.ha > 0 ? (p.ewes / p.ha).toFixed(1) : "", p.foetuses, p.marked,
+                     p.ewes > 0 && p.marked > 0 ? (p.marked / p.ewes * 100).toFixed(1) : "",
                      p.surv != null ? (p.surv * 100).toFixed(1) : "", p.weaned, p.deaths, p.ewes > 0 ? (p.deaths / p.ewes * 100).toFixed(1) : ""].join(",")
                   ).join("\n");
                   const blob = new Blob([`${header}\n${body}`], { type: "text/csv" });
@@ -7880,7 +7960,7 @@ export default function App() {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         {[
                           [T.surv, pct(tMarked, tFoet)],
-                          [`MARKING % (per ${T.damL})`, pct(tMarked, tEwes)],
+                          [`${isCalving ? "CALVING" : "LAMBING"} % (marked ÷ ${T.damL}s)`, pct(tMarked, tEwes)],
                           [`WEANING % (per ${T.damL})`, tWeaned > 0 ? pct(tWeaned, tEwes) : "—"],
                           [T.mort, pct(tDeaths, tEwes)],
                         ].map(([label, value]) => (
@@ -7897,7 +7977,7 @@ export default function App() {
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                           <table className="w-full text-sm border-collapse">
                             <thead><tr className="bg-slate-50 border-b border-slate-200">
-                              {["#", "Paddock", T.dam, "Days", "Ha", `${T.dam}/Ha`, isCalving ? "Exp. Calves" : "Foetuses", "Marked", "Survival", T.dths, "Mort %"].map(hd => (
+                              {["#", "Paddock", T.dam, "Days", "Ha", `${T.dam}/Ha`, isCalving ? "Exp. Calves" : "Foetuses", "Marked", isCalving ? "Calving %" : "Lambing %", "Survival", T.dths, "Mort %"].map(hd => (
                                 <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                               ))}
                             </tr></thead>
@@ -7912,6 +7992,7 @@ export default function App() {
                                   <td className="px-3 py-2">{p.ha > 0 ? (p.ewes / p.ha).toFixed(1) : "—"}</td>
                                   <td className="px-3 py-2">{p.foetuses.toLocaleString()}</td>
                                   <td className="px-3 py-2">{p.marked.toLocaleString()}</td>
+                                  <td className="px-3 py-2 font-semibold">{p.marked > 0 ? pct(p.marked, p.ewes) : "—"}</td>
                                   <td className={`px-3 py-2 font-bold ${p.surv == null ? "text-slate-300" : p.surv >= 0.9 ? "text-green-600" : p.surv >= 0.75 ? "text-amber-600" : "text-rose-600"}`}>{p.surv != null ? `${(p.surv * 100).toFixed(1)}%` : "—"}</td>
                                   <td className="px-3 py-2">{p.deaths}</td>
                                   <td className="px-3 py-2">{pct(p.deaths, p.ewes)}</td>
@@ -7940,7 +8021,7 @@ export default function App() {
                             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                               <table className="w-full text-sm border-collapse">
                                 <thead><tr className="bg-slate-50 border-b border-slate-200">
-                                  {["Class", T.dam, isCalving ? "Exp. Calves" : "Foetuses", "Marked", "Survival", "Weaned", T.dths, "Mort %"].map(hd => (
+                                  {["Class", T.dam, isCalving ? "Exp. Calves" : "Foetuses", "Marked", isCalving ? "Calving %" : "Lambing %", "Survival", "Weaned", T.dths, "Mort %"].map(hd => (
                                     <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                                   ))}
                                 </tr></thead>
@@ -7951,6 +8032,7 @@ export default function App() {
                                       <td className="px-3 py-2">{g.ewes.toLocaleString()}</td>
                                       <td className="px-3 py-2">{g.foetuses.toLocaleString()}</td>
                                       <td className="px-3 py-2">{g.marked.toLocaleString()}</td>
+                                      <td className="px-3 py-2 font-semibold">{g.marked > 0 ? pct(g.marked, g.ewes) : "—"}</td>
                                       <td className="px-3 py-2 font-bold">{g.foetuses > 0 ? pct(g.marked, g.foetuses) : "—"}</td>
                                       <td className="px-3 py-2">{g.weaned > 0 ? g.weaned.toLocaleString() : "—"}</td>
                                       <td className="px-3 py-2">{g.deaths}</td>
@@ -7982,7 +8064,7 @@ export default function App() {
                             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                               <table className="w-full text-sm border-collapse">
                                 <thead><tr className="bg-slate-50 border-b border-slate-200">
-                                  {["Mob", "Paddocks", T.dam, isCalving ? "Exp. Calves" : "Foetuses", "Marked", "Survival", "Weaned", T.dths, "Mort %"].map(hd => (
+                                  {["Mob", "Paddocks", T.dam, isCalving ? "Exp. Calves" : "Foetuses", "Marked", isCalving ? "Calving %" : "Lambing %", "Survival", "Weaned", T.dths, "Mort %"].map(hd => (
                                     <th key={hd} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap">{hd}</th>
                                   ))}
                                 </tr></thead>
@@ -7994,6 +8076,7 @@ export default function App() {
                                       <td className="px-3 py-2">{g.ewes.toLocaleString()}</td>
                                       <td className="px-3 py-2">{g.foetuses.toLocaleString()}</td>
                                       <td className="px-3 py-2">{g.marked.toLocaleString()}</td>
+                                      <td className="px-3 py-2 font-semibold">{g.marked > 0 ? pct(g.marked, g.ewes) : "—"}</td>
                                       <td className="px-3 py-2 font-bold">{g.foetuses > 0 ? pct(g.marked, g.foetuses) : "—"}</td>
                                       <td className="px-3 py-2">{g.weaned > 0 ? g.weaned.toLocaleString() : "—"}</td>
                                       <td className="px-3 py-2">{g.deaths}</td>
