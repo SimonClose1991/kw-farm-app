@@ -135,8 +135,13 @@ router.post("/:id/copy-history", requireAuth, requireEditor, async (req, res) =>
   const fromId = Number(req.body.fromMobId);
   if (!fromId) return res.status(400).json({ error: "fromMobId is required" });
   const rows = await db.select().from(mobHistory).where(eq(mobHistory.mobId, fromId));
-  if (rows.length === 0) return res.json({ copied: 0 });
-  const values = rows.map(({ id, createdAt, ...r }) => ({ ...r, mobId: toId }));
+  // Treatments, moves etc. follow the animals — but SEASON records must not be
+  // duplicated: copied Scans/Marks/Deaths/Start Lambing double-count in the
+  // performance reports and leave phantom "live" seasons on the split portion.
+  const EXCLUDE = new Set(["Scan", "Mark", "Wean", "Death", "Start Lambing", "End Lambing", "Start Calving", "End Calving", "Copy"]);
+  const keep = rows.filter(r => !EXCLUDE.has(r.action));
+  if (keep.length === 0) return res.json({ copied: 0 });
+  const values = keep.map(({ id, createdAt, ...r }) => ({ ...r, mobId: toId }));
   await db.insert(mobHistory).values(values);
   res.json({ copied: values.length });
 });

@@ -3252,10 +3252,10 @@ export default function App() {
   const [history, setHistory] = useState({});
   const [notes, setNotes] = useState({});
 
-  // Lazily load history + notes for a mob the first time it's opened
+  // Load history + notes EVERY time a mob is opened — caching them for the
+  // whole session meant moves/records made after first open never showed
   React.useEffect(() => {
     if (!selectedMobId || !loggedInEmail) return;
-    if (history[selectedMobId] && notes[selectedMobId]) return; // already loaded
     Promise.all([api.listMobHistory(selectedMobId), api.listMobNotes(selectedMobId)])
       .then(([h, n]) => {
         setHistory((prev) => ({ ...prev, [selectedMobId]: h.map((row) => ({ id: row.id, action: row.action, detail: row.detail, date: row.date, authorName: row.authorName })).reverse() }));
@@ -4253,6 +4253,7 @@ export default function App() {
                     toMove.forEach(m => {
                       api.updateMob(m.id, { paddock: targetPaddock, daysInPaddock: 0 })
                         .then(() => api.addMobHistory(m.id, { action: "Move", detail: `Moved from ${m.paddock} to ${targetPaddock}`, date: dateStr }))
+                        .then((created) => { if (created?.id) setHistory(prev => ({ ...prev, [m.id]: [created, ...(prev[m.id] || [])] })); })
                         .catch(err => showToast(err.message || "Couldn't save move"));
                     });
                   }}
@@ -7201,7 +7202,8 @@ export default function App() {
             showToast(`${selectedMob.name} → ${target.name}`);
             try {
               await api.updateMob(mobId, { paddock: target.name, daysInPaddock: 0 });
-              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+              const hEntry = await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+              setHistory(prev => ({ ...prev, [mobId]: [{ id: hEntry?.id, action: "Move", detail, date: todayStr(), authorName: currentUser?.name || null }, ...(prev[mobId] || [])] }));
             } catch (err) { showToast(err.message || "Couldn't save move"); }
           }}
           onSplit={async (target, moveCount) => {
@@ -7213,7 +7215,8 @@ export default function App() {
             showToast(`${moveCount} head → ${target.name}, ${remaining} remain`);
             try {
               await api.updateMob(mobId, { count: remaining });
-              await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+              const hEntry = await api.addMobHistory(mobId, { action: "Move", detail, date: todayStr() });
+              setHistory(prev => ({ ...prev, [mobId]: [{ id: hEntry?.id, action: "Move", detail, date: todayStr(), authorName: currentUser?.name || null }, ...(prev[mobId] || [])] }));
               // Same mob already holds a portion in the target paddock? Merge the numbers.
               const existing = mobs.find(m => m.id !== mobId && m.paddock === target.name && m.name === selectedMob.name && m.species === selectedMob.species);
               if (existing) {
