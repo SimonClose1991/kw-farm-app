@@ -6305,10 +6305,27 @@ export default function App() {
                     {canEdit && h.id && h.action !== "Death" && (
                       <button onClick={() => {
                         const parsed = parseHistoryDetail(h.detail);
+                        let pairs = parsed.pairs;
+                        // Records made before these fields existed are missing them —
+                        // add them (blank) so they can be completed here
+                        if (parsed.ok && (h.action === "Start Lambing" || h.action === "Start Calving")) {
+                          const isCalv = h.action === "Start Calving";
+                          const wanted = [
+                            isCalv ? "Calving paddock" : "Lambing paddock",
+                            isCalv ? "Cows at start" : "Ewes at start",
+                            isCalv ? "Expected calves (preg tested)" : "Foetuses (scanned)",
+                          ];
+                          wanted.forEach(label => {
+                            if (!pairs.some(p => p.label === label)) {
+                              const seed = label.includes("paddock") ? (selectedMob?.paddock || "") : "";
+                              pairs = [...pairs, { label, value: seed }];
+                            }
+                          });
+                        }
                         setHistoryEdit({
                           h, generic: true, date: h.date || todayStr(),
                           useRaw: !parsed.ok, raw: String(h.detail || ""),
-                          pairs: parsed.pairs, restLines: parsed.restLines,
+                          pairs, restLines: parsed.restLines,
                         });
                       }} className="ml-2 mt-0.5 text-slate-400 hover:text-amber-600 flex-shrink-0 text-sm" title="Edit this record">
                         ✎
@@ -6492,16 +6509,31 @@ export default function App() {
                 </div>
               ) : (
                 historyEdit.pairs.map((p, i) => (
+                  p.label === "Date" ? null : (
                   <div key={p.label}>
                     <label className="text-sm font-semibold text-slate-600 block mb-1">{p.label}</label>
-                    <input value={p.value}
-                      type={/^[\d.]*$/.test(p.value) ? "number" : "text"}
-                      onChange={(e) => setHistoryEdit(prev => ({
-                        ...prev,
-                        pairs: prev.pairs.map((x, xi) => xi === i ? { ...x, value: e.target.value } : x),
-                      }))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                    {/^(Lambing|Calving) paddock$/.test(p.label) ? (
+                      <select value={p.value}
+                        onChange={(e) => setHistoryEdit(prev => ({
+                          ...prev,
+                          pairs: prev.pairs.map((x, xi) => xi === i ? { ...x, value: e.target.value } : x),
+                        }))}
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                        <option value="">— not set —</option>
+                        {[...paddocks].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+                          .map(pd => <option key={pd.id} value={pd.name}>{pd.name}</option>)}
+                      </select>
+                    ) : (
+                      <input value={p.value}
+                        type={/^[\d.]*$/.test(p.value) ? "number" : "text"}
+                        onChange={(e) => setHistoryEdit(prev => ({
+                          ...prev,
+                          pairs: prev.pairs.map((x, xi) => xi === i ? { ...x, value: e.target.value } : x),
+                        }))}
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                    )}
                   </div>
+                  )
                 ))
               )}
               {/* Start Lambing/Calving: recount helper — type what you counted
@@ -6511,7 +6543,6 @@ export default function App() {
                 const isCalv = historyEdit.h.action === "Start Calving";
                 const damLabel = isCalv ? "Cows at start" : "Ewes at start";
                 const idx = historyEdit.pairs.findIndex(p => p.label === damLabel);
-                if (idx === -1) return null;
                 const startDate = historyEdit.date || "";
                 const list = history[selectedMob.id] || [];
                 const endEntry = list.find(x =>
@@ -6547,10 +6578,13 @@ export default function App() {
                       disabled={!suggested}
                       onClick={() => setHistoryEdit(prev => ({
                         ...prev,
-                        pairs: prev.pairs.map((x, xi) => xi === idx ? { ...x, value: String(suggested) } : x),
+                        // Add the field if this record never had one (older/bare records)
+                        pairs: idx === -1
+                          ? [...prev.pairs, { label: damLabel, value: String(suggested) }]
+                          : prev.pairs.map((x, xi) => xi === idx ? { ...x, value: String(suggested) } : x),
                       }))}
                       className="mt-2 w-full bg-amber-500 text-white rounded-lg py-2 text-xs font-bold disabled:opacity-40">
-                      Use {suggested.toLocaleString()} as {damLabel}{current > 0 ? ` (now ${current.toLocaleString()})` : ""}
+                      {idx === -1 ? `Add ${damLabel}: ${suggested.toLocaleString()}` : `Use ${suggested.toLocaleString()} as ${damLabel}${current > 0 ? ` (now ${current.toLocaleString()})` : ""}`}
                     </button>
                   </div>
                 );
@@ -6559,11 +6593,18 @@ export default function App() {
             </div>
             <button onClick={async () => {
               const { h } = historyEdit;
+              const syncedPairs = historyEdit.pairs
+                .map(p => p.label === "Date" ? { ...p, value: historyEdit.date } : p)
+                .filter(p => String(p.value).trim() !== "");  // drop blanks
               const newDetail = historyEdit.useRaw
                 ? historyEdit.raw
-                : [historyEdit.pairs.map(p => `${p.label}: ${p.value}`).join(", "), ...historyEdit.restLines].filter(Boolean).join("\n");
+                : [syncedPairs.map(p => `${p.label}: ${p.value}`).join(", "), ...historyEdit.restLines].filter(Boolean).join("\n");
               try {
-                await api.updateMobHistory(selectedMob.id, h.id, { detail: newDetail, date: historyEdit.date });
+                const padPair = syncedPairs.find(p => /^(Lambing|Calving) paddock$/.test(p.label));
+                await api.updateMobHistory(selectedMob.id, h.id, {
+                  detail: newDetail, date: historyEdit.date,
+                  ...(padPair ? { paddock: padPair.value } : {}),
+                });
                 setHistory(prev => ({
                   ...prev,
                   [selectedMob.id]: (prev[selectedMob.id] || []).map(x => x.id === h.id ? { ...x, detail: newDetail, date: historyEdit.date } : x),

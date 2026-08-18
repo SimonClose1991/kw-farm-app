@@ -148,10 +148,11 @@ router.post("/:id/copy-history", requireAuth, requireEditor, async (req, res) =>
 
 // PUT /api/mobs/:id/history/:historyId — edit a history entry (detail / date)
 router.put("/:id/history/:historyId", requireAuth, requireEditor, async (req, res) => {
-  const { detail, date } = req.body;
+  const { detail, date, paddock } = req.body;
   const updates = {};
   if (detail !== undefined) updates.detail = detail;
   if (date !== undefined) updates.date = date;
+  if (paddock !== undefined) updates.paddock = paddock;
   const [updated] = await db.update(mobHistory).set(updates)
     .where(eq(mobHistory.id, Number(req.params.historyId))).returning();
   if (!updated) return res.status(404).json({ error: "History entry not found" });
