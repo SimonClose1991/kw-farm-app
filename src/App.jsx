@@ -6128,7 +6128,12 @@ export default function App() {
 
   const MobDetails = () => {
     if (!selectedMob) return null;
-    const mobHistory = history[selectedMob.id] || [];
+    // Sort by the record's DATE (newest first) — insertion order put backdated
+    // entries in the wrong place and made the timeline unreadable
+    const mobHistory = [...(history[selectedMob.id] || [])].sort((a, b) => {
+      const d = String(b.date || "").localeCompare(String(a.date || ""));
+      return d !== 0 ? d : (Number(b.id || 0) - Number(a.id || 0));
+    });
     const mobNotes = notes[selectedMob.id] || [];
     return (
       <div className="fixed inset-0 bg-slate-50 z-30 flex flex-col max-w-md md:max-w-2xl mx-auto md:border-x md:border-stone-200 md:shadow-2xl">
@@ -7799,12 +7804,31 @@ export default function App() {
                 });
                 Object.entries(startsByMob).forEach(([mid, list]) => {
                   list.sort((a, b) => (a.date < b.date ? -1 : 1));
-                  const ends = (endsByMob[mid] || []).sort();
-                  list.forEach((s, i) => {
-                    const nextStart = list[i + 1]?.date || null;
-                    s.end = ends.find(en => en >= s.date && (!nextStart || en < nextStart)) || null;
-                    s.key = `${s.season} ${s.date.slice(0, 4)}`;
+                  list.forEach(s => { s.key = `${s.season} ${s.date.slice(0, 4)}`; });
+                  // Two Start records for the SAME season = one season (a correction
+                  // or a re-entry). Merge them: earliest date, best data, one window —
+                  // otherwise the first one never gets an End and shows as LIVE forever.
+                  const merged = {};
+                  list.forEach(s => {
+                    const m = merged[s.key];
+                    if (!m) { merged[s.key] = { ...s }; return; }
+                    if (s.date < m.date) m.date = s.date;
+                    m.paddock = m.paddock || s.paddock;
+                    m.ewes = m.ewes || s.ewes;
+                    m.foet = m.foet || s.foet;
                   });
+                  const seasons = Object.values(merged).sort((a, b) => (a.date < b.date ? -1 : 1));
+                  const ends = (endsByMob[mid] || []).sort();
+                  seasons.forEach((s, i) => {
+                    const nextStart = seasons[i + 1]?.date || null;
+                    // An end belongs to this season if it falls after the start and
+                    // before the next season begins
+                    s.end = ends.find(en => en >= s.date && (!nextStart || en < nextStart)) || null;
+                    // A later season starting also closes an earlier one that never
+                    // got an explicit End — no phantom "live" paddocks
+                    if (!s.end && nextStart) s.end = nextStart;
+                  });
+                  startsByMob[mid] = seasons;
                 });
 
                 // ── 2) Attribute every event to a (mob, season) ──
