@@ -1406,6 +1406,24 @@ const LAMBING_SEASONS = ["Winter", "Spring", "Autumn", "Summer"];
 const BREEDING_ACTIONS = ["Scan", "Mark", "Wean", "Start Lambing", "End Lambing", "Start Calving", "End Calving"];
 const isCattleMob = (m) => m?.species === "Cattle" || m?.species === "Bulls";
 const isMaleMob = (m) => ["Rams", "Bulls", "Wethers", "Steers"].includes(m?.type) || m?.species === "Rams" || m?.species === "Bulls";
+// Stocking rate for a paddock, combined across any open gates linking it to neighbours
+function paddockStockingRate(paddockName, paddocks, landmarks, openGates, mobs) {
+  if (!paddockName) return null;
+  const group = new Set([paddockName]);
+  const openGateLms = landmarks.filter(l => l.type === "Gate" && openGates.includes(String(l.id)) && l.paddockA && l.paddockB);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    openGateLms.forEach(gt => {
+      if (group.has(gt.paddockA) && !group.has(gt.paddockB)) { group.add(gt.paddockB); grew = true; }
+      if (group.has(gt.paddockB) && !group.has(gt.paddockA)) { group.add(gt.paddockA); grew = true; }
+    });
+  }
+  const ha = paddocks.filter(p => group.has(p.name)).reduce((s, p) => s + (Number(p.ha) || 0), 0);
+  if (!ha) return null;
+  const dse = mobs.filter(m => group.has(m.paddock)).reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
+  return { dse, ha, dsePerHa: dse / ha, combined: group.size > 1, group: [...group] };
+}
 const CATTLE_SCAN_FIELDS = [
   { label: "Date scanned", type: "date" },
   { label: "Dry (head)", type: "number", placeholder: "e.g. 5" },
@@ -4637,15 +4655,17 @@ export default function App() {
               </div>
             )}
           </div>
-          {!(pinSelected.mobs?.length > 1) && pinSelected.mob?.tag && (
-            <div className="flex items-center gap-2 bg-slate-50 rounded-2xl p-4 mb-3">
-              <span className="w-5 h-5 rounded-full border border-slate-300" style={{ backgroundColor: TAG_COLOUR_HEX[pinSelected.mob.tag] || "#e2e8f0" }} />
-              <div>
-                <div className="text-xs text-slate-400 font-semibold">TAG COLOUR</div>
-                <div className="text-sm font-bold text-slate-800">{pinSelected.mob.tag}</div>
+          {!(pinSelected.mobs?.length > 1) && pinSelected.mob && (() => {
+            const s = paddockStockingRate(pinSelected.mob.paddock, paddocks, landmarks, openGates, mobs);
+            if (!s) return null;
+            return (
+              <div className="bg-slate-50 rounded-2xl p-4 mb-3">
+                <div className="text-xs text-slate-400 font-semibold">PADDOCK STOCKING{s.combined ? " — GATES OPEN, COMBINED" : ""}</div>
+                <div className="text-2xl font-extrabold text-slate-800 mt-1">{s.dsePerHa.toFixed(2)} DSE/ha</div>
+                <div className="text-xs text-slate-400 mt-0.5">{s.dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE ÷ {s.ha.toFixed(1)} ha{s.combined ? ` across ${s.group.join(", ")}` : ` in ${pinSelected.mob.paddock}`}</div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           {!(pinSelected.mobs?.length > 1) && pinSelected.mob && (
             <div className="flex gap-2">
               <button
@@ -6241,28 +6261,13 @@ export default function App() {
                   <div className="text-2xl font-bold text-slate-800 mt-1">{selectedMob.paddock || "Unassigned"}</div>
                 </button>
                 {(() => {
-                  // Stocking rate for this mob's paddock — combined across open gates
-                  if (!selectedMob.paddock) return null;
-                  const group = new Set([selectedMob.paddock]);
-                  const openGateLms = landmarks.filter(l => l.type === "Gate" && openGates.includes(String(l.id)) && l.paddockA && l.paddockB);
-                  let grew = true;
-                  while (grew) {
-                    grew = false;
-                    openGateLms.forEach(gt => {
-                      if (group.has(gt.paddockA) && !group.has(gt.paddockB)) { group.add(gt.paddockB); grew = true; }
-                      if (group.has(gt.paddockB) && !group.has(gt.paddockA)) { group.add(gt.paddockA); grew = true; }
-                    });
-                  }
-                  const groupPaddocks = paddocks.filter(p => group.has(p.name));
-                  const ha = groupPaddocks.reduce((s, p) => s + (Number(p.ha) || 0), 0);
-                  const dse = mobs.filter(m => group.has(m.paddock)).reduce((s, m) => s + m.count * (Number(m.dse) || 0), 0);
-                  if (!ha) return null;
-                  const combined = group.size > 1;
+                  const s = paddockStockingRate(selectedMob.paddock, paddocks, landmarks, openGates, mobs);
+                  if (!s) return null;
                   return (
                     <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 col-span-2">
-                      <div className="text-xs text-slate-400 font-semibold">PADDOCK STOCKING{combined ? " — GATES OPEN, COMBINED" : ""}</div>
-                      <div className="text-2xl font-extrabold text-slate-800 mt-1">{(dse / ha).toFixed(2)} DSE/ha</div>
-                      <div className="text-xs text-slate-400 mt-0.5">{dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE ÷ {ha.toFixed(1)} ha{combined ? ` across ${[...group].join(", ")}` : ` in ${selectedMob.paddock}`}</div>
+                      <div className="text-xs text-slate-400 font-semibold">PADDOCK STOCKING{s.combined ? " — GATES OPEN, COMBINED" : ""}</div>
+                      <div className="text-2xl font-extrabold text-slate-800 mt-1">{s.dsePerHa.toFixed(2)} DSE/ha</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{s.dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE ÷ {s.ha.toFixed(1)} ha{s.combined ? ` across ${s.group.join(", ")}` : ` in ${selectedMob.paddock}`}</div>
                     </div>
                   );
                 })()}
