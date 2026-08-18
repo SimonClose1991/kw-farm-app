@@ -3285,6 +3285,9 @@ export default function App() {
   const [showRainfall, setShowRainfall] = useState(false);
   const [rainfall, setRainfall] = useState([]);
   const [rainfallForm, setRainfallForm] = useState({});
+  const [showArchivedMobs, setShowArchivedMobs] = useState(false);
+  const [archivedMobs, setArchivedMobs] = useState([]);
+  const [archivedMobsLoading, setArchivedMobsLoading] = useState(false);
 
   // NOTE: No auto-close-menu effect here. The modals (z-150/200/250) render above
   // the menu (z-100) so they appear correctly without closing the menu first.
@@ -3599,18 +3602,20 @@ export default function App() {
     if (name === "Recount" && formValues["New head count"] !== undefined) {
       const newCount = Number(formValues["New head count"]);
       patch.count = newCount;
-      // Recount to 0 — treat same as delete
+      // Recount to 0 — archive rather than delete, so the mob's history stays
+      // in the database for paddock/lambing performance reports and can be
+      // restored later from Menu → Archived mobs if the recount was a mistake
       if (newCount === 0) {
         setMobs((prev) => prev.filter((m) => m.id !== mobId));
         setSelectedMobId(null);
         setActionForm(null);
         markChanged();
         try {
-          await api.addMobHistory(mobId, { action: "Recount", detail: "Recounted to 0 — mob removed", date: formValues["Date"] || todayStr() });
-          await api.deleteMob(mobId);
-          showToast(`${mob.name} removed — recounted to 0`);
+          await api.addMobHistory(mobId, { action: "Recount", detail: "Recounted to 0 — mob archived", date: formValues["Date"] || todayStr() });
+          await api.archiveMob(mobId);
+          showToast(`${mob.name} archived — recounted to 0 (Menu → Archived mobs to restore)`);
         } catch (err) {
-          showToast(err.message || "Couldn't remove mob from server");
+          showToast(err.message || "Couldn't archive mob on the server");
         }
         return;
       }
@@ -3702,6 +3707,25 @@ export default function App() {
         showToast("Mob copied");
       } catch (err) {
         showToast(err.message || "Couldn't copy mob");
+      }
+      setActionForm(null);
+      setShowMore(false);
+      markChanged();
+      return;
+    }
+
+    // --- Merge (combine into another mob — count + full history move across) ---
+    if (name === "Merge" && formValues["Merge into mob"]) {
+      const targetId = Number(formValues["Merge into mob"]);
+      const target = mobs.find((m) => m.id === targetId);
+      if (!target) { showToast("Pick a mob to merge into"); return; }
+      try {
+        const { mergedMob } = await api.mergeMob(mobId, targetId);
+        setMobs((prev) => prev.filter((m) => m.id !== mobId).map((m) => (m.id === targetId ? mergedMob : m)));
+        setSelectedMobId(null);
+        showToast(`Merged ${mob.name} into ${target.name}`);
+      } catch (err) {
+        showToast(err.message || "Couldn't merge mobs");
       }
       setActionForm(null);
       setShowMore(false);
@@ -6039,11 +6063,33 @@ export default function App() {
         </div>
       );
     }
+    // Merge target: value must be the mob's id (not name) since the whole point
+    // of merging is combining two mobs that often share the same name — a
+    // name-keyed <select> couldn't tell them apart.
+    if (field.label === "Merge into mob") {
+      const candidates = mobs
+        .filter((m) => m.id !== selectedMobId)
+        .slice()
+        .sort((a, b) => {
+          const aMatch = a.name === selectedMob?.name ? 0 : 1;
+          const bMatch = b.name === selectedMob?.name ? 0 : 1;
+          if (aMatch !== bMatch) return aMatch - bMatch;
+          return a.name.localeCompare(b.name);
+        });
+      return (
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+          <option value="">Select...</option>
+          {candidates.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} — {m.paddock || "No paddock"} ({m.count} hd){m.name === selectedMob?.name ? " · same name" : ""}
+            </option>
+          ))}
+        </select>
+      );
+    }
     if (field.type === "select") {
       let options = field.options;
-      if (field.label === "Merge into mob") {
-        options = mobs.filter((m) => m.id !== selectedMobId).map((m) => m.name);
-      } else if (field.label === "Treatment") {
+      if (field.label === "Treatment") {
         options = inventory.map((i) => i.title);
       } else if (field.label === "Transfer to property") {
         options = Object.keys(farmsMobs).filter((f) => f !== farmName);
@@ -6721,7 +6767,7 @@ export default function App() {
           <div className="text-xs text-slate-400 font-medium">Farm menu</div>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          <button onClick={() => setShowSwitchFarm(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+          <button onClick={() => { setShowSwitchFarm(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-amber-200 flex items-center justify-center text-red-950"><ArrowLeftRight size={16} /></div>
             <span className="font-semibold text-slate-700">Switch farm</span>
           </button>
@@ -6764,6 +6810,22 @@ export default function App() {
             </div>
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
+          {canEdit && (
+            <button onClick={() => {
+              setShowArchivedMobs(true);
+              setArchivedMobsLoading(true);
+              api.listArchivedMobs(farmName)
+                .then(list => { setArchivedMobs(list); setArchivedMobsLoading(false); })
+                .catch(() => setArchivedMobsLoading(false));
+            }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+              <div className="w-9 h-9 rounded-xl bg-slate-200 flex items-center justify-center text-slate-600">🗄️</div>
+              <div className="text-left">
+                <div className="font-semibold text-slate-700">Archived mobs</div>
+                <div className="text-xs text-slate-400">Recounted to 0 · restore if needed</div>
+              </div>
+              <ChevronRight size={16} className="text-slate-300 ml-auto" />
+            </button>
+          )}
           <button onClick={() => {
             setShowRecords(true);
             // Always refetch on open — records entered by other users must show up
@@ -7661,6 +7723,7 @@ export default function App() {
               { key: "mgmtGroup", label: "Mgmt Tag" },
               { key: "paddock", label: "Paddock" },
               { key: "detail",  label: "Detail" },
+              { key: "authorName", label: "Recorded by" },
             ];
           } else if (recordsType === "treatments") {
             columns = [
@@ -7671,6 +7734,7 @@ export default function App() {
               { key: "mgmtGroup", label: "Mgmt Tag" },
               { key: "paddock", label: "Paddock" },
               { key: "detail",  label: "Treatment detail" },
+              { key: "authorName", label: "Recorded by" },
             ];
           } else {
             columns = [
@@ -7680,6 +7744,7 @@ export default function App() {
               { key: "mgmtGroup", label: "Mgmt Tag" },
               { key: "paddock", label: "Paddock" },
               { key: "detail",  label: "Detail" },
+              { key: "authorName", label: "Recorded by" },
             ];
           }
         }
@@ -8340,6 +8405,70 @@ export default function App() {
         </div>
       )}
 
+      )}
+
+      {/* ── Archived Mobs (recounted to 0 or manually archived) ── */}
+      {showArchivedMobs && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[150] flex flex-col">
+          <div className="bg-white flex-1 overflow-y-auto mt-16 rounded-t-3xl max-w-md mx-auto w-full">
+            <div className="sticky top-0 bg-white border-b border-slate-100 px-5 py-4 flex items-center gap-3">
+              <button onClick={() => setShowArchivedMobs(false)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+                <X size={16} />
+              </button>
+              <h2 className="font-semibold text-slate-800 tracking-tight flex-1">Archived Mobs</h2>
+              <div className="text-xs text-slate-400 font-medium">{archivedMobs.length} archived</div>
+            </div>
+            <div className="p-4 space-y-2">
+              {archivedMobsLoading ? (
+                <div className="text-center text-slate-400 text-sm py-8">Loading…</div>
+              ) : archivedMobs.length === 0 ? (
+                <div className="text-center text-slate-400 text-sm py-8">
+                  No archived mobs. Recounting a mob to 0 archives it here instead of deleting it —
+                  its history stays intact for paddock and lambing reports.
+                </div>
+              ) : (
+                archivedMobs.map((m) => (
+                  <div key={m.id} className="bg-white rounded-2xl px-4 py-3.5 border border-slate-100 shadow-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-800">{m.name}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {m.species || ""}{m.breed ? ` · ${m.breed}` : ""}{m.paddock ? ` · last in ${m.paddock}` : ""}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          Archived {m.archivedAt ? new Date(m.archivedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : ""}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5 flex-shrink-0">
+                        <button onClick={async () => {
+                          try {
+                            const restored = await api.restoreMob(m.id);
+                            setArchivedMobs(prev => prev.filter(x => x.id !== m.id));
+                            setMobs(prev => [...prev, restored]);
+                            markChanged();
+                            showToast(`${m.name} restored`);
+                          } catch (err) {
+                            showToast(err.message || "Couldn't restore mob");
+                          }
+                        }} className="text-xs font-bold text-white bg-amber-500 rounded-lg px-3 py-1.5">Restore</button>
+                        <button onClick={async () => {
+                          if (!window.confirm(`Permanently delete ${m.name}? This also deletes its history and can't be undone.`)) return;
+                          try {
+                            await api.deleteMob(m.id);
+                            setArchivedMobs(prev => prev.filter(x => x.id !== m.id));
+                            showToast(`${m.name} deleted permanently`);
+                          } catch (err) {
+                            showToast(err.message || "Couldn't delete mob");
+                          }
+                        }} className="text-xs font-semibold text-rose-500">Delete forever</button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Field Notes List Screen ── */}

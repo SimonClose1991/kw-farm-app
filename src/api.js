@@ -60,10 +60,14 @@ export const api = {
 
   // --- Mobs ---
   listMobs: (farm) => request(`/mobs?farm=${encodeURIComponent(farm)}`),
+  listArchivedMobs: (farm) => request(`/mobs?farm=${encodeURIComponent(farm)}&archived=true`),
+  archiveMob: (id) => request(`/mobs/${id}/archive`, { method: "PUT" }),
+  restoreMob: (id) => request(`/mobs/${id}/restore`, { method: "PUT" }),
   createMob: (farm, fields) => request("/mobs", { method: "POST", body: JSON.stringify({ farm, ...fields }) }),
   updateMob: (id, fields) => request(`/mobs/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteMob: (id) => request(`/mobs/${id}`, { method: "DELETE" }),
   transferMob: (id, toFarm, count, date) => request(`/mobs/${id}/transfer`, { method: "POST", body: JSON.stringify({ toFarm, count, date }) }),
+  mergeMob: (id, intoMobId) => request(`/mobs/${id}/merge`, { method: "POST", body: JSON.stringify({ intoMobId }) }),
   listMobHistory: (id) => request(`/mobs/${id}/history`),
   addMobHistory: (id, entry) => request(`/mobs/${id}/history`, { method: "POST", body: JSON.stringify(entry) }),
   updateMobHistory: (id, historyId, fields) => request(`/mobs/${id}/history/${historyId}`, { method: "PUT", body: JSON.stringify(fields) }),

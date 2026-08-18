@@ -17,7 +17,7 @@ export async function verifyPassword(plain, hash) {
 
 export function signToken(account) {
   return jwt.sign(
-    { id: account.id, email: account.email, role: account.role },
+    { id: account.id, email: account.email, role: account.role, name: account.name },
     JWT_SECRET,
     { expiresIn: TOKEN_EXPIRY }
   );

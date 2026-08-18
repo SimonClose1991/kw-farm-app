@@ -50,6 +50,8 @@ export const mobs = pgTable("mobs", {
   daysInPaddock: integer("days_in_paddock").default(0),
   wec: jsonb("wec"), // last WEC reading {count, date, notes}
   extra: jsonb("extra"), // catch-all for any additional fields added later
+  archived: boolean("archived").notNull().default(false), // recounted to 0 / manually archived — hidden from normal lists but history is kept for paddock/lambing reports
+  archivedAt: timestamp("archived_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

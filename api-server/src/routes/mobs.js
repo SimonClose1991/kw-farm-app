@@ -11,13 +11,14 @@ async function farmIdByName(name) {
   return farm?.id || null;
 }
 
-// GET /api/mobs?farm=Arundale
+// GET /api/mobs?farm=Arundale — active mobs by default; ?archived=true lists archived ones instead
 router.get("/", requireAuth, async (req, res) => {
   const farmName = req.query.farm;
   if (!farmName) return res.status(400).json({ error: "farm query param is required" });
   const farmId = await farmIdByName(farmName);
   if (!farmId) return res.json([]);
-  const all = await db.select().from(mobs).where(eq(mobs.farmId, farmId));
+  const showArchived = req.query.archived === "true" || req.query.archived === "1";
+  const all = await db.select().from(mobs).where(and(eq(mobs.farmId, farmId), eq(mobs.archived, showArchived)));
   // Flatten extra jsonb fields into each mob so frontend receives lastTreatDate, whpDays etc
   res.json(all.map(m => ({ ...m, ...(m.extra || {}) })));
 });
@@ -91,6 +92,30 @@ router.delete("/:id", requireAuth, requireEditor, async (req, res) => {
   res.json({ ok: true });
 });
 
+// PUT /api/mobs/:id/archive — soft-delete: hides the mob from normal lists but
+// keeps it (and its full history) in the database, so paddock/lambing reports
+// that read from mob history are unaffected. Used by "recount to 0".
+router.put("/:id/archive", requireAuth, requireEditor, async (req, res) => {
+  const [updated] = await db
+    .update(mobs)
+    .set({ archived: true, archivedAt: new Date(), updatedAt: new Date() })
+    .where(eq(mobs.id, Number(req.params.id)))
+    .returning();
+  if (!updated) return res.status(404).json({ error: "Mob not found" });
+  res.json({ ...updated, ...(updated.extra || {}) });
+});
+
+// PUT /api/mobs/:id/restore — brings an archived mob back into normal lists
+router.put("/:id/restore", requireAuth, requireEditor, async (req, res) => {
+  const [updated] = await db
+    .update(mobs)
+    .set({ archived: false, archivedAt: null, updatedAt: new Date() })
+    .where(eq(mobs.id, Number(req.params.id)))
+    .returning();
+  if (!updated) return res.status(404).json({ error: "Mob not found" });
+  res.json({ ...updated, ...(updated.extra || {}) });
+});
+
 // POST /api/mobs/:id/transfer  body: { toFarm, count, date }
 // Creates a copy of the mob in the destination farm and reduces the source count,
 // recording a history entry on both sides.
@@ -124,6 +149,42 @@ router.post("/:id/transfer", requireAuth, requireEditor, async (req, res) => {
   ]);
 
   res.status(201).json({ source: updatedSource, newMob });
+});
+
+// POST /api/mobs/:id/merge  body: { intoMobId }
+// Merges this mob into another mob: head count combines, and ALL history and
+// notes move across (reassigned, not duplicated — the source mob disappears
+// afterwards, so there's no risk of double-counting reports).
+router.post("/:id/merge", requireAuth, requireEditor, async (req, res) => {
+  const sourceId = Number(req.params.id);
+  const targetId = Number(req.body.intoMobId);
+  if (!targetId || targetId === sourceId) return res.status(400).json({ error: "Pick a different mob to merge into" });
+  const [source] = await db.select().from(mobs).where(eq(mobs.id, sourceId));
+  const [target] = await db.select().from(mobs).where(eq(mobs.id, targetId));
+  if (!source || !target) return res.status(404).json({ error: "Mob not found" });
+  if (source.species !== target.species) return res.status(400).json({ error: "Can't merge mobs of different species" });
+
+  await db.update(mobHistory).set({ mobId: targetId }).where(eq(mobHistory.mobId, sourceId));
+  await db.update(mobNotes).set({ mobId: targetId }).where(eq(mobNotes.mobId, sourceId));
+
+  await db.insert(mobHistory).values({
+    mobId: targetId,
+    date: new Date().toISOString().slice(0, 10),
+    action: "Merge",
+    detail: `Merged ${source.count} head from ${source.name}${source.paddock ? ` (${source.paddock})` : ""}`,
+    authorName: req.user?.name || null,
+    paddock: target.paddock || null,
+  });
+
+  const [updatedTarget] = await db
+    .update(mobs)
+    .set({ count: (target.count || 0) + (source.count || 0), updatedAt: new Date() })
+    .where(eq(mobs.id, targetId))
+    .returning();
+
+  await db.delete(mobs).where(eq(mobs.id, sourceId));
+
+  res.json({ mergedMob: { ...updatedTarget, ...(updatedTarget.extra || {}) } });
 });
 
 // --- History ---
