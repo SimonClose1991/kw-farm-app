@@ -6504,8 +6504,9 @@ export default function App() {
                   </div>
                 ))
               )}
-              {/* Start Lambing/Calving: work out the true start count from the
-                  count now + deaths during the window (post-marking recount) */}
+              {/* Start Lambing/Calving: recount helper — type what you counted
+                  (e.g. at marking) and it adds the deaths back to give the true
+                  number that went into the paddock */}
               {(historyEdit.h.action === "Start Lambing" || historyEdit.h.action === "Start Calving") && !historyEdit.useRaw && (() => {
                 const isCalv = historyEdit.h.action === "Start Calving";
                 const damLabel = isCalv ? "Cows at start" : "Ewes at start";
@@ -6523,24 +6524,33 @@ export default function App() {
                   const m = String(x.detail || "").match(/Number of deaths: ([\d.]+)/);
                   return s + (m ? Number(m[1]) : 0);
                 }, 0);
-                const nowCount = Number(selectedMob?.count) || 0;
-                const suggested = nowCount + deaths;
+                const counted = historyEdit.countedNow !== undefined
+                  ? historyEdit.countedNow
+                  : String(Number(selectedMob?.count) || "");
+                const suggested = (Number(counted) || 0) + deaths;
                 const current = Number(historyEdit.pairs[idx].value) || 0;
-                if (!suggested || suggested === current) return null;
                 return (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                    <div className="text-xs font-bold text-amber-800">Recount check</div>
-                    <div className="text-[11px] text-amber-700 mt-0.5">
-                      Counted now: <b>{nowCount.toLocaleString()}</b> + deaths during {isCalv ? "calving" : "lambing"}: <b>{deaths.toLocaleString()}</b> = <b>{suggested.toLocaleString()}</b> at start
-                      {current > 0 && <> (currently recorded as {current.toLocaleString()})</>}
+                    <div className="text-xs font-bold text-amber-800">Recount helper</div>
+                    <div className="text-[11px] text-amber-700 mt-0.5 mb-2">
+                      Counted them since (e.g. at marking)? Enter the count — deaths recorded during {isCalv ? "calving" : "lambing"} are added back to give the true starting number.
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="number" inputMode="numeric" value={counted}
+                        onChange={(e) => setHistoryEdit(prev => ({ ...prev, countedNow: e.target.value }))}
+                        placeholder="counted now"
+                        className="flex-1 min-w-0 border border-amber-300 rounded-lg px-2 py-2 bg-white text-sm" />
+                      <span className="text-xs text-amber-700 whitespace-nowrap">+ {deaths.toLocaleString()} deaths =</span>
+                      <span className="text-base font-extrabold text-amber-900">{suggested.toLocaleString()}</span>
                     </div>
                     <button type="button"
+                      disabled={!suggested}
                       onClick={() => setHistoryEdit(prev => ({
                         ...prev,
                         pairs: prev.pairs.map((x, xi) => xi === idx ? { ...x, value: String(suggested) } : x),
                       }))}
-                      className="mt-2 w-full bg-amber-500 text-white rounded-lg py-2 text-xs font-bold">
-                      Use {suggested.toLocaleString()}
+                      className="mt-2 w-full bg-amber-500 text-white rounded-lg py-2 text-xs font-bold disabled:opacity-40">
+                      Use {suggested.toLocaleString()} as {damLabel}{current > 0 ? ` (now ${current.toLocaleString()})` : ""}
                     </button>
                   </div>
                 );
