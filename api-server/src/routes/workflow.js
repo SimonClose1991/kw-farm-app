@@ -26,6 +26,7 @@ router.get("/", requireAuth, async (req, res) => {
       published: state?.published || [],
       staff: mergedStaff,
       prefs: state?.prefs || {},
+      recurTemplates: state?.recurTemplates || [],
     });
   } catch (err) {
     console.error("Workflow GET error:", err);
@@ -36,14 +37,14 @@ router.get("/", requireAuth, async (req, res) => {
 // PUT /api/workflow — saves the full workflow state
 router.put("/", requireAuth, async (req, res) => {
   try {
-    const { tasks, published, staff, prefs } = req.body;
+    const { tasks, published, staff, prefs, recurTemplates } = req.body;
     const existing = await db.select().from(workflowState).where(eq(workflowState.id, "singleton"));
     if (existing.length > 0) {
       await db.update(workflowState)
-        .set({ tasks, published, staff, prefs, updatedAt: new Date() })
+        .set({ tasks, published, staff, prefs, recurTemplates, updatedAt: new Date() })
         .where(eq(workflowState.id, "singleton"));
     } else {
-      await db.insert(workflowState).values({ id: "singleton", tasks, published, staff, prefs });
+      await db.insert(workflowState).values({ id: "singleton", tasks, published, staff, prefs, recurTemplates });
     }
     res.json({ ok: true });
   } catch (err) {

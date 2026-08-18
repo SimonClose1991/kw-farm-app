@@ -189,6 +189,10 @@ export const workflowState = pgTable("workflow_state", {
   published: jsonb("published").default([]),
   staff: jsonb("staff").default([]),
   prefs: jsonb("prefs").default({}),
+  // Templates for weekly-recurring tasks, kept separate from the individual
+  // week instances in `tasks` — so editing one week's instance never changes
+  // the template (and therefore never changes other weeks).
+  recurTemplates: jsonb("recur_templates").default([]),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 

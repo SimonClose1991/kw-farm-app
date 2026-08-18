@@ -369,6 +369,11 @@ const DEF_STAFF = ["Simon","Mikaela","Anthony","Rob","Smokes","Jayden","Michael"
 /* ── State ───────────────────────────────────────────────── */
 let tasks     = [];
 let published = [];
+// Templates for weekly-recurring tasks, kept separate from the individual week
+// instances in `tasks`. Instances are generated FROM a template but are then
+// fully independent rows — editing one week's instance only ever touches that
+// row, never the template, so it can't silently change other weeks.
+let recurTemplates = [];
 let staff     = [...DEF_STAFF];
 // staffDetails: { "Simon": { first:"Simon", last:"Close" } }
 let staffDetails = {};
@@ -410,19 +415,21 @@ async function loadState(){
         if(d.staffDetails) staffDetails={...d.staffDetails};
         if(d.colors)  COLORS=d.colors;
         if(d.prefs)   prefs={...prefs,...d.prefs};
+        if(d.recurTemplates) recurTemplates=d.recurTemplates;
         if(!d.published&&d.tasks?.length) published=JSON.parse(JSON.stringify(d.tasks));
       }
     }
   }catch(e){
     try{
       const raw=localStorage.getItem("kwp-workflow-cache");
-      if(raw){ const d=JSON.parse(raw); if(d.tasks)tasks=d.tasks; if(d.published)published=d.published; if(d.staff)staff=d.staff; if(d.staffDetails)staffDetails=d.staffDetails||{}; if(d.colors)COLORS=d.colors; if(d.prefs)prefs={...prefs,...d.prefs}; }
+      if(raw){ const d=JSON.parse(raw); if(d.tasks)tasks=d.tasks; if(d.published)published=d.published; if(d.staff)staff=d.staff; if(d.staffDetails)staffDetails=d.staffDetails||{}; if(d.colors)COLORS=d.colors; if(d.prefs)prefs={...prefs,...d.prefs}; if(d.recurTemplates)recurTemplates=d.recurTemplates; }
     }catch(_){}
   }
+  ensureRecurTemplates();
 }
 let _saveTimer=null;
 function saveState(){
-  const payload={tasks,published,staff,staffDetails,colors:COLORS,prefs};
+  const payload={tasks,published,staff,staffDetails,colors:COLORS,prefs,recurTemplates};
   _lastSnapshot=JSON.stringify(payload);
   try{ localStorage.setItem("kwp-workflow-cache",JSON.stringify(payload)); }catch(_){}
   if(_saveTimer) clearTimeout(_saveTimer);
@@ -900,21 +907,41 @@ function saveTask(){
     const series=uid(), idxs=recur==="weekdays"?[0,1,2,3,4]:[0,1,2,3,4,5,6];
     idxs.forEach(di=>tasks.push({...base,id:uid(),series,recur,day:DAYS[di],date:toISO(addDays(weekStart,di))}));
   } else if(recur==="weekly"){
-    tasks.push({...base,id:uid(),series:uid(),recur:"weekly",weeklyDay:day,day,date});
+    const series=uid();
+    recurTemplates.push({id:uid(),series,farm,content,notes,paddock,color:selColor,assignedStaff:[...selStaff],weeklyDay:day,createdAt:new Date().toISOString()});
+    tasks.push({...base,id:uid(),series,recur:"weekly",weeklyDay:day,day,date});
   } else {
     tasks.push({...base,id:uid(),recur:"none",day,date});
   }
   closeModal(); saveState(); render();
 }
+// One-time migration: older weekly-recurring tasks had no separate template —
+// the earliest instance of each series doubled as the template, which meant
+// editing that particular week's instance could silently change every future
+// week too. This backfills a proper template (from the earliest instance, the
+// one least likely to have been edited for a specific week) so it stops.
+function ensureRecurTemplates(){
+  const bySeries={};
+  tasks.filter(t=>t.recur==="weekly"&&t.series).forEach(t=>{
+    if(!bySeries[t.series]||t.date<bySeries[t.series].date) bySeries[t.series]=t;
+  });
+  let added=false;
+  Object.values(bySeries).forEach(t=>{
+    if(!recurTemplates.some(tpl=>tpl.series===t.series)){
+      recurTemplates.push({id:uid(),series:t.series,farm:t.farm,content:t.content,notes:t.notes,paddock:t.paddock,color:t.color,assignedStaff:[...(t.assignedStaff||[])],weeklyDay:t.weeklyDay||t.day,createdAt:t.createdAt||new Date().toISOString()});
+      added=true;
+    }
+  });
+  if(added&&isAdmin) saveState();
+}
 function materialiseWeekly(){
   if(!isAdmin) return;
-  const seen={}; tasks.filter(t=>t.recur==="weekly").forEach(t=>{ seen[t.series]=t; });
   let added=false;
-  Object.values(seen).forEach(tpl=>{
-    const di=DAYS.indexOf(tpl.weeklyDay||tpl.day); if(di<0) return;
+  recurTemplates.forEach(tpl=>{
+    const di=DAYS.indexOf(tpl.weeklyDay); if(di<0) return;
     const targetDate=toISO(addDays(weekStart,di));
     if(!tasks.some(t=>t.series===tpl.series&&t.date===targetDate)){
-      tasks.push({farm:tpl.farm,content:tpl.content,notes:tpl.notes,color:tpl.color,assignedStaff:[...(tpl.assignedStaff||[])],completed:false,createdAt:new Date().toISOString(),id:uid(),series:tpl.series,recur:"weekly",weeklyDay:tpl.weeklyDay||tpl.day,day:DAYS[di],date:targetDate});
+      tasks.push({farm:tpl.farm,content:tpl.content,notes:tpl.notes,paddock:tpl.paddock,color:tpl.color,assignedStaff:[...(tpl.assignedStaff||[])],completed:false,createdAt:new Date().toISOString(),id:uid(),series:tpl.series,recur:"weekly",weeklyDay:tpl.weeklyDay,day:DAYS[di],date:targetDate});
       added=true;
     }
   });
@@ -1223,15 +1250,15 @@ if(!isEmbedded){
   if(splash){ splash.style.opacity="0"; setTimeout(()=>splash.remove(),500); }
 }
 function startAutoRefresh(){
-  _lastSnapshot=JSON.stringify({tasks,published,staff,prefs});
+  _lastSnapshot=JSON.stringify({tasks,published,staff,prefs,recurTemplates});
   setInterval(async()=>{
     if(document.getElementById("modal-overlay").classList.contains("open")||dragId!==null) return;
     try{
       const res=await kwFetch("/api/workflow",{cache:"no-store"}); if(!res.ok) return;
       const d=await res.json();
-      const snap=JSON.stringify({tasks:d.tasks||[],published:d.published||[],staff:d.staff||staff,prefs:d.prefs||prefs});
+      const snap=JSON.stringify({tasks:d.tasks||[],published:d.published||[],staff:d.staff||staff,prefs:d.prefs||prefs,recurTemplates:d.recurTemplates||recurTemplates});
       if(snap!==_lastSnapshot){
-        if(d.tasks)tasks=d.tasks; if(d.published)published=d.published; if(d.staff)staff=d.staff; if(d.staffDetails)staffDetails=d.staffDetails||{}; if(d.colors)COLORS=d.colors; if(d.prefs)prefs={...prefs,...d.prefs};
+        if(d.tasks)tasks=d.tasks; if(d.published)published=d.published; if(d.staff)staff=d.staff; if(d.staffDetails)staffDetails=d.staffDetails||{}; if(d.colors)COLORS=d.colors; if(d.prefs)prefs={...prefs,...d.prefs}; if(d.recurTemplates)recurTemplates=d.recurTemplates;
         _lastSnapshot=snap; render();
       }
     }catch(_){}
