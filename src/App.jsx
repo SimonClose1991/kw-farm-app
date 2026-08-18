@@ -6504,6 +6504,47 @@ export default function App() {
                   </div>
                 ))
               )}
+              {/* Start Lambing/Calving: work out the true start count from the
+                  count now + deaths during the window (post-marking recount) */}
+              {(historyEdit.h.action === "Start Lambing" || historyEdit.h.action === "Start Calving") && !historyEdit.useRaw && (() => {
+                const isCalv = historyEdit.h.action === "Start Calving";
+                const damLabel = isCalv ? "Cows at start" : "Ewes at start";
+                const idx = historyEdit.pairs.findIndex(p => p.label === damLabel);
+                if (idx === -1) return null;
+                const startDate = historyEdit.date || "";
+                const list = history[selectedMob.id] || [];
+                const endEntry = list.find(x =>
+                  (x.action === "End Lambing" || x.action === "End Calving") && String(x.date || "") >= startDate);
+                const endDate = endEntry?.date || null;
+                const deaths = list.reduce((s, x) => {
+                  if (x.action !== "Death") return s;
+                  const d = String(x.date || "");
+                  if (d < startDate || (endDate && d > endDate)) return s;
+                  const m = String(x.detail || "").match(/Number of deaths: ([\d.]+)/);
+                  return s + (m ? Number(m[1]) : 0);
+                }, 0);
+                const nowCount = Number(selectedMob?.count) || 0;
+                const suggested = nowCount + deaths;
+                const current = Number(historyEdit.pairs[idx].value) || 0;
+                if (!suggested || suggested === current) return null;
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                    <div className="text-xs font-bold text-amber-800">Recount check</div>
+                    <div className="text-[11px] text-amber-700 mt-0.5">
+                      Counted now: <b>{nowCount.toLocaleString()}</b> + deaths during {isCalv ? "calving" : "lambing"}: <b>{deaths.toLocaleString()}</b> = <b>{suggested.toLocaleString()}</b> at start
+                      {current > 0 && <> (currently recorded as {current.toLocaleString()})</>}
+                    </div>
+                    <button type="button"
+                      onClick={() => setHistoryEdit(prev => ({
+                        ...prev,
+                        pairs: prev.pairs.map((x, xi) => xi === idx ? { ...x, value: String(suggested) } : x),
+                      }))}
+                      className="mt-2 w-full bg-amber-500 text-white rounded-lg py-2 text-xs font-bold">
+                      Use {suggested.toLocaleString()}
+                    </button>
+                  </div>
+                );
+              })()}
               <div className="text-[11px] text-slate-400">Note: editing a record fixes the history and reports, but doesn't re-adjust mob counts or inventory — use Recount if the head count needs correcting.</div>
             </div>
             <button onClick={async () => {
