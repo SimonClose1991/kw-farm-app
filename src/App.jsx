@@ -4618,6 +4618,45 @@ export default function App() {
                   <span className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0" style={{ backgroundColor: TAG_COLOUR_HEX[m.tag] || "#e2e8f0" }} />
                 </button>
               ))}
+              {canEdit && (() => {
+                // Same-name mobs sharing this paddock are almost always the
+                // same mob split across two records — offer a one-tap merge
+                // instead of making the user hunt for it via More → Merge
+                const dupGroups = Object.values(
+                  pinSelected.mobs.reduce((acc, m) => {
+                    const key = (m.name || "").trim().toLowerCase();
+                    (acc[key] = acc[key] || []).push(m);
+                    return acc;
+                  }, {})
+                ).filter(g => g.length > 1);
+                return dupGroups.map(group => {
+                  const [keep, ...rest] = [...group].sort((a, b) => a.id - b.id);
+                  return (
+                    <button key={keep.id}
+                      onClick={async () => {
+                        if (!window.confirm(`Merge these ${group.length} "${keep.name}" mobs together? This combines their head count and history into one.`)) return;
+                        setPinSelected(null);
+                        try {
+                          let mergedMob = keep;
+                          for (const dup of rest) {
+                            const res = await api.mergeMob(dup.id, mergedMob.id);
+                            mergedMob = res.mergedMob;
+                          }
+                          const dupIds = new Set(rest.map(r => r.id));
+                          setMobs(prev => prev.filter(m => !dupIds.has(m.id)).map(m => (m.id === mergedMob.id ? mergedMob : m)));
+                          markChanged();
+                          showToast(`Merged into ${mergedMob.name}`);
+                        } catch (err) {
+                          showToast(err.message || "Couldn't merge mobs");
+                        }
+                      }}
+                      className="w-full bg-red-900 text-white rounded-2xl py-3 font-bold flex items-center justify-center gap-1.5"
+                    >
+                      🔗 Merge "{keep.name}" ({group.length})
+                    </button>
+                  );
+                });
+              })()}
               {canEdit && (
                 <button
                   onClick={() => {
