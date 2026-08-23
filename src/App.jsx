@@ -228,6 +228,21 @@ function ringAreaHaFromLatLng(points) {
   return ringAreaHa(points.map(([lat, lng]) => [lng, lat]));
 }
 
+// Great-circle distance between two lat/lng points, in metres
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+// Cumulative distance along a series of {lat,lng} points, in metres
+function totalPathMeters(points) {
+  let sum = 0;
+  for (let i = 1; i < points.length; i++) sum += haversineMeters(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
+  return sum;
+}
+
 // Approximate farm locations (lat, lng) — used to centre the interactive map
 const FARM_CENTERS = {
   Arundale: [-37.21, 141.62],
@@ -518,6 +533,8 @@ function GooglePaddockMap({
   React.useEffect(() => { onSelectPinRef.current = onSelectPin; }, [onSelectPin]);
   const onPickPinRef = useRef(onPickPin);
   React.useEffect(() => { onPickPinRef.current = onPickPin; }, [onPickPin]);
+  const onDrawPointRef = useRef(onDrawPoint);
+  React.useEffect(() => { onDrawPointRef.current = onDrawPoint; }, [onDrawPoint]);
 
   const colourForPaddock = (p) => {
     // Custom paddock colour always takes priority if set
@@ -874,9 +891,10 @@ function GooglePaddockMap({
         if (!landmarkPinPos) onLandmarkPinMoved?.(startPos.lat, startPos.lng);
       }
 
-      // ── Draw mode ──
+      // ── Draw mode ── (click capture lives in a dedicated effect below — this
+      // block runs from a stale `drawMode` closure since it's not in this
+      // effect's deps, so it must not register its own listener here)
       if (drawMode) {
-        map.addListener("click", (e) => onDrawPoint?.(e.latLng.lat(), e.latLng.lng()));
         if (drawPoints.length > 0) {
           const path = drawPoints.map((p) => ({ lat: p.lat, lng: p.lng }));
           const poly = new g.Polygon({ paths: path, strokeColor: "#22c55e", strokeWeight: 3, fillColor: "#22c55e", fillOpacity: drawPoints.length > 2 ? 0.3 : 0, map });
@@ -1353,6 +1371,19 @@ function GooglePaddockMap({
     }));
     ref.drawOverlays = [poly, ...dots];
   }, [drawPoints]);
+
+  // Separate effect: attach/detach the draw-point click listener without
+  // rebuilding the map. This used to live inline in the big build effect
+  // above, but that effect doesn't depend on `drawMode` (rebuilding the whole
+  // map every time drawing starts/stops would be wasteful), so it only ever
+  // saw whichever `drawMode` value was current the last time the map was
+  // built — normally `false` — and never actually captured a click.
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.map || !window.google?.maps || !drawMode) return;
+    const listener = ref.map.addListener("click", (e) => onDrawPointRef.current?.(e.latLng.lat(), e.latLng.lng()));
+    return () => { try { window.google.maps.event.removeListener(listener); } catch {} };
+  }, [drawMode, mapReadyTick]);
 
   // Separate effect: update draggable pin position without rebuilding map
   React.useEffect(() => {
@@ -2023,6 +2054,7 @@ function WeatherWidget({ farmName, farmCenters }) {
 function PaddockMoveSheet({ mob, paddocks, farmName, startAtAction = false, onClose, onMoveAll, onSplit }) {
   const [action, setAction] = React.useState(startAtAction ? null : "move"); // null = choosing, "move" | "split"
   const [splitCount, setSplitCount] = React.useState("");
+  const [pendingTarget, setPendingTarget] = React.useState(null); // paddock tapped, awaiting confirmation
   const count = Number(mob?.count) || 0;
   const sortedPaddocks = [...(paddocks || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   const splitN = Number(splitCount);
@@ -2075,7 +2107,7 @@ function PaddockMoveSheet({ mob, paddocks, farmName, startAtAction = false, onCl
               {sortedPaddocks.map((p) => (
                 <button key={p.id}
                   disabled={p.name === mob?.paddock}
-                  onClick={() => { if (action === "move") onMoveAll?.(p); else onSplit?.(p, splitN); }}
+                  onClick={() => setPendingTarget(p)}
                   className={`w-full flex items-center justify-between rounded-2xl px-4 py-3 border text-left ${p.name === mob?.paddock ? "bg-slate-50 border-slate-100 text-slate-300" : "bg-white border-slate-200 hover:bg-amber-50 active:bg-amber-100"}`}>
                   <span className="font-semibold text-sm">{p.name}{p.name === mob?.paddock ? " (current)" : ""}</span>
                   <span className="text-xs text-slate-400">{Number(p.ha || 0).toFixed(0)} ha</span>
@@ -2084,6 +2116,26 @@ function PaddockMoveSheet({ mob, paddocks, farmName, startAtAction = false, onCl
               {sortedPaddocks.length === 0 && <div className="text-sm text-slate-400 italic">No paddocks yet</div>}
             </div>
           </>
+        )}
+
+        {pendingTarget && (
+          <div className="absolute inset-0 z-10 bg-white flex flex-col">
+            <div className="px-5 py-4 border-b border-slate-100 font-bold text-slate-800">Confirm move</div>
+            <div className="flex-1 p-5 flex items-center">
+              <p className="text-sm text-slate-600">
+                Move {action === "move" ? `all ${count.toLocaleString()} head of ` : `${splitN} head of `}
+                <strong className="text-slate-800">{mob?.name}</strong> from <strong className="text-slate-800">{mob?.paddock}</strong> to <strong className="text-slate-800">{pendingTarget.name}</strong>?
+              </p>
+            </div>
+            <div className="p-4 border-t border-slate-100 flex gap-2 flex-shrink-0">
+              <button onClick={() => setPendingTarget(null)} className="flex-1 bg-slate-100 text-slate-600 rounded-2xl py-3 font-bold">Cancel</button>
+              <button onClick={() => {
+                const p = pendingTarget;
+                setPendingTarget(null);
+                if (action === "move") onMoveAll?.(p); else onSplit?.(p, splitN);
+              }} className="flex-1 bg-red-900 text-white rounded-2xl py-3 font-bold">Confirm Move</button>
+            </div>
+          </div>
         )}
 
         {action !== null && startAtAction && (
@@ -3142,6 +3194,7 @@ export default function App() {
   const [homeFarm, setHomeFarm] = useState(null);
   const [dragMobId, setDragMobId] = useState(null);
   const [draggingMob, setDraggingMob] = useState(null);
+  const [pendingMove, setPendingMove] = useState(null); // { label, from, to, onConfirm } — shown before any paddock move actually saves
   const livMapRef = React.useRef(null); // livestock map
   const padMapRef = React.useRef(null); // paddocks map
   const notesMapRef = React.useRef(null); // notes map
@@ -3184,6 +3237,9 @@ export default function App() {
   const [landmarkEditMode, setLandmarkEditMode] = useState(false);
   const [confirmLmDel, setConfirmLmDel] = useState(false); // two-step landmark delete
   const [mapDrawMode, setMapDrawMode] = useState(false); // true while drawing a new paddock shape
+  const [measureMode, setMeasureMode] = useState(false); // true while the measuring-tape tool is active
+  const [measurePoints, setMeasurePoints] = useState([]); // [{lat,lng}] points tapped while measuring
+  const measureOverlaysRef = useRef([]);
   const [mapSpeciesFilter, setMapSpeciesFilter] = useState("All"); // livestock map pin filter
   const [shapeEditPaddock, setShapeEditPaddock] = useState(null); // paddock being reshaped on the map
   const [shapeEditHa, setShapeEditHa] = useState(null); // live ha readout while reshaping
@@ -3194,6 +3250,27 @@ export default function App() {
   const [showAddPaddock, setShowAddPaddock] = useState(false);
   const [newPaddockForm, setNewPaddockForm] = useState({});
   const [paddockDetail, setPaddockDetail] = useState(null);
+  // Draw the measuring-tape line + point markers directly on the paddock map.
+  // Kept independent of GooglePaddockMap's own render cycle (like mobOverlays)
+  // so the fragile core map component doesn't need to know measuring exists.
+  React.useEffect(() => {
+    const map = padMapRef.current?.map;
+    const g = window.google?.maps;
+    measureOverlaysRef.current.forEach(o => { try { o.setMap(null); } catch {} });
+    measureOverlaysRef.current = [];
+    if (!g || !map || !measureMode || measurePoints.length === 0) return;
+    const path = measurePoints.map(p => ({ lat: p.lat, lng: p.lng }));
+    if (path.length > 1) {
+      measureOverlaysRef.current.push(new g.Polyline({ path, strokeColor: "#2563eb", strokeWeight: 3, map, zIndex: 90 }));
+    }
+    measurePoints.forEach((p, i) => {
+      measureOverlaysRef.current.push(new g.Marker({
+        position: { lat: p.lat, lng: p.lng }, map, zIndex: 91,
+        icon: { path: g.SymbolPath.CIRCLE, scale: 7, fillColor: "#2563eb", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+        label: { text: String(i + 1), color: "#fff", fontSize: "10px", fontWeight: "bold" },
+      }));
+    });
+  }, [measurePoints, measureMode]);
   // Gate state is DERIVED from the landmark records (isOpen is stored on the
   // server), so open gates survive reloads and are shared between devices.
   const openGates = React.useMemo(
@@ -4287,16 +4364,24 @@ export default function App() {
                     const toMove = movingMobs.filter(m => m.paddock !== targetPaddock);
                     if (toMove.length === 0) { showToast("Already in that paddock"); return; }
 
-                    const dateStr = todayStr();
-                    const ids = new Set(toMove.map(m => m.id));
-                    setMobs(prev => prev.map(m => ids.has(m.id) ? { ...m, paddock: targetPaddock, daysInPaddock: 0 } : m));
-                    showToast(toMove.length > 1 ? `${toMove.length} mobs → ${targetPaddock}` : `${toMove[0].name} → ${targetPaddock}`);
-                    markChanged();
-                    toMove.forEach(m => {
-                      api.updateMob(m.id, { paddock: targetPaddock, daysInPaddock: 0 })
-                        .then(() => api.addMobHistory(m.id, { action: "Move", detail: `Moved from ${m.paddock} to ${targetPaddock}`, date: dateStr }))
-                        .then((created) => { if (created?.id) setHistory(prev => ({ ...prev, [m.id]: [created, ...(prev[m.id] || [])] })); })
-                        .catch(err => showToast(err.message || "Couldn't save move"));
+                    const fromLabel = [...new Set(toMove.map(m => m.paddock))].join(", ");
+                    setPendingMove({
+                      label: toMove.length > 1 ? `${toMove.length} mobs (${toMove.reduce((s, m) => s + m.count, 0)} head)` : toMove[0].name,
+                      from: fromLabel,
+                      to: targetPaddock,
+                      onConfirm: () => {
+                        const dateStr = todayStr();
+                        const ids = new Set(toMove.map(m => m.id));
+                        setMobs(prev => prev.map(m => ids.has(m.id) ? { ...m, paddock: targetPaddock, daysInPaddock: 0 } : m));
+                        showToast(toMove.length > 1 ? `${toMove.length} mobs → ${targetPaddock}` : `${toMove[0].name} → ${targetPaddock}`);
+                        markChanged();
+                        toMove.forEach(m => {
+                          api.updateMob(m.id, { paddock: targetPaddock, daysInPaddock: 0 })
+                            .then(() => api.addMobHistory(m.id, { action: "Move", detail: `Moved from ${m.paddock} to ${targetPaddock}`, date: dateStr }))
+                            .then((created) => { if (created?.id) setHistory(prev => ({ ...prev, [m.id]: [created, ...(prev[m.id] || [])] })); })
+                            .catch(err => showToast(err.message || "Couldn't save move"));
+                        });
+                      },
                     });
                   }}
                   onPointerCancel={() => {
@@ -4399,9 +4484,12 @@ export default function App() {
           onSelectLandmark={(l) => { setLandmarkDetail(l); setLandmarkEditMode(false); }}
           insightMode={insightMode}
           paddockStats={paddockStats}
-          drawMode={mapDrawMode}
-          drawPoints={drawPoints}
-          onDrawPoint={(lat, lng) => setDrawPoints((prev) => [...prev, { lat, lng }])}
+          drawMode={mapDrawMode || measureMode}
+          drawPoints={measureMode ? [] : drawPoints}
+          onDrawPoint={(lat, lng) => {
+            if (measureMode) { setMeasurePoints((prev) => [...prev, { lat, lng }]); return; }
+            setDrawPoints((prev) => [...prev, { lat, lng }]);
+          }}
           userLocation={userLocation}
           openGateIds={openGates}
           onMapCentreChange={(lat, lng) => setCurrentMapCentre({ lat, lng })}
@@ -4420,7 +4508,14 @@ export default function App() {
             <button onClick={locateMe} disabled={locating} title={trackingOn ? "Tracking ON — tap to stop" : "Follow my location"} className={`w-11 h-11 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 text-lg border border-slate-100 ${trackingOn ? "bg-blue-500 text-white" : "bg-white"}`}>
               {locating ? "…" : "◎"}
             </button>
-            {canEdit && (
+            <button
+              onClick={() => { setMeasureMode((v) => !v); setMeasurePoints([]); setShowPaddockAddMenu(false); }}
+              title="Measure distance"
+              className={`w-11 h-11 rounded-full shadow-lg flex items-center justify-center text-lg border border-slate-100 ${measureMode ? "bg-blue-600 text-white" : "bg-white"}`}
+            >
+              📏
+            </button>
+            {canEdit && !measureMode && (
               <button
                 onClick={() => setShowPaddockAddMenu((v) => !v)}
                 className="bg-red-900 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-2xl font-bold"
@@ -4458,6 +4553,26 @@ export default function App() {
         {mapDrawMode && (
           <div className="absolute top-2 left-2 right-2 bg-green-700/90 text-white text-xs font-medium px-3 py-2 rounded-xl">
             ✏️ Drawing mode — tap to drop boundary points. At least 3 points, then Save below.
+          </div>
+        )}
+        {measureMode && (
+          <div className="absolute top-2 left-2 right-2 bg-blue-700/90 text-white text-xs font-medium px-3 py-2 rounded-xl z-10">
+            📏 Measuring — tap the map to drop points along the distance you want to measure.
+          </div>
+        )}
+        {measureMode && measurePoints.length > 0 && (
+          <div className="absolute bottom-16 left-4 right-4 flex gap-2 z-10">
+            <div className="absolute -top-8 left-0 right-0 text-center">
+              <span className="bg-black/70 text-white text-xs px-3 py-1 rounded-full font-semibold">
+                {(() => {
+                  const m = totalPathMeters(measurePoints);
+                  const dist = measurePoints.length < 2 ? "0 m" : (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`);
+                  return `${dist} · ${measurePoints.length} point${measurePoints.length !== 1 ? "s" : ""}`;
+                })()}
+              </span>
+            </div>
+            <button onClick={() => setMeasurePoints([])} className="flex-1 bg-white text-slate-600 rounded-2xl py-3 font-bold text-sm border border-slate-200">Clear</button>
+            <button onClick={() => { setMeasureMode(false); setMeasurePoints([]); }} className="flex-1 bg-blue-600 text-white rounded-2xl py-3 font-bold text-sm">Done</button>
           </div>
         )}
         {mapDrawMode && drawPoints.length >= 3 && (
@@ -4694,14 +4809,15 @@ export default function App() {
               </div>
             )}
           </div>
-          {!(pinSelected.mobs?.length > 1) && pinSelected.mob && (() => {
-            const s = paddockStockingRate(pinSelected.mob.paddock, paddocks, landmarks, openGates, mobs);
+          {(() => {
+            const paddockName = pinSelected.mob?.paddock || pinSelected.mobs?.[0]?.paddock;
+            const s = paddockStockingRate(paddockName, paddocks, landmarks, openGates, mobs);
             if (!s) return null;
             return (
               <div className="bg-slate-50 rounded-2xl p-4 mb-3">
                 <div className="text-xs text-slate-400 font-semibold">PADDOCK STOCKING{s.combined ? " — GATES OPEN, COMBINED" : ""}</div>
                 <div className="text-2xl font-extrabold text-slate-800 mt-1">{s.dsePerHa.toFixed(2)} DSE/ha</div>
-                <div className="text-xs text-slate-400 mt-0.5">{s.dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE ÷ {s.ha.toFixed(1)} ha{s.combined ? ` across ${s.group.join(", ")}` : ` in ${pinSelected.mob.paddock}`}</div>
+                <div className="text-xs text-slate-400 mt-0.5">{s.dse.toLocaleString(undefined, { maximumFractionDigits: 0 })} DSE ÷ {s.ha.toFixed(1)} ha{s.combined ? ` across ${s.group.join(", ")}` : ` in ${paddockName}`}</div>
               </div>
             );
           })()}
@@ -5854,18 +5970,25 @@ export default function App() {
               {paddocks.map(p => (
                 <button
                   key={p.id}
-                  onClick={async () => {
+                  onClick={() => {
                     const mob = mobs.find(m => m.id === dragMobId);
                     if (!mob || mob.paddock === p.name) { setDragMobId(null); return; }
-                    const dateStr = todayStr();
-                    const detail = `Moved from ${mob.paddock} to ${p.name}`;
-                    setMobs(prev => prev.map(m => m.id === dragMobId ? { ...m, paddock: p.name, daysInPaddock: 0 } : m));
                     setDragMobId(null);
-                    showToast(`${mob.name} → ${p.name}`);
-                    try {
-                      await api.updateMob(dragMobId, { paddock: p.name, daysInPaddock: 0 });
-                      await api.addMobHistory(dragMobId, { action: "Move", detail, date: dateStr });
-                    } catch (err) { showToast(err.message || "Couldn't save move"); }
+                    setPendingMove({
+                      label: mob.name,
+                      from: mob.paddock,
+                      to: p.name,
+                      onConfirm: async () => {
+                        const dateStr = todayStr();
+                        const detail = `Moved from ${mob.paddock} to ${p.name}`;
+                        setMobs(prev => prev.map(m => m.id === mob.id ? { ...m, paddock: p.name, daysInPaddock: 0 } : m));
+                        showToast(`${mob.name} → ${p.name}`);
+                        try {
+                          await api.updateMob(mob.id, { paddock: p.name, daysInPaddock: 0 });
+                          await api.addMobHistory(mob.id, { action: "Move", detail, date: dateStr });
+                        } catch (err) { showToast(err.message || "Couldn't save move"); }
+                      },
+                    });
                   }}
                   className="px-3 py-1.5 bg-white border border-amber-300 rounded-full text-sm font-medium text-slate-700 hover:bg-amber-100 active:bg-amber-200"
                 >
@@ -6794,7 +6917,14 @@ export default function App() {
                 Yes, permanently delete mob
               </button>
             ) : (
-              <button onClick={submitAction} className="w-full rounded-2xl py-3.5 font-bold text-white bg-red-900">Save</button>
+              <button onClick={() => {
+                const dest = formValues["Move to paddock"];
+                if (actionForm === "Move" && dest && dest !== selectedMob?.paddock) {
+                  setPendingMove({ label: selectedMob?.name, from: selectedMob?.paddock || "Unassigned", to: dest, onConfirm: submitAction });
+                  return;
+                }
+                submitAction();
+              }} className="w-full rounded-2xl py-3.5 font-bold text-white bg-red-900">Save</button>
             )}
           </Modal>
         )}
@@ -7388,6 +7518,22 @@ export default function App() {
       <div className="md:hidden"><BottomNav /></div>
       {selectedMob && MobDetails()}
       {showMenu && MenuScreen()}
+
+      {/* ── Move confirmation — shown before ANY paddock move actually saves ── */}
+      {pendingMove && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40 backdrop-blur-sm px-6">
+          <div className="bg-white rounded-3xl w-full max-w-sm p-5 shadow-2xl">
+            <div className="text-center font-bold text-slate-800 mb-1">Confirm move</div>
+            <p className="text-center text-sm text-slate-500 mb-4">
+              Move <strong className="text-slate-800">{pendingMove.label}</strong> from <strong className="text-slate-800">{pendingMove.from}</strong> to <strong className="text-slate-800">{pendingMove.to}</strong>?
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setPendingMove(null)} className="flex-1 bg-slate-100 text-slate-600 rounded-2xl py-3 font-bold">Cancel</button>
+              <button onClick={() => { const fn = pendingMove.onConfirm; setPendingMove(null); fn(); }} className="flex-1 bg-red-900 text-white rounded-2xl py-3 font-bold">Confirm Move</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Paddock picker bottom sheet (from Mob Details paddock tile) ── */}
       {showPaddockPicker && selectedMob && (
@@ -8006,17 +8152,20 @@ export default function App() {
                 Object.entries(startsByMob).forEach(([mid, list]) => {
                   list.sort((a, b) => (a.date < b.date ? -1 : 1));
                   list.forEach(s => { s.key = `${s.season} ${s.date.slice(0, 4)}`; });
-                  // Two Start records for the SAME season = one season (a correction
-                  // or a re-entry). Merge them: earliest date, best data, one window —
-                  // otherwise the first one never gets an End and shows as LIVE forever.
+                  // Two Start records for the SAME season = one season — either a
+                  // correction/re-entry on one mob, or (after a mob Merge) two
+                  // separate groups that both had their own Start Lambing for this
+                  // season and now need combining. Sum ewes/foetuses rather than
+                  // keeping only the first one, otherwise a merge silently halves
+                  // the season's numbers even though nothing was actually deleted.
                   const merged = {};
                   list.forEach(s => {
                     const m = merged[s.key];
                     if (!m) { merged[s.key] = { ...s }; return; }
                     if (s.date < m.date) m.date = s.date;
                     m.paddock = m.paddock || s.paddock;
-                    m.ewes = m.ewes || s.ewes;
-                    m.foet = m.foet || s.foet;
+                    m.ewes = ((m.ewes || 0) + (s.ewes || 0)) || null;
+                    m.foet = ((m.foet || 0) + (s.foet || 0)) || null;
                   });
                   const seasons = Object.values(merged).sort((a, b) => (a.date < b.date ? -1 : 1));
                   const ends = (endsByMob[mid] || []).sort();
