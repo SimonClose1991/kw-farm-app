@@ -564,6 +564,16 @@ function GooglePaddockMap({
   // mode on later has no effect on clicks over an already-rendered paddock.
   const drawModeRef = useRef(drawMode);
   React.useEffect(() => { drawModeRef.current = drawMode; }, [drawMode]);
+  // A polygon set `clickable: true` (the default) swallows ALL mouse events over
+  // its area — not just clicks, but mousemove/hover too — so the map's own
+  // mousemove listener (used for the measuring-tape's live preview) never fires
+  // while the cursor is over a paddock. Making polygons non-clickable during
+  // draw/measure mode lets every mouse event pass straight through to the map.
+  React.useEffect(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref?.polygons) return;
+    Object.values(ref.polygons).forEach(poly => { try { poly.setOptions({ clickable: !drawMode }); } catch {} });
+  }, [drawMode, mapReadyTick]);
 
   const colourForPaddock = (p) => {
     // Custom paddock colour always takes priority if set
@@ -733,6 +743,7 @@ function GooglePaddockMap({
           strokeWeight: mode === "notes" ? 1 : (isGateOpen ? 3 : (mode === "paddocks" ? 2 : 1.5)),
           fillColor: mode === "paddocks" ? fillColour : (mode === "notes" ? "#e2e8f0" : "#38bdf8"),
           fillOpacity: mode === "paddocks" ? 0.45 : (mode === "notes" ? 0.2 : 0.15),
+          clickable: !drawModeRef.current,
           map,
         });
         // Individual polygon click — routes to pin-picking if active, otherwise normal select.
@@ -1261,7 +1272,7 @@ function GooglePaddockMap({
         ref.polygons[p.id].setOptions({ fillColor: fillColour, fillOpacity, strokeColor, strokeWeight });
       } else {
         // New paddock — create polygon for the first time
-        const poly = new g.Polygon({ paths: path, strokeColor, strokeWeight, fillColor: fillColour, fillOpacity, map });
+        const poly = new g.Polygon({ paths: path, strokeColor, strokeWeight, fillColor: fillColour, fillOpacity, map, clickable: !drawModeRef.current });
         poly.addListener("click", (e) => {
           if (editingShapeIdRef.current) return; // reshaping — clicks are vertex edits
           if (drawModeRef.current) { onDrawPointRef.current?.(e.latLng.lat(), e.latLng.lng()); return; }
