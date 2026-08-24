@@ -242,6 +242,29 @@ function totalPathMeters(points) {
   for (let i = 1; i < points.length; i++) sum += haversineMeters(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
   return sum;
 }
+function formatDistanceM(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`;
+}
+// Small rounded-pill map marker icon with text baked in via canvas —
+// Google Maps marker labels can't have a background, so this draws one
+function makeDistanceBadgeIcon(text, color = "#2563eb") {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  ctx.font = "bold 12px Arial";
+  const padX = 8, h = 20, w = ctx.measureText(text).width + padX * 2;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.font = "bold 12px Arial";
+  const r = h / 2;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(r, 0); ctx.arcTo(w, 0, w, h, r); ctx.arcTo(w, h, 0, h, r); ctx.arcTo(0, h, 0, 0, r); ctx.arcTo(0, 0, w, 0, r);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(text, w / 2, h / 2 + 1);
+  return { url: canvas.toDataURL(), w, h };
+}
 
 // Approximate farm locations (lat, lng) — used to centre the interactive map
 const FARM_CENTERS = {
@@ -535,6 +558,12 @@ function GooglePaddockMap({
   React.useEffect(() => { onPickPinRef.current = onPickPin; }, [onPickPin]);
   const onDrawPointRef = useRef(onDrawPoint);
   React.useEffect(() => { onDrawPointRef.current = onDrawPoint; }, [onDrawPoint]);
+  // Polygon/map click listeners below are attached once and live for a long
+  // time — they must read drawMode fresh at click time via this ref, not
+  // via the closure they were created with, otherwise toggling draw/measure
+  // mode on later has no effect on clicks over an already-rendered paddock.
+  const drawModeRef = useRef(drawMode);
+  React.useEffect(() => { drawModeRef.current = drawMode; }, [drawMode]);
 
   const colourForPaddock = (p) => {
     // Custom paddock colour always takes priority if set
@@ -706,22 +735,23 @@ function GooglePaddockMap({
           fillOpacity: mode === "paddocks" ? 0.45 : (mode === "notes" ? 0.2 : 0.15),
           map,
         });
-        // Individual polygon click — routes to pin-picking if active, otherwise normal select
-        if (!drawMode) {
-          poly.addListener("click", (e) => {
-            if (editingShapeIdRef.current) return; // reshaping — clicks are vertex edits
-            // Resolve the CURRENT paddock record at click time — the closure copy
-            // goes stale after renames/edits and would show the old details
-            const fresh = (mapInstanceRef.current?.paddockList || paddocks).find(x => String(x.id) === String(p.id)) || p;
-            if (onPickPinRef.current) {
-              // Pin-picking mode: place pin at click location, detect paddock
-              const lat = e.latLng.lat(), lng = e.latLng.lng();
-              onPickPinRef.current(lat, lng, fresh.name);
-            } else {
-              onSelect(fresh);
-            }
-          });
-        }
+        // Individual polygon click — routes to pin-picking if active, otherwise normal select.
+        // Always attached (not just `if (!drawMode)`) since this listener outlives any
+        // later drawMode toggle — see drawModeRef comment above.
+        poly.addListener("click", (e) => {
+          if (editingShapeIdRef.current) return; // reshaping — clicks are vertex edits
+          if (drawModeRef.current) { onDrawPointRef.current?.(e.latLng.lat(), e.latLng.lng()); return; }
+          // Resolve the CURRENT paddock record at click time — the closure copy
+          // goes stale after renames/edits and would show the old details
+          const fresh = (mapInstanceRef.current?.paddockList || paddocks).find(x => String(x.id) === String(p.id)) || p;
+          if (onPickPinRef.current) {
+            // Pin-picking mode: place pin at click location, detect paddock
+            const lat = e.latLng.lat(), lng = e.latLng.lng();
+            onPickPinRef.current(lat, lng, fresh.name);
+          } else {
+            onSelect(fresh);
+          }
+        });
         polygons[p.id] = poly;  // keyed by ID
         overlays.push(poly);
 
@@ -774,42 +804,43 @@ function GooglePaddockMap({
       });
 
       // ── Map-level tap handler (mobile-reliable) ──────────────────────────────
-      if (!drawMode) {
-        map.addListener("click", (e) => {
-          if (editingShapeIdRef.current) return; // reshaping — don't select paddocks
-          const latLng = e.latLng;
-          const ref = mapInstanceRef.current;
-          if (!ref) return;
+      // Always attached (see drawModeRef comment above) — drawing/measuring is
+      // checked fresh inside the callback instead of gating whether it exists.
+      map.addListener("click", (e) => {
+        if (editingShapeIdRef.current) return; // reshaping — don't select paddocks
+        if (drawModeRef.current) return; // handled by the dedicated draw-point listener
+        const latLng = e.latLng;
+        const ref = mapInstanceRef.current;
+        if (!ref) return;
 
-          // Pin-picking mode: place pin here (outside all polygons)
-          if (onPickPinRef.current) {
-            onPickPinRef.current(latLng.lat(), latLng.lng(), null);
-            return;
-          }
+        // Pin-picking mode: place pin here (outside all polygons)
+        if (onPickPinRef.current) {
+          onPickPinRef.current(latLng.lat(), latLng.lng(), null);
+          return;
+        }
 
-          if (!window.google?.maps?.geometry?.poly) return;
-          // Check exact containment first
-          for (const [pid, poly] of Object.entries(ref.polygons || {})) {
-            if (window.google.maps.geometry.poly.containsLocation(latLng, poly)) {
-              // Current record, not the render-time closure — stale after renames
-              const p = (ref.paddockList || paddocks).find(x => String(x.id) === String(pid));
-              if (p) { onSelect(p); return; }
-            }
+        if (!window.google?.maps?.geometry?.poly) return;
+        // Check exact containment first
+        for (const [pid, poly] of Object.entries(ref.polygons || {})) {
+          if (window.google.maps.geometry.poly.containsLocation(latLng, poly)) {
+            // Current record, not the render-time closure — stale after renames
+            const p = (ref.paddockList || paddocks).find(x => String(x.id) === String(pid));
+            if (p) { onSelect(p); return; }
           }
-          // Near-miss tolerance: find nearest paddock centroid within ~80m
-          const tol = 0.0008;
-          let nearest = null, nearestDist = Infinity;
-          for (const [pid, cen] of Object.entries(ref.centroids || {})) {
-            if (typeof pid !== "string" || isNaN(Number(pid))) continue;
-            const dist = Math.hypot(latLng.lat() - cen.lat, latLng.lng() - cen.lng);
-            if (dist < nearestDist) { nearestDist = dist; nearest = pid; }
-          }
-          if (nearest && nearestDist < tol) {
-            const p = (ref.paddockList || paddocks).find(x => String(x.id) === String(nearest));
-            if (p) onSelect(p);
-          }
-        });
-      }
+        }
+        // Near-miss tolerance: find nearest paddock centroid within ~80m
+        const tol = 0.0008;
+        let nearest = null, nearestDist = Infinity;
+        for (const [pid, cen] of Object.entries(ref.centroids || {})) {
+          if (typeof pid !== "string" || isNaN(Number(pid))) continue;
+          const dist = Math.hypot(latLng.lat() - cen.lat, latLng.lng() - cen.lng);
+          if (dist < nearestDist) { nearestDist = dist; nearest = pid; }
+        }
+        if (nearest && nearestDist < tol) {
+          const p = (ref.paddockList || paddocks).find(x => String(x.id) === String(nearest));
+          if (p) onSelect(p);
+        }
+      });
       // ── Landmarks (paddocks mode) ──
       // Render gates on BOTH modes; other landmarks only in paddocks mode
       // Use a separate tracked array so cleanup doesn't interfere with other overlays
@@ -1231,15 +1262,14 @@ function GooglePaddockMap({
       } else {
         // New paddock — create polygon for the first time
         const poly = new g.Polygon({ paths: path, strokeColor, strokeWeight, fillColor: fillColour, fillOpacity, map });
-        if (!drawMode) {
-          poly.addListener("click", (e) => {
-            if (editingShapeIdRef.current) return; // reshaping — clicks are vertex edits
-            // Resolve the CURRENT paddock record at click time (closure copy goes stale)
-            const fresh = (mapInstanceRef.current?.paddockList || [p]).find(x => String(x.id) === String(p.id)) || p;
-            if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), fresh.name); }
-            else { onSelect(fresh); }
-          });
-        }
+        poly.addListener("click", (e) => {
+          if (editingShapeIdRef.current) return; // reshaping — clicks are vertex edits
+          if (drawModeRef.current) { onDrawPointRef.current?.(e.latLng.lat(), e.latLng.lng()); return; }
+          // Resolve the CURRENT paddock record at click time (closure copy goes stale)
+          const fresh = (mapInstanceRef.current?.paddockList || [p]).find(x => String(x.id) === String(p.id)) || p;
+          if (onPickPinRef.current) { onPickPinRef.current(e.latLng.lat(), e.latLng.lng(), fresh.name); }
+          else { onSelect(fresh); }
+        });
         ref.polygons[p.id] = poly;
       }
     });
@@ -3270,6 +3300,54 @@ export default function App() {
         label: { text: String(i + 1), color: "#fff", fontSize: "10px", fontWeight: "bold" },
       }));
     });
+    // Per-segment distance badge at the midpoint of every pair of points —
+    // the bottom panel keeps showing the running total separately
+    for (let i = 1; i < measurePoints.length; i++) {
+      const a = measurePoints[i - 1], b = measurePoints[i];
+      const icon = makeDistanceBadgeIcon(formatDistanceM(haversineMeters(a.lat, a.lng, b.lat, b.lng)));
+      measureOverlaysRef.current.push(new g.Marker({
+        position: { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 }, map, zIndex: 92, clickable: false,
+        icon: { url: icon.url, scaledSize: new g.Size(icon.w, icon.h), anchor: new g.Point(icon.w / 2, icon.h / 2) },
+      }));
+    }
+  }, [measurePoints, measureMode]);
+
+  // Live rubber-band preview from the last dropped point to the current
+  // cursor position, with a running distance badge — updated imperatively
+  // (not via React state) since mousemove fires far too often for re-renders.
+  const measurePreviewRef = useRef(null);
+  React.useEffect(() => {
+    const map = padMapRef.current?.map;
+    const g = window.google?.maps;
+    const prev = measurePreviewRef.current;
+    if (prev) {
+      try { g.event.removeListener(prev.listener); } catch {}
+      try { prev.line.setMap(null); } catch {}
+      try { prev.marker.setMap(null); } catch {}
+      measurePreviewRef.current = null;
+    }
+    if (!g || !map || !measureMode || measurePoints.length === 0) return;
+    const last = measurePoints[measurePoints.length - 1];
+    const startPos = { lat: last.lat, lng: last.lng };
+    const line = new g.Polyline({
+      path: [startPos, startPos], strokeColor: "#2563eb", strokeOpacity: 0, map, zIndex: 89, clickable: false,
+      icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 0.8, scale: 3 }, offset: "0", repeat: "10px" }],
+    });
+    const marker = new g.Marker({ position: startPos, map, zIndex: 93, clickable: false, visible: false });
+    let lastText = null;
+    const listener = map.addListener("mousemove", (e) => {
+      const cur = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+      line.setPath([startPos, cur]);
+      const text = formatDistanceM(haversineMeters(startPos.lat, startPos.lng, cur.lat, cur.lng));
+      marker.setPosition({ lat: (startPos.lat + cur.lat) / 2, lng: (startPos.lng + cur.lng) / 2 });
+      marker.setVisible(true);
+      if (text !== lastText) {
+        lastText = text;
+        const icon = makeDistanceBadgeIcon(text, "#0891b2");
+        marker.setIcon({ url: icon.url, scaledSize: new g.Size(icon.w, icon.h), anchor: new g.Point(icon.w / 2, icon.h / 2) });
+      }
+    });
+    measurePreviewRef.current = { line, marker, listener };
   }, [measurePoints, measureMode]);
   // Gate state is DERIVED from the landmark records (isOpen is stored on the
   // server), so open gates survive reloads and are shared between devices.
