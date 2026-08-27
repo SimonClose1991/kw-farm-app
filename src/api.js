@@ -113,6 +113,18 @@ export const api = {
   listBreeds: () => request("/breeds"),
   addBreed: (species, breed) => request("/breeds", { method: "POST", body: JSON.stringify({ species, breed }) }),
 
+  // --- Soil tests ---
+  listSoilTests: (farm, paddock) => request(`/soil-tests?farm=${encodeURIComponent(farm)}${paddock ? `&paddock=${encodeURIComponent(paddock)}` : ""}`),
+  addSoilTest: (fields) => request("/soil-tests", { method: "POST", body: JSON.stringify(fields) }),
+  updateSoilTest: (id, fields) => request(`/soil-tests/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
+  deleteSoilTest: (id) => request(`/soil-tests/${id}`, { method: "DELETE" }),
+
+  // --- Fertiliser / lime / urea applications ---
+  listFertiliser: (farm, paddock) => request(`/fertiliser?farm=${encodeURIComponent(farm)}${paddock ? `&paddock=${encodeURIComponent(paddock)}` : ""}`),
+  addFertiliser: (fields) => request("/fertiliser", { method: "POST", body: JSON.stringify(fields) }),
+  updateFertiliser: (id, fields) => request(`/fertiliser/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
+  deleteFertiliser: (id) => request(`/fertiliser/${id}`, { method: "DELETE" }),
+
   // --- Account setup (invite link) ---
 
   // --- Records ---

@@ -173,6 +173,50 @@ export const rainfallRecords = pgTable("rainfall_records", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// --- Soil tests ---
+// One row per test. `zone` is an optional sub-paddock sample site (e.g. a
+// paddock sampled separately at "Hilltop" and "Slope") — null means the test
+// covers the whole paddock, which is the common case.
+// `elements` holds every soil chemistry reading as a flat object, e.g.
+// { phCaCl2, aluminiumPercent, cec, olsenP, colwellK, kPercent, sulphurKcl,
+//   copperDtpa, organicCarbonPercent, sodiumPercent, calciumPercent,
+//   magnesiumPercent, zinc, pbi, ecSatEx } — kept schemaless so new elements
+// don't need a migration.
+export const soilTests = pgTable("soil_tests", {
+  id: serial("id").primaryKey(),
+  farmId: integer("farm_id").notNull().references(() => farms.id, { onDelete: "cascade" }),
+  paddock: text("paddock").notNull(),
+  zone: text("zone"),
+  testDate: text("test_date").notNull(),
+  limedDate: text("limed_date"),
+  limeRate: text("lime_rate"),
+  elements: jsonb("elements").default({}),
+  notes: text("notes"),
+  authorName: text("author_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// --- Fertiliser / lime / urea applications ---
+// `category` distinguishes one-off corrective spreading ("capital", e.g. a
+// large lime or P correction) from routine upkeep ("maintenance", e.g. the
+// yearly urea round) — different budget categories per our agronomist.
+export const fertiliserApplications = pgTable("fertiliser_applications", {
+  id: serial("id").primaryKey(),
+  farmId: integer("farm_id").notNull().references(() => farms.id, { onDelete: "cascade" }),
+  paddock: text("paddock").notNull(),
+  date: text("date").notNull(),
+  category: text("category").notNull().default("maintenance"), // "capital" | "maintenance"
+  product: text("product").notNull(),
+  rate: text("rate"),
+  areaHa: numeric("area_ha"),
+  totalQuantity: text("total_quantity"),
+  contractor: text("contractor"),
+  cost: numeric("cost"),
+  notes: text("notes"),
+  authorName: text("author_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // --- Custom breeds remembered per species ---
 export const customBreeds = pgTable("custom_breeds", {
   id: serial("id").primaryKey(),

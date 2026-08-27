@@ -17,6 +17,8 @@ import workflowRoutes from "./routes/workflow.js";
 import sheepRoutes from "./routes/sheep.js";
 import cattleRoutes from "./routes/cattle.js";
 import fieldNotesRoutes from "./routes/fieldNotes.js";
+import soilTestsRoutes from "./routes/soilTests.js";
+import fertiliserRoutes from "./routes/fertiliser.js";
 import { sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 
@@ -65,6 +67,8 @@ app.use("/api/workflow", workflowRoutes);
 app.use("/api/sheep", sheepRoutes);
 app.use("/api/cattle", cattleRoutes);
 app.use("/api/field-notes", fieldNotesRoutes);
+app.use("/api/soil-tests", soilTestsRoutes);
+app.use("/api/fertiliser", fertiliserRoutes);
 
 // ── Auto-create field_notes table if it doesn't exist ───────────────────────
 (async () => {
@@ -103,6 +107,39 @@ app.use("/api/field-notes", fieldNotesRoutes);
     await db.execute(sql`ALTER TABLE spray_inventory ADD COLUMN IF NOT EXISTS quantity_used NUMERIC DEFAULT 0`);
     await db.execute(sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS is_open BOOLEAN DEFAULT false`);
     await db.execute(sql`ALTER TABLE mob_history ADD COLUMN IF NOT EXISTS paddock TEXT`);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS soil_tests (
+        id SERIAL PRIMARY KEY,
+        farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+        paddock TEXT NOT NULL,
+        zone TEXT,
+        test_date TEXT NOT NULL,
+        limed_date TEXT,
+        lime_rate TEXT,
+        elements JSONB DEFAULT '{}',
+        notes TEXT,
+        author_name TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS fertiliser_applications (
+        id SERIAL PRIMARY KEY,
+        farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+        paddock TEXT NOT NULL,
+        date TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'maintenance',
+        product TEXT NOT NULL,
+        rate TEXT,
+        area_ha NUMERIC,
+        total_quantity TEXT,
+        contractor TEXT,
+        cost NUMERIC,
+        notes TEXT,
+        author_name TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
     console.log("schema migrations complete");
   } catch (err) {
     console.error("field_notes table setup error:", err.message);

@@ -79,7 +79,163 @@ const LAND_USES = ["Grazing", "Cropping", "Fallow", "Yards/Infrastructure", "Veg
 
 // Land uses excluded from DSE/ha stocking rate calculation
 const NON_GRAZING_LAND_USES = new Set(["Cropping", "Fallow", "Yards/Infrastructure", "Vegetation", "Conservation Zone"]);
-const PASTURE_TYPES = ["Native grass", "Improved pasture", "Cereal crop", "Wheat", "Canola", "Summer Crop", "N/A"];
+const PASTURE_TYPES = ["Native grass", "Improved pasture", "Cereal crop", "Wheat", "Canola", "Summer Crop", "Beans", "Lucerne", "N/A"];
+// Legume paddocks need a higher "adequate" pH target — see SOIL_TARGET_RANGES
+const LEGUME_PASTURE_TYPES = new Set(["Beans", "Lucerne"]);
+
+// ── Soil test elements ──────────────────────────────────────────────────────
+// Order matches how our agronomist reads a soil test (pH first, since it
+// governs availability of everything else). This is the "at a glance" set —
+// showing every element at once was flagged as too much on one screen.
+const SOIL_ELEMENTS_PRIMARY = [
+  { key: "phCaCl2", label: "pH (CaCl2)" },
+  { key: "aluminiumPercent", label: "Aluminium %" },
+  { key: "cec", label: "CEC" },
+  { key: "olsenP", label: "Olsen P" },
+  { key: "colwellK", label: "Colwell K" },
+  { key: "kPercent", label: "K %" },
+  { key: "sulphurKcl", label: "Sulphur (KCl)" },
+  { key: "copperDtpa", label: "Copper (DTPA)" },
+];
+// Lower priority for this farm (not sodic/saline, OC changes slowly) — still
+// recorded and graphable, just tucked into a secondary panel.
+const SOIL_ELEMENTS_SECONDARY = [
+  { key: "organicCarbonPercent", label: "Organic Carbon %" },
+  { key: "sodiumPercent", label: "Sodium %" },
+  { key: "calciumPercent", label: "Calcium %" },
+  { key: "magnesiumPercent", label: "Magnesium %" },
+  { key: "zinc", label: "Zinc" },
+  { key: "pbi", label: "PBI" },
+  { key: "ecSatEx", label: "EC (Sat Ex.)" },
+];
+const SOIL_ELEMENTS_ALL = [...SOIL_ELEMENTS_PRIMARY, ...SOIL_ELEMENTS_SECONDARY];
+// Target bands from our agronomist — Al% and CEC deliberately excluded (no
+// simple graded range: CEC is a soil-type trait, Al% is a toxicity flag).
+// pH has a higher "adequate" floor for legume (beans/lucerne) paddocks.
+const SOIL_TARGET_RANGES = {
+  phCaCl2: { low: 4.7, adequate: 5.5, adequateLegume: 6 },
+  olsenP: { low: 7, adequate: 15 },
+  colwellK: { low: 99, adequate: 150 },
+  sulphurKcl: { low: 5, adequate: 10 },
+  copperDtpa: { low: 0.1, adequate: 0.3 },
+  kPercent: { low: 0.2, adequate: 0.6 },
+};
+function soilBandFor(key, value, isLegume) {
+  const range = SOIL_TARGET_RANGES[key];
+  if (!range || value == null || value === "") return null;
+  const v = Number(value);
+  if (Number.isNaN(v)) return null;
+  const adequate = isLegume && range.adequateLegume != null ? range.adequateLegume : range.adequate;
+  if (v <= range.low) return "low";
+  if (v >= adequate) return "adequate";
+  return "moderate";
+}
+const SOIL_BAND_COLOURS = {
+  low: { bg: "#fee2e2", text: "#b91c1c", dot: "#ef4444" },
+  moderate: { bg: "#fef3c7", text: "#92400e", dot: "#f59e0b" },
+  adequate: { bg: "#dcfce7", text: "#15803d", dot: "#22c55e" },
+};
+const FERTILISER_CATEGORIES = ["maintenance", "capital"];
+
+// ── Soil test historical import ──────────────────────────────────────────────
+// CSV only (no new bundled dependency for full .xlsx parsing) — a spreadsheet
+// export/"Save As CSV" covers the real-world source (lab spreadsheets, PDF
+// exports converted to CSV).
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some(v => v !== "")) rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  if (field !== "" || row.length > 0) { row.push(field); if (row.some(v => v !== "")) rows.push(row); }
+  return rows;
+}
+
+const IMPORT_FIELD_OPTIONS = [
+  { key: "", label: "— Ignore this column —" },
+  { key: "paddock", label: "Paddock name" },
+  { key: "zone", label: "Zone (optional)" },
+  { key: "testDate", label: "Test date" },
+  { key: "limedDate", label: "Limed date" },
+  { key: "limeRate", label: "Lime rate" },
+  { key: "notes", label: "Notes" },
+  ...SOIL_ELEMENTS_ALL.map(el => ({ key: el.key, label: el.label })),
+];
+const IMPORT_HEADER_ALIASES = {
+  paddock: ["paddock name", "paddock", "paddock number"],
+  testDate: ["sampling date", "test date", "date"],
+  limedDate: ["limed date"],
+  limeRate: ["lime rate"],
+  phCaCl2: ["ph (cacl2)", "ph(cacl2)", "ph cacl2", "ph"],
+  olsenP: ["olsen p", "p (olsen)", "p"],
+  colwellK: ["colwell k", "k (colwell)", "av. k", "av k"],
+  kPercent: ["k%", "k %"],
+  sulphurKcl: ["sulphur", "s (kcl)", "sulphur (kcl)", "s"],
+  aluminiumPercent: ["al%", "aluminium %", "al %"],
+  cec: ["cec"],
+  copperDtpa: ["cu (dtpa)", "copper (dtpa)", "copper", "cu"],
+  organicCarbonPercent: ["oc %", "organic carbon %", "organic carbon", "oc"],
+  sodiumPercent: ["sodium %", "na %"],
+  calciumPercent: ["calcium %", "ca %"],
+  magnesiumPercent: ["magnesium %", "mg %"],
+  zinc: ["zinc", "zn"],
+  pbi: ["pbi"],
+  ecSatEx: ["ec (sat ex.)", "ec"],
+};
+function guessFieldForHeader(header) {
+  const norm = String(header || "").trim().toLowerCase().replace(/\s+/g, " ");
+  for (const [key, aliases] of Object.entries(IMPORT_HEADER_ALIASES)) {
+    if (aliases.includes(norm)) return key;
+  }
+  return "";
+}
+function normalizePaddockName(s) {
+  return String(s || "").trim().toLowerCase().replace(/[\s\-']+/g, "");
+}
+function bestPaddockMatch(rawName, paddockList) {
+  const norm = normalizePaddockName(rawName);
+  if (!norm) return null;
+  const exact = paddockList.find(p => normalizePaddockName(p.name) === norm);
+  if (exact) return exact.name;
+  const sub = paddockList.find(p => {
+    const pn = normalizePaddockName(p.name);
+    return pn.length > 2 && (pn.includes(norm) || norm.includes(pn));
+  });
+  return sub ? sub.name : null;
+}
+// Accepts ISO (YYYY-MM-DD), Australian D/M/YYYY, or an Excel date serial number
+function normalizeImportDate(raw) {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) { const [, d, mo, y] = m; return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`; }
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const serial = Number(s);
+    if (serial > 20000 && serial < 60000) {
+      const date = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      return date.toISOString().slice(0, 10);
+    }
+  }
+  return null;
+}
+function loadRememberedPaddockMap(farmName) {
+  try { return JSON.parse(localStorage.getItem(`kw_soil_import_map_${farmName}`) || "{}"); } catch { return {}; }
+}
+function saveRememberedPaddockMap(farmName, map) {
+  try { localStorage.setItem(`kw_soil_import_map_${farmName}`, JSON.stringify(map)); } catch {}
+}
 
 // Landmark categories/types, modelled on the AgriWebb Farm Map Editor feature set
 const NOTE_CATEGORIES = [
@@ -2216,6 +2372,37 @@ function StockBars({ rows }) {
   );
 }
 
+// Simple SVG line chart for a soil element's history — no charting library,
+// matching the rest of the app's hand-rolled chart style (see StockBars).
+function SoilTrendChart({ points, low, adequate }) {
+  if (!points || points.length === 0) return <div className="text-xs text-slate-400 italic py-8 text-center">No results yet — add a soil test to start the graph</div>;
+  const W = 320, H = 150, padL = 34, padR = 12, padT = 14, padB = 20;
+  const values = points.map(p => p.value);
+  const boundValues = [...values, ...(low != null ? [low] : []), ...(adequate != null ? [adequate] : [])];
+  const minV = Math.min(...boundValues), maxV = Math.max(...boundValues);
+  const spanV = (maxV - minV) || 1;
+  const x = (i) => padL + (points.length > 1 ? (i / (points.length - 1)) * (W - padL - padR) : (W - padL - padR) / 2);
+  const y = (v) => H - padB - ((v - minV) / spanV) * (H - padT - padB);
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.value).toFixed(1)}`).join(" ");
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 150 }}>
+      {low != null && adequate != null && (
+        <rect x={padL} y={Math.min(y(low), y(adequate))} width={W - padL - padR} height={Math.abs(y(low) - y(adequate))} fill="#fef3c7" opacity="0.6" />
+      )}
+      {adequate != null && <rect x={padL} y={padT} width={W - padL - padR} height={Math.max(0, y(adequate) - padT)} fill="#dcfce7" opacity="0.5" />}
+      {low != null && <rect x={padL} y={y(low)} width={W - padL - padR} height={Math.max(0, H - padB - y(low))} fill="#fee2e2" opacity="0.5" />}
+      <path d={pathD} fill="none" stroke="#1e3a8a" strokeWidth="2.5" strokeLinejoin="round" />
+      {points.map((p, i) => (
+        <circle key={i} cx={x(i)} cy={y(p.value)} r="4" fill="#1e3a8a" stroke="#fff" strokeWidth="1.5" />
+      ))}
+      <text x={2} y={y(maxV) + 3} fontSize="9" fill="#94a3b8">{maxV.toFixed(2)}</text>
+      <text x={2} y={y(minV) + 3} fontSize="9" fill="#94a3b8">{minV.toFixed(2)}</text>
+      <text x={padL} y={H - 4} fontSize="9" fill="#94a3b8">{fmtDMY(points[0].date)}</text>
+      {points.length > 1 && <text x={W - padR} y={H - 4} fontSize="9" fill="#94a3b8" textAnchor="end">{fmtDMY(points[points.length - 1].date)}</text>}
+    </svg>
+  );
+}
+
 function groupStockRows(list, key) {
   const counts = {};
   list.forEach(m => {
@@ -3379,6 +3566,47 @@ export default function App() {
   const [fooTargetPaddock, setFooTargetPaddock] = useState(null);
   const [fooForm, setFooForm] = useState({});
   const [fooHistory, setFooHistory] = useState([]);
+  // ── Soil test & fertiliser tracking ──────────────────────────────────────
+  const [soilPanelPaddock, setSoilPanelPaddock] = useState(null); // paddock the soil/fertiliser screen is open for
+  const [soilPanelTab, setSoilPanelTab] = useState("soil"); // "soil" | "fertiliser"
+  const [soilPanelZone, setSoilPanelZone] = useState(undefined); // undefined = not chosen yet, null = "whole paddock", string = zone name
+  const [soilPanelLoading, setSoilPanelLoading] = useState(false);
+  const [paddockSoilTests, setPaddockSoilTests] = useState([]);
+  const [paddockFertiliser, setPaddockFertiliser] = useState([]);
+  const [soilChartElement, setSoilChartElement] = useState(null); // element key currently graphed
+  const [showSoilSecondary, setShowSoilSecondary] = useState(false);
+  const [showAddSoilTest, setShowAddSoilTest] = useState(false);
+  const [soilTestForm, setSoilTestForm] = useState({});
+  const [editingSoilTestId, setEditingSoilTestId] = useState(null);
+  const [showAddFertiliser, setShowAddFertiliser] = useState(false);
+  const [fertiliserForm, setFertiliserForm] = useState({});
+  const [editingFertiliserId, setEditingFertiliserId] = useState(null);
+  // ── Soil test historical import ──────────────────────────────────────────
+  const [showSoilImport, setShowSoilImport] = useState(false);
+  const [importStep, setImportStep] = useState(1); // 1 upload, 2 column match, 3 paddock match, 4 preview, 5 done
+  const [importHeaders, setImportHeaders] = useState([]);
+  const [importRows, setImportRows] = useState([]);
+  const [importColumnMap, setImportColumnMap] = useState({}); // { columnIndex: fieldKey }
+  const [importPaddockMap, setImportPaddockMap] = useState({}); // { rawName: appPaddockName }
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const soilImportFileRef = useRef(null);
+  const resetSoilImport = () => {
+    setShowSoilImport(false); setImportStep(1); setImportHeaders([]); setImportRows([]);
+    setImportColumnMap({}); setImportPaddockMap({}); setImportResult(null);
+  };
+
+  React.useEffect(() => {
+    if (!soilPanelPaddock || !loggedInEmail) return;
+    setSoilPanelLoading(true);
+    Promise.all([
+      api.listSoilTests(farmName, soilPanelPaddock.name),
+      api.listFertiliser(farmName, soilPanelPaddock.name),
+    ])
+      .then(([tests, fert]) => { setPaddockSoilTests(tests); setPaddockFertiliser(fert); })
+      .catch(() => {})
+      .finally(() => setSoilPanelLoading(false));
+  }, [soilPanelPaddock, loggedInEmail]);
   const [showSprayForm, setShowSprayForm] = useState(false);
   const [sprayFormPaddock, setSprayFormPaddock] = useState(null);
   const [sprayForm, setSprayForm] = useState({});
@@ -5530,6 +5758,22 @@ export default function App() {
               <div className="text-sm font-bold text-slate-700 mb-2">Paddock Record</div>
               <div className="space-y-2">
                 <button
+                  onClick={() => {
+                    const p = paddockDetail;
+                    setPaddockDetail(null);
+                    setSoilPanelTab("soil"); setSoilPanelZone(undefined); setSoilChartElement(null);
+                    setPaddockSoilTests([]); setPaddockFertiliser([]);
+                    setSoilPanelPaddock(p);
+                  }}
+                  className="w-full flex items-center gap-3 bg-sky-700 text-white rounded-2xl px-4 py-3 font-bold text-sm"
+                >
+                  <span className="text-lg">🧪</span>
+                  <div className="text-left">
+                    <div>Soil & Fertiliser</div>
+                    <div className="text-xs font-normal opacity-80">Soil test history, trends, lime & fertiliser records</div>
+                  </div>
+                </button>
+                <button
                   onClick={() => { setFooTargetPaddock(paddockDetail); setFooForm({ date: todayStr() }); setShowFoo(true); }}
                   className="w-full flex items-center gap-3 bg-green-600 text-white rounded-2xl px-4 py-3 font-bold text-sm"
                 >
@@ -5584,6 +5828,577 @@ export default function App() {
           </Modal>
         );
       })()}
+
+      {/* ── Soil & Fertiliser tracking screen ── */}
+      {soilPanelPaddock && (() => {
+        const paddockName = soilPanelPaddock.name;
+        const zoneNames = [...new Set(paddockSoilTests.map(t => t.zone).filter(Boolean))].sort();
+        const hasZones = zoneNames.length > 0;
+        const hasWholeTests = paddockSoilTests.some(t => !t.zone);
+        const effectiveZone = hasZones ? soilPanelZone : null;
+        const zoneChosen = !hasZones || soilPanelZone !== undefined;
+        const zoneTests = zoneChosen
+          ? paddockSoilTests.filter(t => (effectiveZone ? t.zone === effectiveZone : !t.zone))
+          : [];
+        const sortedTests = [...zoneTests].sort((a, b) => (a.testDate < b.testDate ? 1 : -1));
+        const chronoTests = [...zoneTests].sort((a, b) => (a.testDate < b.testDate ? -1 : 1));
+        const latestTest = sortedTests[0] || null;
+        const isLegume = LEGUME_PASTURE_TYPES.has(soilPanelPaddock.pasture);
+
+        return (
+          <div className="fixed inset-0 bg-stone-50 z-[150] flex flex-col">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 flex-shrink-0 bg-white">
+              <button onClick={() => { setSoilPanelPaddock(null); setPaddockDetail(soilPanelPaddock); }} className="text-slate-600 font-semibold text-sm flex items-center gap-1">← Back</button>
+              <div className="flex-1">
+                <div className="font-bold text-slate-800">{paddockName}</div>
+                <div className="text-xs text-slate-400">Soil & Fertiliser</div>
+              </div>
+            </div>
+            <div className="flex border-b border-slate-100 flex-shrink-0 bg-white">
+              {[["soil", "Soil Tests"], ["fertiliser", "Fertiliser"]].map(([t, label]) => (
+                <button key={t} onClick={() => setSoilPanelTab(t)}
+                  className={`flex-1 py-3 text-sm font-bold border-b-2 ${soilPanelTab === t ? "text-sky-700 border-sky-700" : "text-slate-400 border-transparent"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {soilPanelLoading ? (
+                <div className="text-center text-slate-400 text-sm py-10">Loading…</div>
+              ) : soilPanelTab === "soil" ? (
+                !zoneChosen ? (
+                  <div className="space-y-2">
+                    <div className="text-sm text-slate-500 mb-2">This paddock has multiple sample zones — pick one:</div>
+                    {zoneNames.map(z => (
+                      <button key={z} onClick={() => setSoilPanelZone(z)} className="w-full flex items-center justify-between bg-white rounded-2xl px-4 py-3 text-left border border-slate-100 shadow-sm hover:bg-slate-50">
+                        <span className="font-semibold text-slate-800">{z}</span>
+                        <ChevronRight size={16} className="text-slate-300" />
+                      </button>
+                    ))}
+                    {hasWholeTests && (
+                      <button onClick={() => setSoilPanelZone(null)} className="w-full flex items-center justify-between bg-white rounded-2xl px-4 py-3 text-left border border-slate-100 shadow-sm hover:bg-slate-50">
+                        <span className="font-semibold text-slate-800">Whole paddock (no zone)</span>
+                        <ChevronRight size={16} className="text-slate-300" />
+                      </button>
+                    )}
+                    {canEdit && (
+                      <button onClick={() => {
+                        setEditingSoilTestId(null);
+                        setSoilTestForm({ testDate: todayStr(), zone: "", elements: {} });
+                        setShowAddSoilTest(true);
+                      }} className="w-full bg-sky-700 text-white rounded-2xl py-3 font-bold text-sm mt-3">
+                        + Add soil test (new or existing zone)
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {hasZones && (
+                      <button onClick={() => setSoilPanelZone(undefined)} className="text-xs font-semibold text-sky-700 mb-3">
+                        ↩ {effectiveZone || "Whole paddock"} — change zone
+                      </button>
+                    )}
+                    {latestTest ? (
+                      <>
+                        <div className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-wide">
+                          Latest test — {fmtDMY(latestTest.testDate)}{latestTest.limedDate ? ` · Limed ${fmtDMY(latestTest.limedDate)}${latestTest.limeRate ? ` (${latestTest.limeRate})` : ""}` : ""}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          {SOIL_ELEMENTS_PRIMARY.map(el => {
+                            const val = latestTest.elements?.[el.key];
+                            const hasVal = val != null && val !== "";
+                            const band = hasVal ? soilBandFor(el.key, val, isLegume) : null;
+                            const colours = band ? SOIL_BAND_COLOURS[band] : null;
+                            return (
+                              <button key={el.key} onClick={() => setSoilChartElement(el.key)}
+                                className={`rounded-2xl p-3 text-left border shadow-sm ${soilChartElement === el.key ? "border-sky-400" : "border-slate-100"}`}
+                                style={{ background: colours?.bg || "#fff" }}>
+                                <div className="text-xs font-semibold" style={{ color: colours?.text || "#94a3b8" }}>{el.label}</div>
+                                <div className="text-xl font-extrabold mt-1" style={{ color: colours?.text || "#1e293b" }}>{hasVal ? val : "—"}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <button onClick={() => setShowSoilSecondary(v => !v)} className="text-xs font-semibold text-slate-400 mb-2">
+                          {showSoilSecondary ? "▲ Hide" : "▼ Show"} other elements ({SOIL_ELEMENTS_SECONDARY.length})
+                        </button>
+                        {showSoilSecondary && (
+                          <div className="grid grid-cols-2 gap-3 mb-4">
+                            {SOIL_ELEMENTS_SECONDARY.map(el => {
+                              const val = latestTest.elements?.[el.key];
+                              const hasVal = val != null && val !== "";
+                              return (
+                                <button key={el.key} onClick={() => setSoilChartElement(el.key)}
+                                  className={`rounded-2xl p-3 text-left border bg-slate-50 ${soilChartElement === el.key ? "border-sky-400" : "border-slate-100"}`}>
+                                  <div className="text-xs font-semibold text-slate-400">{el.label}</div>
+                                  <div className="text-xl font-extrabold mt-1 text-slate-700">{hasVal ? val : "—"}</div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {soilChartElement && (
+                          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm mb-4">
+                            <div className="flex justify-between items-center mb-2">
+                              <div className="font-bold text-slate-800 text-sm">{SOIL_ELEMENTS_ALL.find(e => e.key === soilChartElement)?.label} over time</div>
+                              <button onClick={() => setSoilChartElement(null)} className="text-slate-400"><X size={16} /></button>
+                            </div>
+                            <SoilTrendChart
+                              points={chronoTests
+                                .filter(t => t.elements?.[soilChartElement] != null && t.elements[soilChartElement] !== "")
+                                .map(t => ({ date: t.testDate, value: Number(t.elements[soilChartElement]) }))}
+                              low={SOIL_TARGET_RANGES[soilChartElement]?.low}
+                              adequate={isLegume && SOIL_TARGET_RANGES[soilChartElement]?.adequateLegume != null
+                                ? SOIL_TARGET_RANGES[soilChartElement].adequateLegume
+                                : SOIL_TARGET_RANGES[soilChartElement]?.adequate}
+                            />
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-center text-slate-400 text-sm py-8">No soil tests recorded yet{effectiveZone ? ` for ${effectiveZone}` : ""}.</div>
+                    )}
+
+                    {canEdit && (
+                      <button onClick={() => {
+                        setEditingSoilTestId(null);
+                        setSoilTestForm({ testDate: todayStr(), zone: effectiveZone || "", elements: {} });
+                        setShowAddSoilTest(true);
+                      }} className="w-full bg-sky-700 text-white rounded-2xl py-3 font-bold text-sm mb-4">
+                        + Add soil test
+                      </button>
+                    )}
+                    <div className="text-sm font-bold text-slate-700 mb-2">History</div>
+                    {sortedTests.length === 0 && <div className="text-slate-400 text-sm italic">No history yet</div>}
+                    {sortedTests.map(t => (
+                      <div key={t.id} className="bg-white rounded-2xl p-3 border border-slate-100 shadow-sm mb-2">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-800 text-sm">{fmtDMY(t.testDate)}</div>
+                            <div className="text-xs text-slate-400 mt-0.5">
+                              {SOIL_ELEMENTS_PRIMARY.filter(el => t.elements?.[el.key] != null && t.elements[el.key] !== "")
+                                .map(el => `${el.label}: ${t.elements[el.key]}`).join(" · ") || "No readings entered"}
+                            </div>
+                            {t.notes && <div className="text-xs text-slate-500 mt-1 italic">{t.notes}</div>}
+                            {t.authorName && <div className="text-xs text-slate-400 mt-1">by {t.authorName}</div>}
+                          </div>
+                          {canEdit && (
+                            <div className="flex gap-2 flex-shrink-0">
+                              <button onClick={() => {
+                                setEditingSoilTestId(t.id);
+                                setSoilTestForm({
+                                  testDate: t.testDate, zone: t.zone || "", limedDate: t.limedDate || "",
+                                  limeRate: t.limeRate || "", elements: { ...(t.elements || {}) }, notes: t.notes || "",
+                                });
+                                setShowAddSoilTest(true);
+                              }} className="text-slate-400 hover:text-sky-700 text-sm">✎</button>
+                              <button onClick={async () => {
+                                if (!window.confirm("Delete this soil test?")) return;
+                                try {
+                                  await api.deleteSoilTest(t.id);
+                                  setPaddockSoilTests(prev => prev.filter(x => x.id !== t.id));
+                                  showToast("Soil test deleted");
+                                } catch (err) { showToast(err.message || "Couldn't delete"); }
+                              }} className="text-slate-400 hover:text-rose-500 text-sm">🗑</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )
+              ) : (
+                <>
+                  {canEdit && (
+                    <button onClick={() => {
+                      setEditingFertiliserId(null);
+                      setFertiliserForm({ date: todayStr(), category: "maintenance" });
+                      setShowAddFertiliser(true);
+                    }} className="w-full bg-amber-500 text-white rounded-2xl py-3 font-bold text-sm mb-4">
+                      + Add fertiliser / lime / urea record
+                    </button>
+                  )}
+                  <div className="text-sm font-bold text-slate-700 mb-2">History</div>
+                  {paddockFertiliser.length === 0 && <div className="text-slate-400 text-sm italic">No fertiliser records yet</div>}
+                  {[...paddockFertiliser].sort((a, b) => (a.date < b.date ? 1 : -1)).map(f => (
+                    <div key={f.id} className="bg-white rounded-2xl p-3 border border-slate-100 shadow-sm mb-2">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-800 text-sm">{f.product} <span className="text-xs font-normal text-slate-400">· {f.category === "capital" ? "Capital" : "Maintenance"}</span></div>
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            {fmtDMY(f.date)}{f.rate ? ` · ${f.rate}` : ""}{f.areaHa ? ` · ${f.areaHa} ha` : ""}{f.contractor ? ` · ${f.contractor}` : ""}
+                          </div>
+                          {f.notes && <div className="text-xs text-slate-500 mt-1 italic">{f.notes}</div>}
+                          {f.authorName && <div className="text-xs text-slate-400 mt-1">by {f.authorName}</div>}
+                        </div>
+                        {canEdit && (
+                          <div className="flex gap-2 flex-shrink-0">
+                            <button onClick={() => { setEditingFertiliserId(f.id); setFertiliserForm({ ...f }); setShowAddFertiliser(true); }} className="text-slate-400 hover:text-amber-600 text-sm">✎</button>
+                            <button onClick={async () => {
+                              if (!window.confirm("Delete this record?")) return;
+                              try {
+                                await api.deleteFertiliser(f.id);
+                                setPaddockFertiliser(prev => prev.filter(x => x.id !== f.id));
+                                showToast("Record deleted");
+                              } catch (err) { showToast(err.message || "Couldn't delete"); }
+                            }} className="text-slate-400 hover:text-rose-500 text-sm">🗑</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Add/Edit Soil Test ── */}
+      {showAddSoilTest && (
+        <Modal title={editingSoilTestId ? "Edit Soil Test" : "Add Soil Test"} onClose={() => { setShowAddSoilTest(false); setSoilTestForm({}); }}>
+          <div className="space-y-3 mb-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Test date *</label>
+                <input type="date" value={soilTestForm.testDate || todayStr()} onChange={(e) => setSoilTestForm(p => ({ ...p, testDate: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Zone (optional)</label>
+                <input type="text" value={soilTestForm.zone || ""} onChange={(e) => setSoilTestForm(p => ({ ...p, zone: e.target.value }))} placeholder="e.g. Hilltop" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Limed date</label>
+                <input type="date" value={soilTestForm.limedDate || ""} onChange={(e) => setSoilTestForm(p => ({ ...p, limedDate: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Lime rate</label>
+                <input type="text" value={soilTestForm.limeRate || ""} onChange={(e) => setSoilTestForm(p => ({ ...p, limeRate: e.target.value }))} placeholder="e.g. 2.5 t/ha" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide pt-2">Main elements</div>
+            <div className="grid grid-cols-2 gap-3">
+              {SOIL_ELEMENTS_PRIMARY.map(el => (
+                <div key={el.key}>
+                  <label className="text-xs font-semibold text-slate-500 block mb-1">{el.label}</label>
+                  <input type="number" step="any" value={soilTestForm.elements?.[el.key] ?? ""}
+                    onChange={(e) => setSoilTestForm(p => ({ ...p, elements: { ...(p.elements || {}), [el.key]: e.target.value } }))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 bg-white text-sm" />
+                </div>
+              ))}
+            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide pt-2">Other elements (optional)</div>
+            <div className="grid grid-cols-2 gap-3">
+              {SOIL_ELEMENTS_SECONDARY.map(el => (
+                <div key={el.key}>
+                  <label className="text-xs font-semibold text-slate-500 block mb-1">{el.label}</label>
+                  <input type="number" step="any" value={soilTestForm.elements?.[el.key] ?? ""}
+                    onChange={(e) => setSoilTestForm(p => ({ ...p, elements: { ...(p.elements || {}), [el.key]: e.target.value } }))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 bg-white text-sm" />
+                </div>
+              ))}
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Notes</label>
+              <textarea value={soilTestForm.notes || ""} onChange={(e) => setSoilTestForm(p => ({ ...p, notes: e.target.value }))} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm" />
+            </div>
+          </div>
+          <button onClick={async () => {
+            if (!soilTestForm.testDate) { showToast("Please enter a test date"); return; }
+            const payload = {
+              farm: farmName, paddock: soilPanelPaddock.name, zone: soilTestForm.zone || null,
+              testDate: soilTestForm.testDate, limedDate: soilTestForm.limedDate || null,
+              limeRate: soilTestForm.limeRate || null, elements: soilTestForm.elements || {}, notes: soilTestForm.notes || null,
+            };
+            try {
+              if (editingSoilTestId) {
+                const updated = await api.updateSoilTest(editingSoilTestId, payload);
+                setPaddockSoilTests(prev => prev.map(t => t.id === editingSoilTestId ? updated : t));
+                showToast("Soil test updated");
+              } else {
+                const created = await api.addSoilTest(payload);
+                setPaddockSoilTests(prev => [...prev, created]);
+                showToast("Soil test added");
+              }
+              setShowAddSoilTest(false); setSoilTestForm({}); setEditingSoilTestId(null);
+            } catch (err) { showToast(err.message || "Couldn't save soil test"); }
+          }} className="w-full bg-sky-700 text-white rounded-2xl py-3.5 font-bold">
+            Save
+          </button>
+        </Modal>
+      )}
+
+      {/* ── Add/Edit Fertiliser Application ── */}
+      {showAddFertiliser && (
+        <Modal title={editingFertiliserId ? "Edit Fertiliser Record" : "Add Fertiliser Record"} onClose={() => { setShowAddFertiliser(false); setFertiliserForm({}); }}>
+          <div className="space-y-3 mb-4">
+            <div>
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Product *</label>
+              <input type="text" value={fertiliserForm.product || ""} onChange={(e) => setFertiliserForm(p => ({ ...p, product: e.target.value }))} placeholder="e.g. Urea, Single Super, Lime" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Date *</label>
+                <input type="date" value={fertiliserForm.date || todayStr()} onChange={(e) => setFertiliserForm(p => ({ ...p, date: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Category</label>
+                <select value={fertiliserForm.category || "maintenance"} onChange={(e) => setFertiliserForm(p => ({ ...p, category: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                  {FERTILISER_CATEGORIES.map(c => <option key={c} value={c}>{c === "capital" ? "Capital (one-off correction)" : "Maintenance"}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Rate</label>
+                <input type="text" value={fertiliserForm.rate || ""} onChange={(e) => setFertiliserForm(p => ({ ...p, rate: e.target.value }))} placeholder="e.g. 100 kg/ha" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Area (ha)</label>
+                <input type="number" step="any" value={fertiliserForm.areaHa ?? ""} onChange={(e) => setFertiliserForm(p => ({ ...p, areaHa: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Total quantity</label>
+                <input type="text" value={fertiliserForm.totalQuantity || ""} onChange={(e) => setFertiliserForm(p => ({ ...p, totalQuantity: e.target.value }))} placeholder="e.g. 2.5 t" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-600 block mb-1">Cost ($)</label>
+                <input type="number" step="any" value={fertiliserForm.cost ?? ""} onChange={(e) => setFertiliserForm(p => ({ ...p, cost: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Contractor</label>
+              <input type="text" value={fertiliserForm.contractor || ""} onChange={(e) => setFertiliserForm(p => ({ ...p, contractor: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-slate-600 block mb-1">Notes</label>
+              <textarea value={fertiliserForm.notes || ""} onChange={(e) => setFertiliserForm(p => ({ ...p, notes: e.target.value }))} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm" />
+            </div>
+          </div>
+          <button onClick={async () => {
+            if (!fertiliserForm.product || !fertiliserForm.date) { showToast("Please enter a product and date"); return; }
+            const payload = {
+              farm: farmName, paddock: soilPanelPaddock.name, date: fertiliserForm.date,
+              category: fertiliserForm.category || "maintenance", product: fertiliserForm.product,
+              rate: fertiliserForm.rate || null, areaHa: fertiliserForm.areaHa || null,
+              totalQuantity: fertiliserForm.totalQuantity || null, contractor: fertiliserForm.contractor || null,
+              cost: fertiliserForm.cost || null, notes: fertiliserForm.notes || null,
+            };
+            try {
+              if (editingFertiliserId) {
+                const updated = await api.updateFertiliser(editingFertiliserId, payload);
+                setPaddockFertiliser(prev => prev.map(f => f.id === editingFertiliserId ? updated : f));
+                showToast("Record updated");
+              } else {
+                const created = await api.addFertiliser(payload);
+                setPaddockFertiliser(prev => [...prev, created]);
+                showToast("Record added");
+              }
+              setShowAddFertiliser(false); setFertiliserForm({}); setEditingFertiliserId(null);
+            } catch (err) { showToast(err.message || "Couldn't save record"); }
+          }} className="w-full bg-amber-500 text-white rounded-2xl py-3.5 font-bold">
+            Save
+          </button>
+        </Modal>
+      )}
+
+      {/* ── Soil test historical import wizard ── */}
+      {showSoilImport && (
+        <div className="fixed inset-0 bg-white z-[150] flex flex-col">
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 flex-shrink-0">
+            <button onClick={resetSoilImport} className="text-slate-600 font-semibold text-sm flex items-center gap-1">← Back</button>
+            <div className="flex-1">
+              <div className="font-bold text-slate-800">Import Soil Tests</div>
+              <div className="text-xs text-slate-400">{farmName} · Step {importStep} of 4</div>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            {importStep === 1 && (
+              <div className="text-center py-10">
+                <div className="text-4xl mb-3">📄</div>
+                <div className="font-bold text-slate-700 mb-1">Upload a CSV of soil test results</div>
+                <div className="text-sm text-slate-400 mb-4 max-w-sm mx-auto">
+                  If your file is an Excel spreadsheet, open it and use File → Save As → CSV first, then upload that here.
+                  The first row should be column headers.
+                </div>
+                <input ref={soilImportFileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const rows = parseCSV(String(reader.result || ""));
+                    if (rows.length < 2) { showToast("Couldn't find any data rows in that file"); return; }
+                    const headers = rows[0];
+                    setImportHeaders(headers);
+                    setImportRows(rows.slice(1));
+                    const guessed = {};
+                    headers.forEach((h, i) => { const g = guessFieldForHeader(h); if (g) guessed[i] = g; });
+                    setImportColumnMap(guessed);
+                    setImportStep(2);
+                  };
+                  reader.readAsText(file);
+                  e.target.value = "";
+                }} />
+                <button onClick={() => soilImportFileRef.current?.click()} className="bg-sky-700 text-white rounded-2xl px-6 py-3 font-bold">Choose CSV file</button>
+              </div>
+            )}
+
+            {importStep === 2 && (
+              <>
+                <div className="text-sm font-bold text-slate-700 mb-1">Match your columns</div>
+                <div className="text-xs text-slate-400 mb-3">{importRows.length} rows found. We've guessed some matches — check them and fix any that are wrong.</div>
+                <div className="space-y-2 mb-4">
+                  {importHeaders.map((h, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="w-1/2 text-sm font-medium text-slate-700 truncate" title={h}>{h || `Column ${i + 1}`}</div>
+                      <select value={importColumnMap[i] || ""} onChange={(e) => setImportColumnMap(prev => ({ ...prev, [i]: e.target.value }))} className="flex-1 border border-slate-200 rounded-xl px-2 py-2 bg-white text-sm">
+                        {IMPORT_FIELD_OPTIONS.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                {!Object.values(importColumnMap).includes("paddock") && (
+                  <div className="text-xs text-rose-500 font-semibold mb-2">⚠ Map one column to "Paddock name" to continue.</div>
+                )}
+                {!Object.values(importColumnMap).includes("testDate") && (
+                  <div className="text-xs text-rose-500 font-semibold mb-3">⚠ Map one column to "Test date" to continue.</div>
+                )}
+                <button
+                  disabled={!Object.values(importColumnMap).includes("paddock") || !Object.values(importColumnMap).includes("testDate")}
+                  onClick={() => {
+                    const paddockColIdx = Object.entries(importColumnMap).find(([, v]) => v === "paddock")?.[0];
+                    const zoneColIdx = Object.entries(importColumnMap).find(([, v]) => v === "zone")?.[0];
+                    const remembered = loadRememberedPaddockMap(farmName);
+                    const names = new Set();
+                    importRows.forEach(r => {
+                      let raw = (r[paddockColIdx] || "").trim();
+                      if (!zoneColIdx && raw.includes(";")) raw = raw.split(";")[0].trim();
+                      if (raw) names.add(raw);
+                    });
+                    const map = {};
+                    names.forEach(n => { map[n] = remembered[n] !== undefined ? remembered[n] : (bestPaddockMatch(n, paddocks) || ""); });
+                    setImportPaddockMap(map);
+                    setImportStep(3);
+                  }}
+                  className="w-full bg-sky-700 text-white rounded-2xl py-3 font-bold disabled:opacity-40"
+                >
+                  Next: Match paddock names
+                </button>
+              </>
+            )}
+
+            {importStep === 3 && (
+              <>
+                <div className="text-sm font-bold text-slate-700 mb-1">Match paddock names</div>
+                <div className="text-xs text-slate-400 mb-3">
+                  {Object.keys(importPaddockMap).length} distinct paddock name{Object.keys(importPaddockMap).length !== 1 ? "s" : ""} found in the file — match each to a real paddock once, or skip it. This mapping is remembered for next time.
+                </div>
+                <div className="space-y-2 mb-4">
+                  {Object.keys(importPaddockMap).sort().map(n => (
+                    <div key={n} className="flex items-center gap-2 bg-slate-50 rounded-xl p-2.5">
+                      <div className="w-1/2 text-sm font-medium text-slate-700 truncate" title={n}>{n}</div>
+                      <select value={importPaddockMap[n] || ""} onChange={(e) => setImportPaddockMap(prev => ({ ...prev, [n]: e.target.value }))} className="flex-1 border border-slate-200 rounded-xl px-2 py-2 bg-white text-sm">
+                        <option value="">— Skip these rows —</option>
+                        {[...paddocks].sort((a, b) => a.name.localeCompare(b.name)).map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => { saveRememberedPaddockMap(farmName, importPaddockMap); setImportStep(4); }} className="w-full bg-sky-700 text-white rounded-2xl py-3 font-bold">
+                  Next: Preview
+                </button>
+              </>
+            )}
+
+            {importStep === 4 && (() => {
+              const paddockColIdx = Object.entries(importColumnMap).find(([, v]) => v === "paddock")?.[0];
+              const zoneColIdx = Object.entries(importColumnMap).find(([, v]) => v === "zone")?.[0];
+              const dateColIdx = Object.entries(importColumnMap).find(([, v]) => v === "testDate")?.[0];
+              const limedIdx = Object.entries(importColumnMap).find(([, v]) => v === "limedDate")?.[0];
+              const limeRateIdx = Object.entries(importColumnMap).find(([, v]) => v === "limeRate")?.[0];
+              const notesIdx = Object.entries(importColumnMap).find(([, v]) => v === "notes")?.[0];
+              const parsedRows = importRows.map(r => {
+                let rawPaddock = (r[paddockColIdx] || "").trim();
+                let zone = zoneColIdx ? (r[zoneColIdx] || "").trim() : "";
+                if (!zoneColIdx && rawPaddock.includes(";")) {
+                  const parts = rawPaddock.split(";");
+                  rawPaddock = parts[0].trim();
+                  zone = (parts[1] || "").trim();
+                }
+                const mappedPaddock = importPaddockMap[rawPaddock];
+                const testDate = normalizeImportDate(r[dateColIdx]);
+                if (!mappedPaddock || !testDate) return null;
+                const elements = {};
+                Object.entries(importColumnMap).forEach(([idx, key]) => {
+                  if (SOIL_ELEMENTS_ALL.some(el => el.key === key)) {
+                    const raw = r[idx];
+                    if (raw !== undefined && String(raw).trim() !== "") {
+                      const num = Number(String(raw).replace(/[^0-9.\-]/g, ""));
+                      if (!Number.isNaN(num)) elements[key] = num;
+                    }
+                  }
+                });
+                return {
+                  paddock: mappedPaddock, zone: zone || null, testDate,
+                  limedDate: limedIdx !== undefined ? (normalizeImportDate(r[limedIdx]) || null) : null,
+                  limeRate: limeRateIdx !== undefined ? (r[limeRateIdx] || null) : null,
+                  elements, notes: notesIdx !== undefined ? (r[notesIdx] || null) : null,
+                };
+              }).filter(Boolean);
+              const skippedCount = importRows.length - parsedRows.length;
+              return (
+                <>
+                  <div className="text-sm font-bold text-slate-700 mb-1">Preview</div>
+                  <div className="text-xs text-slate-400 mb-3">
+                    {parsedRows.length} test{parsedRows.length !== 1 ? "s" : ""} will be imported.
+                    {skippedCount > 0 && ` ${skippedCount} row${skippedCount !== 1 ? "s" : ""} skipped (no paddock match, or missing/invalid date).`}
+                  </div>
+                  <div className="max-h-96 overflow-y-auto space-y-1.5 mb-4">
+                    {parsedRows.slice(0, 200).map((p, i) => (
+                      <div key={i} className="text-xs bg-slate-50 rounded-lg px-3 py-2 flex justify-between">
+                        <span className="font-semibold text-slate-700">{p.paddock}{p.zone ? ` · ${p.zone}` : ""}</span>
+                        <span className="text-slate-400">{fmtDMY(p.testDate)}</span>
+                      </div>
+                    ))}
+                    {parsedRows.length > 200 && <div className="text-xs text-slate-400 text-center py-1">…and {parsedRows.length - 200} more</div>}
+                  </div>
+                  <button disabled={importing || parsedRows.length === 0} onClick={async () => {
+                    setImporting(true);
+                    let created = 0, failed = 0;
+                    for (const row of parsedRows) {
+                      try { await api.addSoilTest({ farm: farmName, ...row }); created++; }
+                      catch { failed++; }
+                    }
+                    setImporting(false);
+                    setImportResult({ created, failed });
+                    setImportStep(5);
+                    markChanged();
+                  }} className="w-full bg-sky-700 text-white rounded-2xl py-3 font-bold disabled:opacity-40">
+                    {importing ? "Importing…" : `Import ${parsedRows.length} soil test${parsedRows.length !== 1 ? "s" : ""}`}
+                  </button>
+                </>
+              );
+            })()}
+
+            {importStep === 5 && importResult && (
+              <div className="text-center py-10">
+                <div className="text-4xl mb-3">✅</div>
+                <div className="font-bold text-slate-700 mb-1">Import complete</div>
+                <div className="text-sm text-slate-500 mb-4">
+                  {importResult.created} soil test{importResult.created !== 1 ? "s" : ""} added
+                  {importResult.failed > 0 ? `, ${importResult.failed} failed` : ""}.
+                </div>
+                <button onClick={resetSoilImport} className="bg-sky-700 text-white rounded-2xl px-6 py-3 font-bold">Done</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showFoo && (
         <Modal title="Feed on Offer" onClose={() => { setShowFoo(false); setFooForm({}); }}>
@@ -7085,6 +7900,16 @@ export default function App() {
               <div className="text-left">
                 <div className="font-semibold text-slate-700">Archived mobs</div>
                 <div className="text-xs text-slate-400">Recounted to 0 · restore if needed</div>
+              </div>
+              <ChevronRight size={16} className="text-slate-300 ml-auto" />
+            </button>
+          )}
+          {canEdit && (
+            <button onClick={() => { resetSoilImport(); setShowSoilImport(true); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+              <div className="w-9 h-9 rounded-xl bg-sky-100 flex items-center justify-center text-sky-700">📄</div>
+              <div className="text-left">
+                <div className="font-semibold text-slate-700">Import Soil Tests</div>
+                <div className="text-xs text-slate-400">Bring in historical results from a CSV</div>
               </div>
               <ChevronRight size={16} className="text-slate-300 ml-auto" />
             </button>
