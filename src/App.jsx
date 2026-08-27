@@ -173,13 +173,17 @@ const IMPORT_FIELD_OPTIONS = [
   ...SOIL_ELEMENTS_ALL.map(el => ({ key: el.key, label: el.label })),
 ];
 const IMPORT_HEADER_ALIASES = {
-  paddock: ["paddock name", "paddock", "paddock number"],
+  paddock: ["paddock name", "paddock", "paddock number", "name"],
+  zone: ["zone", "sub paddock", "subpaddock"],
   testDate: ["sampling date", "test date", "date"],
   limedDate: ["limed date"],
   limeRate: ["lime rate"],
-  phCaCl2: ["ph (cacl2)", "ph(cacl2)", "ph cacl2", "ph"],
+  phCaCl2: ["ph (cacl2)", "ph(cacl2)", "ph cacl2", "ph (cacl)", "ph(cacl)", "ph cacl", "ph"],
   olsenP: ["olsen p", "p (olsen)", "p"],
-  colwellK: ["colwell k", "k (colwell)", "av. k", "av k"],
+  // Deliberately NOT matching "Av. K" here — some spreadsheets carry both an
+  // "Av. K" and a separate "Colwell K" column, and auto-mapping both to the
+  // same field would silently let one overwrite the other.
+  colwellK: ["colwell k", "k (colwell)"],
   kPercent: ["k%", "k %"],
   sulphurKcl: ["sulphur", "s (kcl)", "sulphur (kcl)", "s"],
   aluminiumPercent: ["al%", "aluminium %", "al %"],
@@ -214,13 +218,24 @@ function bestPaddockMatch(rawName, paddockList) {
   });
   return sub ? sub.name : null;
 }
-// Accepts ISO (YYYY-MM-DD), Australian D/M/YYYY, or an Excel date serial number
+const IMPORT_MONTH_NAMES = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+// Accepts ISO (YYYY-MM-DD), Australian D/M/YYYY, "18-Oct-17"/"18-Oct-2017"
+// style dates, or an Excel date serial number
 function normalizeImportDate(raw) {
   if (raw == null || raw === "") return null;
   const s = String(raw).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (m) { const [, d, mo, y] = m; return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`; }
+  const slash = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (slash) { const [, d, mo, y] = slash; return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`; }
+  const named = s.match(/^(\d{1,2})[\s\-]([A-Za-z]{3,})[\s\-](\d{2,4})$/);
+  if (named) {
+    const [, d, monName, yRaw] = named;
+    const mo = IMPORT_MONTH_NAMES[monName.slice(0, 3).toLowerCase()];
+    if (mo) {
+      const y = yRaw.length === 2 ? 2000 + Number(yRaw) : Number(yRaw);
+      return `${y}-${String(mo).padStart(2, "0")}-${d.padStart(2, "0")}`;
+    }
+  }
   if (/^\d+(\.\d+)?$/.test(s)) {
     const serial = Number(s);
     if (serial > 20000 && serial < 60000) {
@@ -6229,19 +6244,40 @@ export default function App() {
                 <input ref={soilImportFileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const rows = parseCSV(String(reader.result || ""));
-                    if (rows.length < 2) { showToast("Couldn't find any data rows in that file"); return; }
+                  file.arrayBuffer().then((buf) => {
+                    // Excel commonly saves "CSV" in Windows-1252, not UTF-8 — decoding
+                    // as UTF-8 first and falling back keeps names like "Anthony's" or
+                    // "Michael's" (curly apostrophes) from turning into "Anthony�s"
+                    let text = new TextDecoder("utf-8", { fatal: false }).decode(buf);
+                    if (text.includes("�")) text = new TextDecoder("windows-1252").decode(buf);
+                    const rawRows = parseCSV(text);
+                    if (rawRows.length < 2) { showToast("Couldn't find any data rows in that file"); return; }
+                    // Trim trailing empty columns — a common Excel→CSV artifact where the
+                    // sheet's "used range" drags along hundreds of blank trailing columns
+                    let lastCol = 0;
+                    rawRows.forEach(r => {
+                      for (let i = r.length - 1; i >= 0; i--) {
+                        if (String(r[i] || "").trim() !== "") { if (i > lastCol) lastCol = i; break; }
+                      }
+                    });
+                    const trimmedRows = rawRows.map(r => r.slice(0, lastCol + 1));
+                    // Find the real header row — some exports (e.g. a spreadsheet with a
+                    // title row above the actual columns) have junk above it. Pick whichever
+                    // of the first 10 rows has the most cells we recognise as a known field.
+                    let headerRowIdx = 0, bestScore = -1;
+                    for (let i = 0; i < Math.min(10, trimmedRows.length - 1); i++) {
+                      const score = trimmedRows[i].filter(h => guessFieldForHeader(h)).length;
+                      if (score > bestScore) { bestScore = score; headerRowIdx = i; }
+                    }
+                    const rows = trimmedRows.slice(headerRowIdx);
                     const headers = rows[0];
                     setImportHeaders(headers);
-                    setImportRows(rows.slice(1));
+                    setImportRows(rows.slice(1).filter(r => r.some(c => String(c || "").trim() !== "")));
                     const guessed = {};
                     headers.forEach((h, i) => { const g = guessFieldForHeader(h); if (g) guessed[i] = g; });
                     setImportColumnMap(guessed);
                     setImportStep(2);
-                  };
-                  reader.readAsText(file);
+                  });
                   e.target.value = "";
                 }} />
                 <button onClick={() => soilImportFileRef.current?.click()} className="bg-sky-700 text-white rounded-2xl px-6 py-3 font-bold">Choose CSV file</button>
@@ -6273,9 +6309,23 @@ export default function App() {
                   onClick={() => {
                     const paddockColIdx = Object.entries(importColumnMap).find(([, v]) => v === "paddock")?.[0];
                     const zoneColIdx = Object.entries(importColumnMap).find(([, v]) => v === "zone")?.[0];
+                    // Fill down blank paddock-name cells — many spreadsheets only write the
+                    // name once per group of tests, leaving it blank on later rows for the
+                    // same paddock. Do this once, here, so both the paddock-matching list
+                    // below and the final import see the same filled-in names.
+                    let lastPaddock = "";
+                    const filledRows = importRows.map(r => {
+                      const cell = (r[paddockColIdx] || "").trim();
+                      if (cell) { lastPaddock = cell; return r; }
+                      if (!lastPaddock) return r; // nothing to fill down yet — leave as-is
+                      const copy = [...r];
+                      copy[paddockColIdx] = lastPaddock;
+                      return copy;
+                    });
+                    setImportRows(filledRows);
                     const remembered = loadRememberedPaddockMap(farmName);
                     const names = new Set();
-                    importRows.forEach(r => {
+                    filledRows.forEach(r => {
                       let raw = (r[paddockColIdx] || "").trim();
                       if (!zoneColIdx && raw.includes(";")) raw = raw.split(";")[0].trim();
                       if (raw) names.add(raw);
@@ -8366,6 +8416,16 @@ export default function App() {
           { icon: "📍", label: "Field Notes", onClick: () => setShowFieldNotes(true) },
           { icon: "🌱", label: "Paddock List", onClick: () => setShowPaddockList(true) },
           { icon: "🌧️", label: "Rainfall", onClick: () => setShowRainfall(true) },
+          ...(canEdit ? [
+            { icon: "🗄️", label: "Archived mobs", onClick: () => {
+                setShowArchivedMobs(true);
+                setArchivedMobsLoading(true);
+                api.listArchivedMobs(farmName)
+                  .then(list => { setArchivedMobs(list); setArchivedMobsLoading(false); })
+                  .catch(() => setArchivedMobsLoading(false));
+              } },
+            { icon: "📄", label: "Import Soil Tests", onClick: () => { resetSoilImport(); setShowSoilImport(true); } },
+          ] : []),
           { icon: "✨", label: "All Farms", onClick: () => setShowAllFarms(true) },
           { icon: "👤", label: "Accounts", onClick: () => setShowAccounts(true) },
           { icon: "⚙️", label: "Settings", onClick: () => setShowSettings(true) },
