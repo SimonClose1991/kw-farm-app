@@ -278,11 +278,13 @@ function pgrBenchmarkFor(seasonType, date = new Date()) {
   return row[date.getMonth()];
 }
 // Daily dry-matter intake for one mob, in kg DM/day.
-// Prefers 3% of recorded liveweight (our own convention); falls back to a
-// standard DSE intake estimate when the mob has no recent weight recorded.
+// Always DSE-based (head count × DSE rating × kg DM/day per DSE) — kept to a
+// single method rather than switching to a bodyweight-based estimate when a
+// recent weight exists, since that gave the same physical animal two very
+// different intake figures depending on whether it happened to be weighed.
+// 1 DSE = 1 kg DM/day by default (editable in Settings).
 function mobDailyIntakeKg(mob, dseIntakePerDay) {
-  if (mob.lastWeight) return mob.count * Number(mob.lastWeight) * 0.03;
-  return mob.count * (Number(mob.dse) || 0) * (Number(dseIntakePerDay) || 0.77);
+  return mob.count * (Number(mob.dse) || 0) * (Number(dseIntakePerDay) || 1);
 }
 // Full grazing-wedge calc for one paddock.
 //   FOO (kg DM/ha) + PGR (kg DM/ha/day) − consumption (kg DM/ha/day), run
@@ -10167,9 +10169,9 @@ export default function App() {
           <div className="space-y-3">
             <div>
               <label className="text-xs font-semibold text-slate-500 block mb-1">DSE daily intake (kg DM/day)</label>
-              <p className="text-xs text-slate-400 mb-1">Used to estimate how much a mob eats when it has no recent weight recorded. Not a precise constant — a commonly-used approximation (~0.65–0.85 depending on assumed pasture quality); default 0.77.</p>
+              <p className="text-xs text-slate-400 mb-1">How much one DSE eats per day — used for every mob's consumption estimate (head count × DSE rating × this figure). Default is the standard rule of thumb, 1 DSE = 1 kg DM/day.</p>
               <input type="number" step="0.01" disabled={!canEdit}
-                defaultValue={currentFarmRecord?.dseIntakePerDay ?? 0.77}
+                defaultValue={currentFarmRecord?.dseIntakePerDay ?? 1}
                 onBlur={async (e) => {
                   if (!currentFarmRecord) return;
                   const val = e.target.value;

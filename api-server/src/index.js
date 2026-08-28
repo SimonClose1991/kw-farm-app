@@ -142,8 +142,13 @@ app.use("/api/fertiliser", fertiliserRoutes);
     `);
     await db.execute(sql`ALTER TABLE paddocks ADD COLUMN IF NOT EXISTS target_residual NUMERIC`);
     await db.execute(sql`ALTER TABLE paddocks ADD COLUMN IF NOT EXISTS pgr_override NUMERIC`);
-    await db.execute(sql`ALTER TABLE farms ADD COLUMN IF NOT EXISTS dse_intake_per_day NUMERIC DEFAULT 0.77`);
+    await db.execute(sql`ALTER TABLE farms ADD COLUMN IF NOT EXISTS dse_intake_per_day NUMERIC DEFAULT 1`);
     await db.execute(sql`ALTER TABLE farms ADD COLUMN IF NOT EXISTS season_type TEXT DEFAULT 'standard'`);
+    // One-time correction: farms that got the column's old default (0.77,
+    // an energy-based estimate) get moved to the new default (1, the
+    // standard "1 DSE = 1kg DM/day" rule of thumb) — but only if nobody has
+    // since edited it away from that default in Settings
+    await db.execute(sql`UPDATE farms SET dse_intake_per_day = 1 WHERE dse_intake_per_day = 0.77`);
     console.log("schema migrations complete");
   } catch (err) {
     console.error("field_notes table setup error:", err.message);

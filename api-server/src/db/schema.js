@@ -27,7 +27,7 @@ export const farms = pgTable("farms", {
   centerLat: numeric("center_lat"),
   centerLng: numeric("center_lng"),
   // Grazing-days-remaining settings — see App.jsx paddockGrazingStats()
-  dseIntakePerDay: numeric("dse_intake_per_day").default("0.77"), // kg DM/day per DSE, used as the consumption fallback when a mob has no recent weight
+  dseIntakePerDay: numeric("dse_intake_per_day").default("1"), // kg DM/day per DSE — the standard rule of thumb, 1 DSE = 1 kg DM/day
   seasonType: text("season_type").default("standard"), // "poor" | "standard" | "good" — which PGR benchmark row to fall back on
 });
 
