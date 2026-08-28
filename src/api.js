@@ -57,6 +57,7 @@ export const api = {
 
   // --- Farms ---
   listFarms: () => request("/farms"),
+  updateFarm: (id, fields) => request(`/farms/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
 
   // --- Mobs ---
   listMobs: (farm) => request(`/mobs?farm=${encodeURIComponent(farm)}`),

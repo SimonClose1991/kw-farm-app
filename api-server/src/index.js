@@ -140,6 +140,10 @@ app.use("/api/fertiliser", fertiliserRoutes);
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    await db.execute(sql`ALTER TABLE paddocks ADD COLUMN IF NOT EXISTS target_residual NUMERIC`);
+    await db.execute(sql`ALTER TABLE paddocks ADD COLUMN IF NOT EXISTS pgr_override NUMERIC`);
+    await db.execute(sql`ALTER TABLE farms ADD COLUMN IF NOT EXISTS dse_intake_per_day NUMERIC DEFAULT 0.77`);
+    await db.execute(sql`ALTER TABLE farms ADD COLUMN IF NOT EXISTS season_type TEXT DEFAULT 'standard'`);
     console.log("schema migrations complete");
   } catch (err) {
     console.error("field_notes table setup error:", err.message);

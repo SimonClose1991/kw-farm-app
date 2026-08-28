@@ -26,6 +26,9 @@ export const farms = pgTable("farms", {
   name: text("name").notNull().unique(),
   centerLat: numeric("center_lat"),
   centerLng: numeric("center_lng"),
+  // Grazing-days-remaining settings — see App.jsx paddockGrazingStats()
+  dseIntakePerDay: numeric("dse_intake_per_day").default("0.77"), // kg DM/day per DSE, used as the consumption fallback when a mob has no recent weight
+  seasonType: text("season_type").default("standard"), // "poor" | "standard" | "good" — which PGR benchmark row to fall back on
 });
 
 // --- Mobs ---
@@ -87,6 +90,8 @@ export const paddocks = pgTable("paddocks", {
   pasture: text("pasture"),
   colour: text("colour"),
   geojson: jsonb("geojson"), // real polygon geometry if imported/drawn
+  targetResidual: numeric("target_residual"), // kg DM/ha — the FOO level to graze down to before moving stock out
+  pgrOverride: numeric("pgr_override"), // kg DM/ha/day — manual override; when set, takes priority over the auto-calculated/benchmark PGR
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

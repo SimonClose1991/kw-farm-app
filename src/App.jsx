@@ -109,8 +109,8 @@ const SOIL_ELEMENTS_SECONDARY = [
   { key: "ecSatEx", label: "EC (Sat Ex.)" },
 ];
 const SOIL_ELEMENTS_ALL = [...SOIL_ELEMENTS_PRIMARY, ...SOIL_ELEMENTS_SECONDARY];
-// Target bands from our agronomist — Al% and CEC deliberately excluded (no
-// simple graded range: CEC is a soil-type trait, Al% is a toxicity flag).
+// Target bands from our agronomist — CEC deliberately excluded (no simple
+// graded range: it's a soil-type trait, not something to "fix").
 // pH has a higher "adequate" floor for legume (beans/lucerne) paddocks.
 const SOIL_TARGET_RANGES = {
   phCaCl2: { low: 4.7, adequate: 5.5, adequateLegume: 6 },
@@ -119,12 +119,23 @@ const SOIL_TARGET_RANGES = {
   sulphurKcl: { low: 5, adequate: 10 },
   copperDtpa: { low: 0.1, adequate: 0.3 },
   kPercent: { low: 0.2, adequate: 0.6 },
+  // Aluminium is a toxicity risk, so higher is WORSE — opposite of every other
+  // element here. `low` is the good/adequate cutoff (below = fine), `adequate`
+  // is the high/bad cutoff (above = high risk) — kept as low/adequate so the
+  // trend chart's band-shading code doesn't need special-casing, just flipped
+  // via `inverted`.
+  aluminiumPercent: { low: 5, adequate: 10, inverted: true },
 };
 function soilBandFor(key, value, isLegume) {
   const range = SOIL_TARGET_RANGES[key];
   if (!range || value == null || value === "") return null;
   const v = Number(value);
   if (Number.isNaN(v)) return null;
+  if (range.inverted) {
+    if (v < range.low) return "adequate";
+    if (v <= range.adequate) return "moderate";
+    return "low";
+  }
   const adequate = isLegume && range.adequateLegume != null ? range.adequateLegume : range.adequate;
   if (v <= range.low) return "low";
   if (v >= adequate) return "adequate";
@@ -250,6 +261,69 @@ function loadRememberedPaddockMap(farmName) {
 }
 function saveRememberedPaddockMap(farmName, map) {
   try { localStorage.setItem(`kw_soil_import_map_${farmName}`, JSON.stringify(map)); } catch {}
+}
+
+// ── Grazing days remaining ───────────────────────────────────────────────────
+// Regional benchmark pasture growth rates (kg DM/ha/day) — perennial ryegrass,
+// phalaris & clover with fertiliser, South West Upper Victoria (Balmoral).
+// Used as a fallback estimate when there isn't enough Feed on Offer history to
+// calculate a real PGR yet. Index 0 = January … 11 = December.
+const PGR_BENCHMARK = {
+  poor:     [0, 0, 0, 4, 8, 11, 13, 25, 39, 49, 42, 4],
+  standard: [0, 0, 0, 6, 12, 16, 18, 35, 55, 70, 60, 5],
+  good:     [0, 0, 5, 20, 20, 25, 25, 40, 65, 100, 70, 30],
+};
+function pgrBenchmarkFor(seasonType, date = new Date()) {
+  const row = PGR_BENCHMARK[seasonType] || PGR_BENCHMARK.standard;
+  return row[date.getMonth()];
+}
+// Daily dry-matter intake for one mob, in kg DM/day.
+// Prefers 3% of recorded liveweight (our own convention); falls back to a
+// standard DSE intake estimate when the mob has no recent weight recorded.
+function mobDailyIntakeKg(mob, dseIntakePerDay) {
+  if (mob.lastWeight) return mob.count * Number(mob.lastWeight) * 0.03;
+  return mob.count * (Number(mob.dse) || 0) * (Number(dseIntakePerDay) || 0.77);
+}
+// Full grazing-wedge calc for one paddock.
+//   FOO (kg DM/ha) + PGR (kg DM/ha/day) − consumption (kg DM/ha/day), run
+//   forward until FOO would hit the target residual.
+function paddockGrazingStats(paddock, mobsInPaddock, fooHistoryForPaddock, dseIntakePerDay, seasonType) {
+  const sortedFoo = [...fooHistoryForPaddock].sort((a, b) => (a.date < b.date ? 1 : -1)); // newest first
+  const latestFoo = sortedFoo[0] || null;
+  const currentFOO = latestFoo ? Number(latestFoo.kgDm) : null;
+
+  // PGR: manual override > auto-calculated from the last two readings > seasonal benchmark
+  let pgr = null, pgrSource = null;
+  if (paddock.pgrOverride != null && paddock.pgrOverride !== "") {
+    pgr = Number(paddock.pgrOverride);
+    pgrSource = "manual";
+  } else if (sortedFoo.length >= 2 && sortedFoo[0].kgDm != null && sortedFoo[1].kgDm != null) {
+    const days = (new Date(sortedFoo[0].date) - new Date(sortedFoo[1].date)) / 86400000;
+    if (days > 0) {
+      pgr = (Number(sortedFoo[0].kgDm) - Number(sortedFoo[1].kgDm)) / days;
+      pgrSource = "calculated";
+    }
+  }
+  if (pgr == null) {
+    pgr = pgrBenchmarkFor(seasonType);
+    pgrSource = "benchmark";
+  }
+
+  const ha = Number(paddock.ha) || 0;
+  const totalIntakeKg = mobsInPaddock.reduce((s, m) => s + mobDailyIntakeKg(m, dseIntakePerDay), 0);
+  const consumptionPerHa = ha > 0 ? totalIntakeKg / ha : 0;
+  const targetResidual = paddock.targetResidual != null && paddock.targetResidual !== "" ? Number(paddock.targetResidual) : null;
+
+  let daysRemaining = null; // null = not enough info (no FOO or no target set)
+  if (currentFOO != null && targetResidual != null) {
+    const available = currentFOO - targetResidual;
+    const netDaily = pgr - consumptionPerHa;
+    if (available <= 0) daysRemaining = 0;
+    else if (netDaily >= 0) daysRemaining = Infinity; // growing at least as fast as it's eaten
+    else daysRemaining = available / -netDaily;
+  }
+
+  return { currentFOO, pgr, pgrSource, consumptionPerHa, totalIntakeKg, targetResidual, daysRemaining };
 }
 
 // Landmark categories/types, modelled on the AgriWebb Farm Map Editor feature set
@@ -546,6 +620,16 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
       if (days < 30) return "#84cc16";      // fair rest — light green
       return "#22c55e";                     // well rested — green
     }
+    if (insightMode === "daysleft") {
+      const stats = paddockStats[p.name] || {};
+      const d = stats.daysRemaining;
+      if (d == null) return "#475569";      // no FOO/target set — grey
+      if (d === Infinity) return "#0891b2"; // growing faster than eaten — teal
+      if (d < 3) return "#ef4444";          // urgent — red
+      if (d < 7) return "#f97316";          // soon — orange
+      if (d < 14) return "#eab308";         // getting close — yellow
+      return "#22c55e";                     // plenty left — green
+    }
     // Custom colour wins over land-use colour
     return customColour || USAGE_COLOURS[p.landUse] || "#999";
   };
@@ -585,6 +669,7 @@ function PaddockMap({ paddocks, center, onSelect, landmarks = [], onSelectLandma
           if (insightMode === "stocking") badge = `${(stats.dsePerHa || 0).toFixed(1)} DSE/ha`;
           else if (insightMode === "feed") badge = stats.lastFoo ? `${stats.lastFoo} kgDM/ha` : "No data";
           else if (insightMode === "grazed") badge = stats.daysSinceGrazed == null ? "No record" : stats.daysSinceGrazed === 0 ? "Grazing now" : `${stats.daysSinceGrazed}d rest`;
+          else if (insightMode === "daysleft") badge = stats.daysRemaining == null ? "No data" : stats.daysRemaining === Infinity ? "Growing ahead" : `${Math.floor(stats.daysRemaining)}d left`;
           const openGate = landmarks.find(l =>
             l.type === "Gate" && openGateIds.includes(String(l.id)) &&
             (l.paddockA === p.name || l.paddockB === p.name)
@@ -773,6 +858,15 @@ function GooglePaddockMap({
       if (days < 30) return "#84cc16";      // fair rest — light green
       return "#22c55e";                     // well rested — green
     }
+    if (insightMode === "daysleft") {
+      const d = (paddockStats[p.name] || {}).daysRemaining;
+      if (d == null) return "#475569";
+      if (d === Infinity) return "#0891b2";
+      if (d < 3) return "#ef4444";
+      if (d < 7) return "#f97316";
+      if (d < 14) return "#eab308";
+      return "#22c55e";
+    }
     // Default / usage / crop: custom colour wins, then land-use colour
     return customColour || USAGE_COLOURS[p.landUse] || "#999999";
   };
@@ -796,6 +890,7 @@ function GooglePaddockMap({
       if (mode_ === "stocking") badge = `${(stats_.dsePerHa||0).toFixed(1)} DSE/ha`;
       else if (mode_ === "feed") badge = stats_.lastFoo ? `${stats_.lastFoo} kgDM/ha` : "";
       else if (mode_ === "grazed") badge = stats_.daysSinceGrazed == null ? "No record" : stats_.daysSinceGrazed === 0 ? "Grazing now" : `${stats_.daysSinceGrazed}d rest`;
+      else if (mode_ === "daysleft") badge = stats_.daysRemaining == null ? "No data" : stats_.daysRemaining === Infinity ? "Growing ahead" : `${Math.floor(stats_.daysRemaining)}d left`;
     }
 
     // zoom 12-14: abbreviated initials only, no badge (full names get cluttered)
@@ -2389,7 +2484,7 @@ function StockBars({ rows }) {
 
 // Simple SVG line chart for a soil element's history — no charting library,
 // matching the rest of the app's hand-rolled chart style (see StockBars).
-function SoilTrendChart({ points, low, adequate }) {
+function SoilTrendChart({ points, low, adequate, inverted }) {
   if (!points || points.length === 0) return <div className="text-xs text-slate-400 italic py-8 text-center">No results yet — add a soil test to start the graph</div>;
   const W = 320, H = 150, padL = 34, padR = 12, padT = 14, padB = 20;
   const values = points.map(p => p.value);
@@ -2399,13 +2494,17 @@ function SoilTrendChart({ points, low, adequate }) {
   const x = (i) => padL + (points.length > 1 ? (i / (points.length - 1)) * (W - padL - padR) : (W - padL - padR) / 2);
   const y = (v) => H - padB - ((v - minV) / spanV) * (H - padT - padB);
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.value).toFixed(1)}`).join(" ");
+  // Normally higher = better, so green sits above "adequate" and red below "low".
+  // Inverted (e.g. Aluminium toxicity) flips that: red is the high band, green the low one.
+  const topFill = inverted ? "#fee2e2" : "#dcfce7";
+  const bottomFill = inverted ? "#dcfce7" : "#fee2e2";
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 150 }}>
       {low != null && adequate != null && (
         <rect x={padL} y={Math.min(y(low), y(adequate))} width={W - padL - padR} height={Math.abs(y(low) - y(adequate))} fill="#fef3c7" opacity="0.6" />
       )}
-      {adequate != null && <rect x={padL} y={padT} width={W - padL - padR} height={Math.max(0, y(adequate) - padT)} fill="#dcfce7" opacity="0.5" />}
-      {low != null && <rect x={padL} y={y(low)} width={W - padL - padR} height={Math.max(0, H - padB - y(low))} fill="#fee2e2" opacity="0.5" />}
+      {adequate != null && <rect x={padL} y={padT} width={W - padL - padR} height={Math.max(0, y(adequate) - padT)} fill={topFill} opacity="0.5" />}
+      {low != null && <rect x={padL} y={y(low)} width={W - padL - padR} height={Math.max(0, H - padB - y(low))} fill={bottomFill} opacity="0.5" />}
       <path d={pathD} fill="none" stroke="#1e3a8a" strokeWidth="2.5" strokeLinejoin="round" />
       {points.map((p, i) => (
         <circle key={i} cx={x(i)} cy={y(p.value)} r="4" fill="#1e3a8a" stroke="#fff" strokeWidth="1.5" />
@@ -3432,6 +3531,11 @@ export default function App() {
   const [showMenu, setShowMenu] = useState(false);
   const pendingMenuAction = React.useRef(null); // kept for any legacy references
   const [showPaddockList, setShowPaddockList] = useState(false);
+  const [paddockListSelectMode, setPaddockListSelectMode] = useState(false);
+  const [paddockListSelected, setPaddockListSelected] = useState(() => new Set());
+  const [showBulkPaddockAction, setShowBulkPaddockAction] = useState(null); // "foo" | "targetResidual" | "pasture" | null
+  const [bulkPaddockForm, setBulkPaddockForm] = useState({});
+  const [bulkPaddockSaving, setBulkPaddockSaving] = useState(false);
   // Always land on the All Farms dashboard — the home farm preference only
   // sets which farm Map/Livestock/etc. point at (farmName below)
   const [homeFarm, setHomeFarm] = useState(null);
@@ -3593,6 +3697,7 @@ export default function App() {
   const [showAddSoilTest, setShowAddSoilTest] = useState(false);
   const [soilTestForm, setSoilTestForm] = useState({});
   const [editingSoilTestId, setEditingSoilTestId] = useState(null);
+  const [soilTestDetail, setSoilTestDetail] = useState(null); // full soil test row shown read-only on tap
   const [showAddFertiliser, setShowAddFertiliser] = useState(false);
   const [fertiliserForm, setFertiliserForm] = useState({});
   const [editingFertiliserId, setEditingFertiliserId] = useState(null);
@@ -3815,7 +3920,10 @@ export default function App() {
     api.listBreeds().then((grouped) => {
       setCustomBreeds({ Cattle: [], Sheep: [], Rams: [], Other: [], ...grouped });
     }).catch(() => {});
+    api.listFarms().then(setFarmsList).catch(() => {});
   }, [loggedInEmail]);
+  const [farmsList, setFarmsList] = useState([]); // farms table rows — id, dseIntakePerDay, seasonType etc.
+  const currentFarmRecord = farmsList.find(f => f.name === farmName) || null;
   const [showMobSummaryDetail, setShowMobSummaryDetail] = useState(false);
   const [pinSelected, setPinSelected] = useState(null);
   const [userLocation, setUserLocation] = useState(null); // { lat, lng } once located
@@ -4365,10 +4473,11 @@ export default function App() {
       } else {
         daysSinceGrazed = null;
       }
-      stats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing };
+      const grazing = isGrazing ? paddockGrazingStats(p, groupMobs, fooHistory.filter(r => r.paddock === p.name), currentFarmRecord?.dseIntakePerDay, currentFarmRecord?.seasonType) : null;
+      stats[p.name] = { dsePerHa, lastFoo: lastFooEntry ? Number(lastFooEntry.kgDm) : null, daysSinceGrazed, isGrazing, daysRemaining: grazing?.daysRemaining ?? null };
     });
     return stats;
-  }, [paddocks, mobs, fooHistory, landmarks, openGates, allMobHistory]);
+  }, [paddocks, mobs, fooHistory, landmarks, openGates, allMobHistory, currentFarmRecord]);
 
   // [extracted to top-level component]
   const PIN_DATA = mobs.map((m, i) => {
@@ -4386,6 +4495,7 @@ export default function App() {
     { id: "stocking", label: "Stocking Rate",       icon: "📊" },
     { id: "feed",     label: "Feed on Offer",       icon: "🌾" },
     { id: "grazed",   label: "Days Since Grazed",   icon: "📅" },
+    { id: "daysleft", label: "Days Remaining",      icon: "⏳" },
     { id: "outline",  label: "Outline Only",        icon: "⬜" },
   ];
 
@@ -5638,6 +5748,17 @@ export default function App() {
                     {PADDOCK_COLOURS.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-600 block mb-1">Target residual (kg DM/ha)</label>
+                    <input type="number" step="any" defaultValue={paddockEditFormRef.current.targetResidual ?? paddockDetail?.targetResidual ?? ""} onChange={(e) => { paddockEditFormRef.current.targetResidual = e.target.value; }} placeholder="e.g. 1200" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-600 block mb-1">PGR override</label>
+                    <input type="number" step="any" defaultValue={paddockEditFormRef.current.pgrOverride ?? paddockDetail?.pgrOverride ?? ""} onChange={(e) => { paddockEditFormRef.current.pgrOverride = e.target.value; }} placeholder="kg DM/ha/day" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-400 -mt-2">Target residual is the Feed on Offer level you want to graze down to before moving stock out — used to work out Days Remaining. PGR override lets you set pasture growth rate by hand; leave blank to use the auto-calculated or benchmark estimate.</p>
                 <button
                   onClick={() => {
                     const p = paddockDetail;
@@ -5672,6 +5793,12 @@ export default function App() {
                         pasture: paddockEditFormRef.current.pasture ?? paddockDetail.pasture,
                         ha: paddockEditFormRef.current.ha !== undefined ? Number(paddockEditFormRef.current.ha) : paddockDetail.ha,
                         colour: paddockEditFormRef.current.colour ?? paddockDetail.colour,
+                        targetResidual: paddockEditFormRef.current.targetResidual !== undefined
+                          ? (paddockEditFormRef.current.targetResidual === "" ? null : Number(paddockEditFormRef.current.targetResidual))
+                          : paddockDetail.targetResidual,
+                        pgrOverride: paddockEditFormRef.current.pgrOverride !== undefined
+                          ? (paddockEditFormRef.current.pgrOverride === "" ? null : Number(paddockEditFormRef.current.pgrOverride))
+                          : paddockDetail.pgrOverride,
                       };
                       try {
                         const updated = await api.updatePaddock(paddockDetail.id, fields);
@@ -5749,6 +5876,33 @@ export default function App() {
                 )}
               </div>
             </div>
+            {isGrazingPaddock && (() => {
+              const stats = paddockGrazingStats(
+                paddockDetail, paddockMobs,
+                fooHistory.filter((r) => r.paddock === paddockDetail.name),
+                currentFarmRecord?.dseIntakePerDay, currentFarmRecord?.seasonType
+              );
+              const pgrBadge = { manual: ["Manual PGR", "bg-sky-100 text-sky-700"], calculated: ["Calculated PGR", "bg-green-100 text-green-700"], benchmark: ["Benchmark PGR", "bg-amber-100 text-amber-700"] }[stats.pgrSource];
+              return (
+                <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Days Remaining</div>
+                    {pgrBadge && <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${pgrBadge[1]}`}>{pgrBadge[0]}</span>}
+                  </div>
+                  {stats.daysRemaining == null ? (
+                    <div className="text-sm text-slate-400">{stats.currentFOO == null ? "No Feed on Offer reading yet" : "Set a Target Residual to calculate this"}</div>
+                  ) : stats.daysRemaining === Infinity ? (
+                    <div className="text-xl font-extrabold text-green-700">Growing faster than eaten</div>
+                  ) : (
+                    <div className="text-2xl font-extrabold text-slate-800">{Math.floor(stats.daysRemaining)} day{Math.floor(stats.daysRemaining) !== 1 ? "s" : ""}</div>
+                  )}
+                  <div className="text-xs text-slate-400 mt-1.5">
+                    FOO {stats.currentFOO != null ? `${stats.currentFOO} kg DM/ha` : "—"} · PGR {stats.pgr.toFixed(1)} kg DM/ha/day · Eating {stats.consumptionPerHa.toFixed(1)} kg DM/ha/day
+                    {stats.targetResidual != null ? ` · Target ${stats.targetResidual} kg DM/ha` : " · No target residual set"}
+                  </div>
+                </div>
+              );
+            })()}
             {fooHistory.filter((r) => r.paddock === paddockDetail.name).length > 0 && (
               <div className="mb-4">
                 <div className="text-sm font-bold text-slate-700 mb-2">Feed on Offer history</div>
@@ -5967,6 +6121,7 @@ export default function App() {
                               adequate={isLegume && SOIL_TARGET_RANGES[soilChartElement]?.adequateLegume != null
                                 ? SOIL_TARGET_RANGES[soilChartElement].adequateLegume
                                 : SOIL_TARGET_RANGES[soilChartElement]?.adequate}
+                              inverted={SOIL_TARGET_RANGES[soilChartElement]?.inverted}
                             />
                           </div>
                         )}
@@ -5987,7 +6142,8 @@ export default function App() {
                     <div className="text-sm font-bold text-slate-700 mb-2">History</div>
                     {sortedTests.length === 0 && <div className="text-slate-400 text-sm italic">No history yet</div>}
                     {sortedTests.map(t => (
-                      <div key={t.id} className="bg-white rounded-2xl p-3 border border-slate-100 shadow-sm mb-2">
+                      <button key={t.id} onClick={() => setSoilTestDetail(t)}
+                        className="w-full bg-white rounded-2xl p-3 border border-slate-100 shadow-sm mb-2 text-left hover:bg-slate-50">
                         <div className="flex justify-between items-start gap-2">
                           <div className="min-w-0">
                             <div className="font-bold text-slate-800 text-sm">{fmtDMY(t.testDate)}</div>
@@ -5998,28 +6154,9 @@ export default function App() {
                             {t.notes && <div className="text-xs text-slate-500 mt-1 italic">{t.notes}</div>}
                             {t.authorName && <div className="text-xs text-slate-400 mt-1">by {t.authorName}</div>}
                           </div>
-                          {canEdit && (
-                            <div className="flex gap-2 flex-shrink-0">
-                              <button onClick={() => {
-                                setEditingSoilTestId(t.id);
-                                setSoilTestForm({
-                                  testDate: t.testDate, zone: t.zone || "", limedDate: t.limedDate || "",
-                                  limeRate: t.limeRate || "", elements: { ...(t.elements || {}) }, notes: t.notes || "",
-                                });
-                                setShowAddSoilTest(true);
-                              }} className="text-slate-400 hover:text-sky-700 text-sm">✎</button>
-                              <button onClick={async () => {
-                                if (!window.confirm("Delete this soil test?")) return;
-                                try {
-                                  await api.deleteSoilTest(t.id);
-                                  setPaddockSoilTests(prev => prev.filter(x => x.id !== t.id));
-                                  showToast("Soil test deleted");
-                                } catch (err) { showToast(err.message || "Couldn't delete"); }
-                              }} className="text-slate-400 hover:text-rose-500 text-sm">🗑</button>
-                            </div>
-                          )}
+                          <ChevronRight size={16} className="text-slate-300 flex-shrink-0 mt-0.5" />
                         </div>
-                      </div>
+                      </button>
                     ))}
                   </>
                 )
@@ -6145,6 +6282,76 @@ export default function App() {
           </button>
         </Modal>
       )}
+
+      {/* ── Soil Test detail — full read-only view, tapped from History ── */}
+      {soilTestDetail && (() => {
+        const t = soilTestDetail;
+        const isLegume = LEGUME_PASTURE_TYPES.has(soilPanelPaddock?.pasture);
+        return (
+          <Modal title={`Soil Test — ${fmtDMY(t.testDate)}`} onClose={() => setSoilTestDetail(null)}>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {t.zone && <span className="text-xs font-semibold text-sky-700 bg-sky-50 px-2.5 py-1 rounded-full">{t.zone}</span>}
+              {(t.limedDate || t.limeRate) && (
+                <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">
+                  Limed {t.limedDate ? fmtDMY(t.limedDate) : ""}{t.limeRate ? ` · ${t.limeRate}` : ""}
+                </span>
+              )}
+            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Main elements</div>
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {SOIL_ELEMENTS_PRIMARY.map(el => {
+                const val = t.elements?.[el.key];
+                const hasVal = val != null && val !== "";
+                const band = hasVal ? soilBandFor(el.key, val, isLegume) : null;
+                const colours = band ? SOIL_BAND_COLOURS[band] : null;
+                return (
+                  <div key={el.key} className="rounded-xl p-2.5 border border-slate-100" style={{ background: colours?.bg || "#f8fafc" }}>
+                    <div className="text-[10px] font-semibold" style={{ color: colours?.text || "#94a3b8" }}>{el.label}</div>
+                    <div className="text-base font-bold" style={{ color: colours?.text || "#1e293b" }}>{hasVal ? val : "—"}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Other elements</div>
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {SOIL_ELEMENTS_SECONDARY.map(el => {
+                const val = t.elements?.[el.key];
+                const hasVal = val != null && val !== "";
+                return (
+                  <div key={el.key} className="rounded-xl p-2.5 border border-slate-100 bg-slate-50">
+                    <div className="text-[10px] font-semibold text-slate-400">{el.label}</div>
+                    <div className="text-base font-bold text-slate-700">{hasVal ? val : "—"}</div>
+                  </div>
+                );
+              })}
+            </div>
+            {t.notes && <div className="text-sm text-slate-600 italic mb-3 whitespace-pre-wrap">{t.notes}</div>}
+            {t.authorName && <div className="text-xs text-slate-400 mb-4">Recorded by {t.authorName}</div>}
+            {canEdit && (
+              <div className="flex gap-2">
+                <button onClick={() => {
+                  setSoilTestDetail(null);
+                  setEditingSoilTestId(t.id);
+                  setSoilTestForm({
+                    testDate: t.testDate, zone: t.zone || "", limedDate: t.limedDate || "",
+                    limeRate: t.limeRate || "", elements: { ...(t.elements || {}) }, notes: t.notes || "",
+                  });
+                  setShowAddSoilTest(true);
+                }} className="flex-1 bg-sky-700 text-white rounded-2xl py-3 font-bold text-sm">Edit</button>
+                <button onClick={async () => {
+                  if (!window.confirm("Delete this soil test?")) return;
+                  try {
+                    await api.deleteSoilTest(t.id);
+                    setPaddockSoilTests(prev => prev.filter(x => x.id !== t.id));
+                    setSoilTestDetail(null);
+                    showToast("Soil test deleted");
+                  } catch (err) { showToast(err.message || "Couldn't delete"); }
+                }} className="flex-1 bg-rose-50 text-rose-600 rounded-2xl py-3 font-bold text-sm">Delete</button>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
 
       {/* ── Add/Edit Fertiliser Application ── */}
       {showAddFertiliser && (
@@ -9483,14 +9690,36 @@ export default function App() {
       {/* ── Paddock List modal (accessible from Menu) ── */}
       {showPaddockList && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[150] flex flex-col">
-          <div className="bg-white flex-1 overflow-y-auto mt-16 rounded-t-3xl max-w-md mx-auto w-full">
-            <div className="sticky top-0 bg-white border-b border-slate-100 px-5 py-4 flex items-center gap-3">
-              <button onClick={() => setShowPaddockList(false)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+          <div className="bg-white flex-1 overflow-y-auto mt-16 rounded-t-3xl max-w-md md:max-w-2xl mx-auto w-full">
+            <div className="sticky top-0 bg-white border-b border-slate-100 px-5 py-4 flex items-center gap-3 z-10">
+              <button onClick={() => { setShowPaddockList(false); setPaddockListSelectMode(false); setPaddockListSelected(new Set()); }} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
                 <X size={16} />
               </button>
               <h2 className="font-semibold text-slate-800 tracking-tight flex-1">{farmName} Paddocks</h2>
-              <div className="text-xs text-slate-400 font-medium">{paddocks.length} total · {paddocks.reduce((s,p)=>s+Number(p.ha||0),0).toFixed(0)} ha</div>
+              <div className="text-xs text-slate-400 font-medium hidden sm:block">{paddocks.length} total · {paddocks.reduce((s,p)=>s+Number(p.ha||0),0).toFixed(0)} ha</div>
+              {canEdit && (
+                <button onClick={() => { setPaddockListSelectMode(v => !v); setPaddockListSelected(new Set()); }}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-full flex-shrink-0 ${paddockListSelectMode ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                  {paddockListSelectMode ? "Done" : "Select"}
+                </button>
+              )}
             </div>
+            {paddockListSelectMode && (
+              <div className="sticky top-[65px] z-10 bg-sky-50 border-b border-sky-100 px-4 py-2.5 flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-sky-800">{paddockListSelected.size} selected</span>
+                <button onClick={() => setPaddockListSelected(new Set(paddocks.map(p => p.id)))} className="text-xs font-semibold text-sky-700 underline">Select all</button>
+                {paddockListSelected.size > 0 && (
+                  <>
+                    <button onClick={() => setPaddockListSelected(new Set())} className="text-xs font-semibold text-sky-700 underline">Clear</button>
+                    <div className="flex gap-1.5 ml-auto flex-wrap">
+                      <button onClick={() => { setBulkPaddockForm({ date: todayStr() }); setShowBulkPaddockAction("foo"); }} className="text-xs font-bold bg-green-600 text-white px-3 py-1.5 rounded-full">🌾 Feed on Offer</button>
+                      <button onClick={() => { setBulkPaddockForm({}); setShowBulkPaddockAction("targetResidual"); }} className="text-xs font-bold bg-sky-700 text-white px-3 py-1.5 rounded-full">⏳ Target Residual</button>
+                      <button onClick={() => { setBulkPaddockForm({}); setShowBulkPaddockAction("pasture"); }} className="text-xs font-bold bg-amber-500 text-white px-3 py-1.5 rounded-full">🌱 Pasture/Crop</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             {canEdit && (() => {
               // Detect duplicate records (same boundary saved more than once) —
               // these inflate the farm's total ha and clutter pickers
@@ -9551,9 +9780,26 @@ export default function App() {
                 const dse = paddockMobs.reduce((s,m)=>s+m.count*(Number(m.dse)||0),0);
                 const isGrazingP = !NON_GRAZING_LAND_USES.has(p.landUse);
                 const dsePerHa = (isGrazingP && Number(p.ha) > 0) ? dse/Number(p.ha) : 0;
+                const selected = paddockListSelected.has(p.id);
                 return (
-                  <button key={p.id} onClick={() => { setPaddockDetail(p); setShowPaddockList(false); }}
-                    className="w-full flex items-center gap-3 bg-white rounded-2xl px-4 py-3.5 border border-slate-100 shadow-sm text-left hover:bg-slate-50">
+                  <button key={p.id}
+                    onClick={() => {
+                      if (paddockListSelectMode) {
+                        setPaddockListSelected(prev => {
+                          const next = new Set(prev);
+                          if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                          return next;
+                        });
+                      } else {
+                        setPaddockDetail(p); setShowPaddockList(false);
+                      }
+                    }}
+                    className={`w-full flex items-center gap-3 rounded-2xl px-4 py-3.5 border shadow-sm text-left ${selected ? "bg-sky-50 border-sky-300" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
+                    {paddockListSelectMode && (
+                      <div className={`w-5 h-5 rounded-md border-2 flex-shrink-0 flex items-center justify-center ${selected ? "bg-sky-700 border-sky-700" : "border-slate-300"}`}>
+                        {selected && <span className="text-white text-xs font-bold">✓</span>}
+                      </div>
+                    )}
                     <div className="w-3 h-10 rounded-full flex-shrink-0" style={{ backgroundColor: COLOUR_HEX[p.colour] || "#94a3b8" }} />
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-slate-800">{p.name}</div>
@@ -9573,6 +9819,84 @@ export default function App() {
       )}
 
       )}
+
+      {/* ── Bulk paddock actions (from Paddock List multi-select) ── */}
+      {showBulkPaddockAction && (() => {
+        const targetPaddocks = paddocks.filter(p => paddockListSelected.has(p.id));
+        const titles = { foo: "Bulk Feed on Offer", targetResidual: "Bulk Target Residual", pasture: "Bulk Update Pasture/Crop" };
+        const close = () => { setShowBulkPaddockAction(null); setBulkPaddockForm({}); };
+        return (
+          <Modal title={titles[showBulkPaddockAction]} onClose={close}>
+            <p className="text-xs text-slate-400 mb-3">Applies to {targetPaddocks.length} paddock{targetPaddocks.length !== 1 ? "s" : ""}: {targetPaddocks.map(p => p.name).join(", ")}</p>
+            {showBulkPaddockAction === "foo" && (
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Date</label>
+                  <input type="date" value={bulkPaddockForm.date || todayStr()} onChange={(e) => setBulkPaddockForm(p => ({ ...p, date: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Feed on offer (kg DM/ha) *</label>
+                  <input type="number" value={bulkPaddockForm.kgDm ?? ""} onChange={(e) => setBulkPaddockForm(p => ({ ...p, kgDm: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Notes</label>
+                  <input type="text" value={bulkPaddockForm.notes || ""} onChange={(e) => setBulkPaddockForm(p => ({ ...p, notes: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                </div>
+              </div>
+            )}
+            {showBulkPaddockAction === "targetResidual" && (
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Target residual (kg DM/ha) *</label>
+                  <input type="number" value={bulkPaddockForm.targetResidual ?? ""} onChange={(e) => setBulkPaddockForm(p => ({ ...p, targetResidual: e.target.value }))} placeholder="e.g. 1200" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white" />
+                </div>
+              </div>
+            )}
+            {showBulkPaddockAction === "pasture" && (
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="text-sm font-semibold text-slate-600 block mb-1">Pasture/crop type *</label>
+                  <select value={bulkPaddockForm.pasture || ""} onChange={(e) => setBulkPaddockForm(p => ({ ...p, pasture: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white">
+                    <option value="">Select...</option>
+                    {PASTURE_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
+            <button disabled={bulkPaddockSaving} onClick={async () => {
+              if (showBulkPaddockAction === "foo" && !bulkPaddockForm.kgDm) { showToast("Please enter a feed on offer figure"); return; }
+              if (showBulkPaddockAction === "targetResidual" && !bulkPaddockForm.targetResidual) { showToast("Please enter a target residual"); return; }
+              if (showBulkPaddockAction === "pasture" && !bulkPaddockForm.pasture) { showToast("Please choose a pasture/crop type"); return; }
+              setBulkPaddockSaving(true);
+              let ok = 0, failed = 0;
+              for (const p of targetPaddocks) {
+                try {
+                  if (showBulkPaddockAction === "foo") {
+                    const fields = { paddock: p.name, date: bulkPaddockForm.date || todayStr(), kgDm: bulkPaddockForm.kgDm, notes: bulkPaddockForm.notes };
+                    const created = await api.addFoo(farmName, fields);
+                    setFooHistory(prev => [...prev, { ...created, _farm: farmName }]);
+                  } else if (showBulkPaddockAction === "targetResidual") {
+                    const updated = await api.updatePaddock(p.id, { targetResidual: Number(bulkPaddockForm.targetResidual) });
+                    setPaddocks(prev => prev.map(x => x.id === p.id ? updated : x));
+                  } else if (showBulkPaddockAction === "pasture") {
+                    const updated = await api.updatePaddock(p.id, { pasture: bulkPaddockForm.pasture });
+                    setPaddocks(prev => prev.map(x => x.id === p.id ? updated : x));
+                  }
+                  ok++;
+                } catch { failed++; }
+              }
+              setBulkPaddockSaving(false);
+              markChanged();
+              showToast(`Updated ${ok} paddock${ok !== 1 ? "s" : ""}${failed > 0 ? `, ${failed} failed` : ""}`);
+              close();
+              setPaddockListSelectMode(false);
+              setPaddockListSelected(new Set());
+            }} className="w-full bg-sky-700 text-white rounded-2xl py-3.5 font-bold disabled:opacity-50">
+              {bulkPaddockSaving ? "Saving…" : `Apply to ${targetPaddocks.length} paddock${targetPaddocks.length !== 1 ? "s" : ""}`}
+            </button>
+          </Modal>
+        );
+      })()}
 
       {/* ── Archived Mobs (recounted to 0 or manually archived) ── */}
       {showArchivedMobs && (
@@ -9835,6 +10159,47 @@ export default function App() {
           {currentUserId === 1 && (
             <p className="text-xs text-slate-400 mt-3">To set or change the key, update the <span className="font-mono">VITE_GOOGLE_MAPS_KEY</span> environment variable in the Render dashboard and redeploy.</p>
           )}
+
+          <div className="text-sm font-bold text-slate-700 mt-5 mb-1">Grazing Days Remaining — {farmName}</div>
+          <p className="text-xs text-slate-400 mb-3">
+            These settings feed the "Days Remaining" figure shown on paddocks. Editable so they can be tuned to match your own or your agronomist's numbers.
+          </p>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">DSE daily intake (kg DM/day)</label>
+              <p className="text-xs text-slate-400 mb-1">Used to estimate how much a mob eats when it has no recent weight recorded. Not a precise constant — a commonly-used approximation (~0.65–0.85 depending on assumed pasture quality); default 0.77.</p>
+              <input type="number" step="0.01" disabled={!canEdit}
+                defaultValue={currentFarmRecord?.dseIntakePerDay ?? 0.77}
+                onBlur={async (e) => {
+                  if (!currentFarmRecord) return;
+                  const val = e.target.value;
+                  try {
+                    const updated = await api.updateFarm(currentFarmRecord.id, { dseIntakePerDay: val });
+                    setFarmsList(prev => prev.map(f => f.id === updated.id ? updated : f));
+                    showToast("Updated");
+                  } catch (err) { showToast(err.message || "Couldn't save"); }
+                }}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white disabled:opacity-60" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Season type (pasture growth benchmark)</label>
+              <p className="text-xs text-slate-400 mb-1">Fallback growth-rate estimate used until a paddock has enough Feed on Offer history to calculate its own PGR (South West Upper Victoria benchmark table).</p>
+              <select disabled={!canEdit} value={currentFarmRecord?.seasonType || "standard"}
+                onChange={async (e) => {
+                  if (!currentFarmRecord) return;
+                  try {
+                    const updated = await api.updateFarm(currentFarmRecord.id, { seasonType: e.target.value });
+                    setFarmsList(prev => prev.map(f => f.id === updated.id ? updated : f));
+                    showToast("Updated");
+                  } catch (err) { showToast(err.message || "Couldn't save"); }
+                }}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white disabled:opacity-60">
+                <option value="poor">Poor year</option>
+                <option value="standard">Standard year</option>
+                <option value="good">Good year</option>
+              </select>
+            </div>
+          </div>
         </Modal>
       )}
 
