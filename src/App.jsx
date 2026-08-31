@@ -777,7 +777,7 @@ function GooglePaddockMap({
   landmarkPinMode = false, landmarkPinPos = null, onLandmarkPinMoved,
   onMapCentreChange = null,
   instanceRef = null,
-  fieldNotes = [], showNotesOnMap = false, onSelectNote,
+  fieldNotes = [], showNotesOnMap = false, onSelectNote, noteStatusFilter = "all",
   onPickPin = null, // callback(lat, lng, paddockName) when user places a pin
   editShapePaddockId = null, // paddock id currently being reshaped (editable polygon)
   onShapeEditHa = null,      // callback(ha) with live recalculated area while reshaping
@@ -1479,9 +1479,10 @@ function GooglePaddockMap({
     // In other modes: only show when showNotesOnMap toggle is on
     const isNotesMode = mode === "notes";
     if (!isNotesMode && !showNotesOnMap) return;
+    const matchesStatusFilter = (n) => noteStatusFilter === "all" ? true : noteStatusFilter === "completed" ? !!n.resolvedAt : !n.resolvedAt;
     const notesToShow = isNotesMode
-      ? fieldNotes.filter(n => n.lat && n.lng) // all notes including resolved
-      : fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng); // overlay: open only
+      ? fieldNotes.filter(n => n.lat && n.lng && matchesStatusFilter(n))
+      : fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng); // overlay (non-Notes tabs): open only, unaffected by the Notes-screen filter
     notesToShow.forEach(note => {
       const cat = NOTE_CATEGORIES.find(c => c.id === note.category) || NOTE_CATEGORIES[NOTE_CATEGORIES.length - 1];
       const isUrgent = note.priority === "urgent";
@@ -1505,7 +1506,7 @@ function GooglePaddockMap({
       m.addListener("click", () => onSelectNote?.(note));
       ref.noteMarkers.push(m);
     });
-  }, [fieldNotes, showNotesOnMap, mode, mapReadyTick]);
+  }, [fieldNotes, showNotesOnMap, mode, mapReadyTick, noteStatusFilter]);
 
 
   // Effect: update polygons when paddocks change — in-place updates, never destroy/recreate
@@ -2508,9 +2509,18 @@ function SoilTrendChart({ points, low, adequate, inverted }) {
       {adequate != null && <rect x={padL} y={padT} width={W - padL - padR} height={Math.max(0, y(adequate) - padT)} fill={topFill} opacity="0.5" />}
       {low != null && <rect x={padL} y={y(low)} width={W - padL - padR} height={Math.max(0, H - padB - y(low))} fill={bottomFill} opacity="0.5" />}
       <path d={pathD} fill="none" stroke="#1e3a8a" strokeWidth="2.5" strokeLinejoin="round" />
-      {points.map((p, i) => (
-        <circle key={i} cx={x(i)} cy={y(p.value)} r="4" fill="#1e3a8a" stroke="#fff" strokeWidth="1.5" />
-      ))}
+      {points.map((p, i) => {
+        const cx = x(i), cy = y(p.value);
+        const labelAbove = cy - padT > 14; // flip below the dot if there's no room above
+        return (
+          <g key={i}>
+            <circle cx={cx} cy={cy} r="4" fill="#1e3a8a" stroke="#fff" strokeWidth="1.5" />
+            <text x={cx} y={labelAbove ? cy - 8 : cy + 15} fontSize="9.5" fontWeight="bold" fill="#1e3a8a" textAnchor="middle">
+              {Number(p.value).toFixed(2).replace(/\.?0+$/, "") || "0"}
+            </text>
+          </g>
+        );
+      })}
       <text x={2} y={y(maxV) + 3} fontSize="9" fill="#94a3b8">{maxV.toFixed(2)}</text>
       <text x={2} y={y(minV) + 3} fontSize="9" fill="#94a3b8">{minV.toFixed(2)}</text>
       <text x={padL} y={H - 4} fontSize="9" fill="#94a3b8">{fmtDMY(points[0].date)}</text>
@@ -3596,6 +3606,11 @@ export default function App() {
   const [drawPoints, setDrawPoints] = useState([]); // array of {x,y} in SVG space while drawing
   const [insightMode, setInsightMode] = useState("usage");
   const fileInputRef = useRef(null);
+  // Field note body: kept OUT of React state while typing — App() is one huge
+  // component, so a state update on every keystroke re-renders the whole tree
+  // (map included) on every character, which is what made typing feel slow.
+  // Reset wherever the form is freshly opened; read at save time.
+  const fieldNoteBodyDraftRef = useRef("");
   const [showAddPaddock, setShowAddPaddock] = useState(false);
   const [newPaddockForm, setNewPaddockForm] = useState({});
   const [paddockDetail, setPaddockDetail] = useState(null);
@@ -3680,6 +3695,7 @@ export default function App() {
   const [fieldNoteForm, setFieldNoteForm] = useState(null);      // null = closed, {} = new, {id} = edit
   const [fieldNoteDetail, setFieldNoteDetail] = useState(null);  // viewing a note detail
   const [showNotesOnMap, setShowNotesOnMap] = useState(false);   // map pin layer toggle
+  const [noteStatusFilter, setNoteStatusFilter] = useState("pending"); // "pending" | "completed" | "all" — shared by the Notes map and the Notes list
   // Bulk spray state: which paddocks are selected for a multi-paddock spray record
   const [spraySelectedPaddocks, setSpraySelectedPaddocks] = useState([]);
   const [showBulkSpray, setShowBulkSpray] = useState(false);
@@ -4565,6 +4581,7 @@ export default function App() {
                     }
                   }
                 }
+                fieldNoteBodyDraftRef.current = "";
                 setFieldNoteForm({ lat: gps?.lat || null, lng: gps?.lng || null, accuracyM: gps?.accuracyM || null, locationApprox: !gps, paddock: detectedPaddock, category: "General", body: "", priority: "normal" });
               }}
               className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold flex-shrink-0"
@@ -4594,7 +4611,8 @@ export default function App() {
                         }
                       }
                     }
-                    setFieldNoteForm({ lat: gps?.lat || null, lng: gps?.lng || null, accuracyM: gps?.accuracyM || null, locationApprox: !gps, paddock: detectedPaddock, category: "General", body: "", priority: "normal" });
+                    fieldNoteBodyDraftRef.current = "";
+                setFieldNoteForm({ lat: gps?.lat || null, lng: gps?.lng || null, accuracyM: gps?.accuracyM || null, locationApprox: !gps, paddock: detectedPaddock, category: "General", body: "", priority: "normal" });
                   }}
                   className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold flex-shrink-0"
                   title="Add field note"
@@ -5120,17 +5138,26 @@ export default function App() {
         {(() => {
           const openNotes = fieldNotes.filter(n => !n.resolvedAt && n.lat && n.lng);
           const urgentCount = openNotes.filter(n => n.priority === "urgent").length;
+          const visibleNotes = fieldNotes.filter(n => n.lat && n.lng && (noteStatusFilter === "all" ? true : noteStatusFilter === "completed" ? !!n.resolvedAt : !n.resolvedAt));
           return (<>
+            <div className="absolute top-2 left-2 z-20 bg-white rounded-full shadow-lg p-1 flex gap-0.5">
+              {[["pending", "Pending"], ["completed", "Completed"], ["all", "All"]].map(([id, label]) => (
+                <button key={id} onClick={() => setNoteStatusFilter(id)}
+                  className={`text-xs font-bold px-2.5 py-1.5 rounded-full ${noteStatusFilter === id ? "bg-amber-500 text-white" : "text-slate-500"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
             {urgentCount > 0 && (
               <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">
                 🚨 {urgentCount} urgent
               </div>
             )}
-            {openNotes.length === 0 && (
+            {visibleNotes.length === 0 && (
               <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none">
                 <div className="bg-white/90 rounded-2xl px-6 py-5 text-center shadow-sm">
                   <div className="text-3xl mb-2">📍</div>
-                  <div className="font-semibold text-slate-700">No open field notes</div>
+                  <div className="font-semibold text-slate-700">No {noteStatusFilter === "all" ? "" : noteStatusFilter} field notes</div>
                   <div className="text-sm text-slate-400 mt-1">Tap + to record an observation</div>
                 </div>
               </div>
@@ -5148,6 +5175,7 @@ export default function App() {
                 instanceRef={livMapRef}
                 fieldNotes={fieldNotes}
                 showNotesOnMap={true}
+                noteStatusFilter={noteStatusFilter}
                 onSelectNote={(note) => setFieldNoteDetail(note)}
                 onPickPin={fieldNoteForm?._pickingPin ? handlePickPin : null}
                 instanceRef={notesMapRef}
@@ -5975,6 +6003,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     const gps = userLocation;
+                    fieldNoteBodyDraftRef.current = "";
                     setFieldNoteForm({
                       lat: gps?.lat || null, lng: gps?.lng || null,
                       accuracyM: gps?.accuracy || null,
@@ -9977,7 +10006,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <button onClick={() => { setShowFieldNotes(false); setMapMode("Notes"); setTab("map"); }}
                   className="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg">🗺 Map</button>
-                <button onClick={() => setFieldNoteForm({ lat: null, lng: null, locationApprox: true, paddock: null, category: "General", body: "", priority: "normal" })}
+                <button onClick={() => { fieldNoteBodyDraftRef.current = ""; setFieldNoteForm({ lat: null, lng: null, locationApprox: true, paddock: null, category: "General", body: "", priority: "normal" }); }}
                   className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg font-bold">+</button>
               </div>
             </div>
@@ -9986,6 +10015,14 @@ export default function App() {
                 <span className="text-base">🚨</span>{urgentCount} urgent note{urgentCount > 1 ? "s" : ""} need attention
               </div>
             )}
+            <div className="flex gap-1.5 px-4 py-2 border-b border-slate-100 flex-shrink-0">
+              {[["pending", `Pending (${open.length})`], ["completed", `Completed (${resolved.length})`], ["all", "All"]].map(([id, label]) => (
+                <button key={id} onClick={() => setNoteStatusFilter(id)}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-full ${noteStatusFilter === id ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-500"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="flex-1 overflow-y-auto">
               {open.length === 0 && resolved.length === 0 && (
                 <div className="text-center text-slate-400 py-16">
@@ -9994,7 +10031,19 @@ export default function App() {
                   <div className="text-sm mt-1">Tap + to record an observation</div>
                 </div>
               )}
-              {open.length > 0 && (
+              {noteStatusFilter === "pending" && open.length === 0 && resolved.length > 0 && (
+                <div className="text-center text-slate-400 py-16">
+                  <div className="text-4xl mb-3">✓</div>
+                  <div className="font-semibold">No pending field notes</div>
+                </div>
+              )}
+              {noteStatusFilter === "completed" && resolved.length === 0 && open.length > 0 && (
+                <div className="text-center text-slate-400 py-16">
+                  <div className="text-4xl mb-3">📍</div>
+                  <div className="font-semibold">No completed field notes</div>
+                </div>
+              )}
+              {noteStatusFilter !== "completed" && open.length > 0 && (
                 <div>
                   <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-50">Open — {open.length}</div>
                   {open.map(note => {
@@ -10020,7 +10069,7 @@ export default function App() {
                   })}
                 </div>
               )}
-              {resolved.length > 0 && (
+              {noteStatusFilter !== "pending" && resolved.length > 0 && (
                 <div>
                   <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-50">Resolved — {resolved.length}</div>
                   {resolved.map(note => {
@@ -10276,7 +10325,7 @@ export default function App() {
               )}
               {note.taskCreated && <div className="w-full bg-slate-100 text-slate-500 rounded-2xl py-3 font-semibold text-center text-sm">📋 Task already created</div>}
               <div className="flex gap-2">
-                <button onClick={() => { setFieldNoteForm({ ...note, photos: Array.isArray(note.photos) ? note.photos : [] }); setFieldNoteDetail(null); }}
+                <button onClick={() => { fieldNoteBodyDraftRef.current = note.body || ""; setFieldNoteForm({ ...note, photos: Array.isArray(note.photos) ? note.photos : [] }); setFieldNoteDetail(null); }}
                   className="flex-1 bg-slate-100 text-slate-700 rounded-2xl py-3 font-semibold">✏️ Edit</button>
                 <button onClick={async () => {
                   if (!window.confirm("Delete this field note?")) return;
@@ -10373,7 +10422,7 @@ export default function App() {
                   <button type="button" onClick={() => {
                     // Save current form state, close modal, enter pin-picking mode
                     // The effect will re-open the modal with location filled when user clicks map
-                    const saved = { ...fieldNoteForm };
+                    const saved = { ...fieldNoteForm, body: fieldNoteBodyDraftRef.current };
                     setFieldNoteForm({ ...saved, _pickingPin: true, _modalOpen: false });
                   }} className="flex items-center justify-center gap-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl py-3 text-sm font-semibold">
                     <span>🗺</span> Place on map
@@ -10416,7 +10465,8 @@ export default function App() {
             {/* Body */}
             <div className="mb-3">
               <label className="text-sm font-semibold text-slate-600 block mb-1">Observation *</label>
-              <textarea value={form.body || ""} onChange={e => setForm({ body: e.target.value })} rows={4}
+              <textarea key={form.id || "new"} defaultValue={fieldNoteBodyDraftRef.current || form.body || ""}
+                onChange={e => { fieldNoteBodyDraftRef.current = e.target.value; }} rows={4}
                 placeholder="Describe what you observed…"
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm resize-none" />
             </div>
@@ -10462,7 +10512,8 @@ export default function App() {
               )}
             </div>
             <button onClick={async () => {
-              const current = fieldNoteForm;
+              // Body lives in the ref while typing (see fieldNoteBodyDraftRef) — merge it back in here
+              const current = { ...fieldNoteForm, body: fieldNoteBodyDraftRef.current ?? fieldNoteForm?.body ?? "" };
               if (!current?.body?.trim()) { showToast("Please add a description"); return; }
               let lat = current.lat, lng = current.lng, accuracyM = current.accuracyM, locationApprox = current.locationApprox;
               // If no GPS coords yet, try a fresh grab, then fall back to farm center
