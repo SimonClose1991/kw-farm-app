@@ -292,7 +292,11 @@ function mobDailyIntakeKg(mob, dseIntakePerDay) {
 function paddockGrazingStats(paddock, mobsInPaddock, fooHistoryForPaddock, dseIntakePerDay, seasonType) {
   const sortedFoo = [...fooHistoryForPaddock].sort((a, b) => (a.date < b.date ? 1 : -1)); // newest first
   const latestFoo = sortedFoo[0] || null;
-  const currentFOO = latestFoo ? Number(latestFoo.kgDm) : null;
+  const recordedFOO = latestFoo ? Number(latestFoo.kgDm) : null;
+  // Days remaining must count down in real time between readings, not just
+  // reflect the last recorded number forever — so track how long it's been
+  // since that reading and project it forward below.
+  const daysSinceRecorded = latestFoo?.date ? Math.max(0, Math.floor((Date.now() - new Date(latestFoo.date).getTime()) / 86400000)) : 0;
 
   // PGR: manual override > auto-calculated from the last two readings > seasonal benchmark
   let pgr = null, pgrSource = null;
@@ -317,15 +321,26 @@ function paddockGrazingStats(paddock, mobsInPaddock, fooHistoryForPaddock, dseIn
   const targetResidual = paddock.targetResidual != null && paddock.targetResidual !== "" ? Number(paddock.targetResidual) : null;
 
   let daysRemaining = null; // null = not enough info (no FOO or no target set)
-  if (currentFOO != null && targetResidual != null) {
-    const available = currentFOO - targetResidual;
-    const netDaily = pgr - consumptionPerHa;
-    if (available <= 0) daysRemaining = 0;
-    else if (netDaily >= 0) daysRemaining = Infinity; // growing at least as fast as it's eaten
-    else daysRemaining = available / -netDaily;
+  let currentFOO = recordedFOO;
+  const netDaily = pgr - consumptionPerHa;
+  if (recordedFOO != null) {
+    // Project the last reading forward to today at the net daily rate —
+    // this is what actually makes the figure count down day to day instead
+    // of freezing at whatever it was the day FOO was last recorded. A fresh
+    // FOO reading resets recordedFOO/daysSinceRecorded and the countdown
+    // starts over from there.
+    currentFOO = Math.round((recordedFOO + netDaily * daysSinceRecorded) * 10) / 10;
+    if (targetResidual != null) {
+      if (netDaily >= 0) {
+        daysRemaining = Infinity; // growing at least as fast as it's eaten — never runs out
+      } else {
+        const available = currentFOO - targetResidual;
+        daysRemaining = available <= 0 ? 0 : available / -netDaily;
+      }
+    }
   }
 
-  return { currentFOO, pgr, pgrSource, consumptionPerHa, totalIntakeKg, targetResidual, daysRemaining };
+  return { currentFOO, recordedFOO, daysSinceRecorded, pgr, pgrSource, consumptionPerHa, totalIntakeKg, targetResidual, daysRemaining };
 }
 
 // Landmark categories/types, modelled on the AgriWebb Farm Map Editor feature set
@@ -5927,9 +5942,14 @@ export default function App() {
                     <div className="text-2xl font-extrabold text-slate-800">{Math.floor(stats.daysRemaining)} day{Math.floor(stats.daysRemaining) !== 1 ? "s" : ""}</div>
                   )}
                   <div className="text-xs text-slate-400 mt-1.5">
-                    FOO {stats.currentFOO != null ? `${stats.currentFOO} kg DM/ha` : "—"} · PGR {stats.pgr.toFixed(1)} kg DM/ha/day · Eating {stats.consumptionPerHa.toFixed(1)} kg DM/ha/day
+                    Est. FOO today {stats.currentFOO != null ? `${stats.currentFOO} kg DM/ha` : "—"} · PGR {stats.pgr.toFixed(1)} kg DM/ha/day · Eating {stats.consumptionPerHa.toFixed(1)} kg DM/ha/day
                     {stats.targetResidual != null ? ` · Target ${stats.targetResidual} kg DM/ha` : " · No target residual set"}
                   </div>
+                  {stats.recordedFOO != null && (
+                    <div className="text-xs text-slate-300 mt-0.5">
+                      Last recorded {stats.recordedFOO} kg DM/ha, {stats.daysSinceRecorded === 0 ? "today" : `${stats.daysSinceRecorded} day${stats.daysSinceRecorded !== 1 ? "s" : ""} ago`} — enter a new Feed on Offer reading to refresh this
+                    </div>
+                  )}
                 </div>
               );
             })()}
