@@ -3629,6 +3629,13 @@ export default function App() {
   const [showAddPaddock, setShowAddPaddock] = useState(false);
   const [newPaddockForm, setNewPaddockForm] = useState({});
   const [paddockDetail, setPaddockDetail] = useState(null);
+  // Which of the two full-screen detail overlays is on top — both selectedMobId
+  // and paddockDetail can now be populated at once (so the Livestock⇄Paddock
+  // switcher has something to jump to), so this decides which actually renders.
+  const [detailView, setDetailView] = useState(null); // 'mob' | 'paddock' | null
+  // Non-null (array of mobs) while the "which mob?" picker is open — shown when
+  // switching Paddock → Livestock and more than one mob shares the paddock.
+  const [mobPickerList, setMobPickerList] = useState(null);
   // Draw the measuring-tape line + point markers directly on the paddock map.
   // Kept independent of GooglePaddockMap's own render cycle (like mobOverlays)
   // so the fragile core map component doesn't need to know measuring exists.
@@ -4007,6 +4014,29 @@ export default function App() {
 
   const selectedMob = mobs.find((m) => m.id === selectedMobId);
 
+  // Opens Mob Details and resolves the paddock it's in (if any) so the
+  // Livestock⇄Paddock switcher on that screen has somewhere to jump to.
+  const openMob = (id) => {
+    setSelectedMobId(id);
+    setMobTab("Summary");
+    setDetailView("mob");
+    setMobPickerList(null);
+    const m = mobs.find((mm) => mm.id === id);
+    const p = m?.paddock ? paddocks.find((pp) => pp.name === m.paddock) : null;
+    setPaddockDetail(p || null);
+  };
+
+  // Opens Paddock Details and, when exactly one mob is directly in that paddock,
+  // pre-resolves it so the switcher's "Livestock" button is an instant jump
+  // rather than needing the multi-mob picker.
+  const openPaddockDetail = (p) => {
+    setPaddockDetail(p);
+    setDetailView("paddock");
+    setMobPickerList(null);
+    const here = mobs.filter((m) => m.paddock === p.name);
+    setSelectedMobId(here.length === 1 ? here[0].id : null);
+  };
+
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(null), 1800);
@@ -4176,6 +4206,8 @@ export default function App() {
       if (newCount === 0) {
         setMobs((prev) => prev.filter((m) => m.id !== mobId));
         setSelectedMobId(null);
+        setDetailView(null);
+        setPaddockDetail(null);
         setActionForm(null);
         markChanged();
         try {
@@ -4246,6 +4278,8 @@ export default function App() {
     if (name === "Delete") {
       setMobs((prev) => prev.filter((m) => m.id !== mobId));
       setSelectedMobId(null);
+      setDetailView(null);
+      setPaddockDetail(null);
       setActionForm(null);
       markChanged();
       try {
@@ -4291,6 +4325,8 @@ export default function App() {
         const { mergedMob } = await api.mergeMob(mobId, targetId);
         setMobs((prev) => prev.filter((m) => m.id !== mobId).map((m) => (m.id === targetId ? mergedMob : m)));
         setSelectedMobId(null);
+        setDetailView(null);
+        setPaddockDetail(null);
         showToast(`Merged ${mob.name} into ${target.name}`);
       } catch (err) {
         showToast(err.message || "Couldn't merge mobs");
@@ -4954,7 +4990,7 @@ export default function App() {
         <GooglePaddockMap
           paddocks={paddocks}
           center={FARM_CENTERS[farmName] || FARM_CENTERS.Arundale}
-          onSelect={setPaddockDetail}
+          onSelect={openPaddockDetail}
           apiKey={googleMapsKey}
           onError={() => setMapLoadError(true)}
           landmarks={landmarks}
@@ -5211,7 +5247,7 @@ export default function App() {
             <div className="space-y-2 mb-3">
               {pinSelected.mobs.map(m => (
                 <button key={m.id}
-                  onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); setPinSelected(null); }}
+                  onClick={() => { openMob(m.id); setPinSelected(null); }}
                   className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 text-left hover:bg-slate-100">
                   <div className="min-w-0">
                     <div className="font-semibold text-slate-800 text-sm truncate">{m.name}</div>
@@ -5311,7 +5347,7 @@ export default function App() {
           {!(pinSelected.mobs?.length > 1) && pinSelected.mob && (
             <div className="flex gap-2">
               <button
-                onClick={() => { setSelectedMobId(pinSelected.mob.id); setMobTab("Summary"); setPinSelected(null); }}
+                onClick={() => { openMob(pinSelected.mob.id); setPinSelected(null); }}
                 className="flex-1 bg-red-900 text-white rounded-2xl py-3 font-bold"
               >
                 View Details
@@ -5737,7 +5773,7 @@ export default function App() {
         </Modal>
       )}
 
-      {paddockDetail && (() => {
+      {paddockDetail && detailView === "paddock" && (() => {
         // Open gates merge paddocks: walk the chain of open gates from this
         // paddock to find every connected paddock (A↔B open + B↔C open ⇒ A,B,C)
         const gateGroup = (() => {
@@ -5764,7 +5800,24 @@ export default function App() {
         const isGrazingPaddock = !NON_GRAZING_LAND_USES.has(paddockDetail.landUse);
         const dsePerHa = (isGrazingPaddock && combinedHa) ? dseTotal / combinedHa : 0;
         return (
-          <Modal title={paddockEditMode ? "Edit Paddock" : paddockDetail.name} onClose={() => { setPaddockDetail(null); setPaddockEditMode(false); setConfirmPaddockDel(false); }}>
+          <Modal title={paddockEditMode ? "Edit Paddock" : paddockDetail.name} onClose={() => { setPaddockDetail(null); setSelectedMobId(null); setDetailView(null); setPaddockEditMode(false); setConfirmPaddockDel(false); }}>
+            {!paddockEditMode && (
+              <div className="flex gap-2 mb-4">
+                <button disabled className="flex-1 py-2 rounded-xl text-sm font-bold bg-red-950 text-white flex items-center justify-center gap-1.5">
+                  🌾 Paddock
+                </button>
+                <button
+                  disabled={paddockMobs.length === 0}
+                  onClick={() => {
+                    if (paddockMobs.length === 1) { setSelectedMobId(paddockMobs[0].id); setDetailView("mob"); }
+                    else if (paddockMobs.length > 1) { setMobPickerList(paddockMobs); }
+                  }}
+                  className={`flex-1 py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 ${paddockMobs.length === 0 ? "bg-slate-50 text-slate-300" : "bg-slate-100 text-slate-600 active:bg-slate-200"}`}
+                >
+                  🐑 Livestock{paddockMobs.length > 0 ? ` (${paddockMobs.length})` : ""}
+                </button>
+              </div>
+            )}
             {paddockEditMode ? (
               <div className="space-y-3 mb-4">
                 <div>
@@ -5807,7 +5860,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     const p = paddockDetail;
-                    setPaddockDetail(null); setPaddockEditMode(false); setConfirmPaddockDel(false);
+                    setPaddockDetail(null); setSelectedMobId(null); setDetailView(null); setPaddockEditMode(false); setConfirmPaddockDel(false);
                     setMapMode("Paddocks");
                     setShapeEditPaddock(p); setShapeEditHa(Number(p.ha) || null);
                     // Zoom the paddocks map to the shape being edited
@@ -5872,7 +5925,7 @@ export default function App() {
                       <button onClick={() => {
                         const id = paddockDetail.id;
                         setPaddocks(prev => prev.filter(p => p.id !== id));
-                        setPaddockDetail(null); setPaddockEditMode(false); setConfirmPaddockDel(false);
+                        setPaddockDetail(null); setSelectedMobId(null); setDetailView(null); setPaddockEditMode(false); setConfirmPaddockDel(false);
                         markChanged();
                         api.deletePaddock(id).then(() => showToast("Paddock deleted")).catch(err => showToast(err.message || "Couldn't delete"));
                       }} className="flex-1 bg-rose-500 text-white rounded-xl py-2.5 text-sm font-bold">Yes, delete</button>
@@ -5968,7 +6021,7 @@ export default function App() {
             <div className="text-sm font-bold text-slate-700 mb-2">Mobs in this paddock</div>
             {paddockMobs.length === 0 && <p className="text-slate-400 text-sm">No mobs currently assigned to this paddock.</p>}
             {paddockMobs.map((m) => (
-              <button key={m.id} onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); setPaddockDetail(null); }} className="w-full flex justify-between border-b border-slate-100 py-2 text-sm text-left">
+              <button key={m.id} onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); setDetailView("mob"); }} className="w-full flex justify-between border-b border-slate-100 py-2 text-sm text-left">
                 <span className="font-medium text-slate-700">{m.name}</span>
                 <span className="font-bold text-slate-800">{m.count.toLocaleString()}</span>
               </button>
@@ -6048,6 +6101,25 @@ export default function App() {
           </Modal>
         );
       })()}
+
+      {mobPickerList && (
+        <Modal title={`${mobPickerList.length} mobs · ${mobPickerList.reduce((s, m) => s + m.count, 0)} head`} onClose={() => setMobPickerList(null)}>
+          <p className="text-sm text-slate-500 mb-3">Multiple mobs share this paddock — tap one for details</p>
+          <div className="space-y-2">
+            {mobPickerList.map(m => (
+              <button key={m.id}
+                onClick={() => { setSelectedMobId(m.id); setDetailView("mob"); setMobPickerList(null); }}
+                className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 text-left hover:bg-slate-100">
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-800 text-sm truncate">{m.name}</div>
+                  <div className="text-xs text-slate-400">{m.count} hd · {m.type || m.species}{m.mgmtGroup && m.mgmtGroup !== "Unassigned" ? ` · ${m.mgmtGroup}` : ""}</div>
+                </div>
+                <span className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0" style={{ backgroundColor: TAG_COLOUR_HEX[m.tag] || "#e2e8f0" }} />
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
 
       {/* ── Soil & Fertiliser tracking screen ── */}
       {soilPanelPaddock && (() => {
@@ -6988,6 +7060,8 @@ export default function App() {
                 setSprayForm({});
                 setSpraySelectedPaddocks([]);
                 setPaddockDetail(null);
+                setSelectedMobId(null);
+                setDetailView(null);
                 markChanged();
                 showToast(`Spray recorded for ${spraySelectedPaddocks.length} paddock${spraySelectedPaddocks.length > 1 ? "s" : ""}`);
               } catch (err) {
@@ -7108,7 +7182,7 @@ export default function App() {
       key={m.id}
       className="w-full flex items-center justify-between px-4 py-4 bg-white rounded-2xl border border-stone-200/80 text-left"
     >
-      <button onClick={() => { setSelectedMobId(m.id); setMobTab("Summary"); }} className="flex-1 text-left min-w-0">
+      <button onClick={() => openMob(m.id)} className="flex-1 text-left min-w-0">
         <div className="flex items-center gap-2">
           <div className="font-semibold text-slate-800 truncate">{m.name}</div>
           {m.tag && m.tag !== "Unassigned" && (
@@ -7578,9 +7652,21 @@ export default function App() {
     return (
       <div className="fixed inset-0 bg-slate-50 z-30 flex flex-col max-w-md md:max-w-2xl mx-auto md:border-x md:border-stone-200 md:shadow-2xl">
         <div className="bg-white/80 backdrop-blur-md flex items-center justify-between px-4 py-4 border-b border-slate-100">
-          <button className="text-slate-400 text-sm font-semibold" onClick={() => { setSelectedMobId(null); setDragMobId(null); }}>CLOSE</button>
+          <button className="text-slate-400 text-sm font-semibold" onClick={() => { setSelectedMobId(null); setPaddockDetail(null); setDetailView(null); setDragMobId(null); }}>CLOSE</button>
           <h1 className="text-base font-bold text-slate-800">Mob Details</h1>
           <div className="w-12" />
+        </div>
+        <div className="flex gap-2 px-4 pt-3 pb-1 bg-white border-b border-slate-100">
+          <button disabled className="flex-1 py-2 rounded-xl text-sm font-bold bg-red-950 text-white flex items-center justify-center gap-1.5">
+            🐑 Livestock
+          </button>
+          <button
+            disabled={!paddockDetail}
+            onClick={() => setDetailView("paddock")}
+            className={`flex-1 py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 ${!paddockDetail ? "bg-slate-50 text-slate-300" : "bg-slate-100 text-slate-600 active:bg-slate-200"}`}
+          >
+            🌾 Paddock{paddockDetail ? ` — ${paddockDetail.name}` : ""}
+          </button>
         </div>
         <div className="flex bg-white border-b border-slate-100">
           {["Summary", "History", "Notes"].map((t) => (
@@ -8748,7 +8834,7 @@ export default function App() {
       {tab === "cattle_feeding" && <CattleFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
       {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
       <div className="md:hidden"><BottomNav /></div>
-      {selectedMob && MobDetails()}
+      {selectedMob && detailView === "mob" && MobDetails()}
       {showMenu && MenuScreen()}
 
       {/* ── Move confirmation — shown before ANY paddock move actually saves ── */}
@@ -9842,7 +9928,7 @@ export default function App() {
                           return next;
                         });
                       } else {
-                        setPaddockDetail(p); setShowPaddockList(false);
+                        openPaddockDetail(p); setShowPaddockList(false);
                       }
                     }}
                     className={`w-full flex items-center gap-3 rounded-2xl px-4 py-3.5 border shadow-sm text-left ${selected ? "bg-sky-50 border-sky-300" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
