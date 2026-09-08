@@ -976,7 +976,14 @@ function GooglePaddockMap({
         if (mapDivRef.current) mapDivRef.current.innerHTML = "";
       }
       const viewportKey = `${center[0]},${center[1]}|${mode}`;
-      const savedVp = SAVED_MAP_VIEWPORTS[viewportKey];
+      const rawSavedVp = SAVED_MAP_VIEWPORTS[viewportKey];
+      // Ignore a remembered viewport that's implausibly far from the farm's
+      // known coordinates — otherwise one bad position (an odd pan, a fit that
+      // ran before paddock data had loaded) gets stuck for the rest of the
+      // session, since nothing else ever clears it.
+      const savedVp = (rawSavedVp && Math.hypot(rawSavedVp.lat - center[0], rawSavedVp.lng - center[1]) < 0.5)
+        ? rawSavedVp
+        : null;
       const map = new g.Map(mapDivRef.current, {
         center: savedVp ? { lat: savedVp.lat, lng: savedVp.lng } : { lat: center[0], lng: center[1] },
         zoom: (savedVp && savedVp.zoom) || initialZoom || 14,
@@ -1254,9 +1261,14 @@ function GooglePaddockMap({
         fittedBoundsRef.current = true;
         let userInteracted = false;
         const interactionListener = map.addListener("zoom_changed", () => { userInteracted = true; });
-        setTimeout(() => {
-          g.event.removeListener(interactionListener);
-          if (userInteracted) { vpReady = true; return; }
+        // On a farm switch the new farm's paddock shapes load over the network,
+        // arriving some time after the map itself rebuilds — a single fixed-delay
+        // check can easily lose that race on a slow connection or a cold server,
+        // permanently settling for a flat farm-centre view that never gets
+        // corrected once the real shapes do land. Retry a few times instead of
+        // giving up after one attempt.
+        const attemptFit = (triesLeft) => {
+          if (userInteracted) { g.event.removeListener(interactionListener); vpReady = true; return; }
           // Use current bounds from ref — may have been updated by polygon effect
           const currentBounds = mapInstanceRef.current?.bounds;
           if (currentBounds) {
@@ -1269,6 +1281,7 @@ function GooglePaddockMap({
                 const dist = Math.hypot(midLat - cLat, midLng - cLng);
                 // Sanity check — bounds midpoint must be within 0.5° of farm center
                 if (dist < 0.5) {
+                  g.event.removeListener(interactionListener);
                   map.fitBounds(currentBounds, 20);
                   // Nudge one zoom level in — the fitted view sits a touch too far out
                   g.event.addListenerOnce(map, "idle", () => {
@@ -1281,11 +1294,14 @@ function GooglePaddockMap({
               }
             } catch {}
           }
-          // No valid bounds yet — just center on the farm, don't zoom out to world
+          if (triesLeft > 0) { setTimeout(() => attemptFit(triesLeft - 1), 500); return; }
+          // Still no valid bounds after retrying — just center on the farm, don't zoom out to world
+          g.event.removeListener(interactionListener);
           map.setCenter({ lat: cLat, lng: cLng });
           map.setZoom(15);
           vpReady = true;
-        }, 500);
+        };
+        setTimeout(() => attemptFit(5), 500); // first check at 500ms, then up to 5 more, 500ms apart (~3s total)
       }
       mapInstanceRef.current = {
         map, overlays, polygons, labelMarkers,
@@ -4599,6 +4615,21 @@ export default function App() {
             <button
               key={m}
               onClick={() => {
+                // Livestock/Paddocks/Notes are three independent Google Maps
+                // instances under the hood (only shown/hidden via CSS), so without
+                // this each one just sits wherever it was last left — switching
+                // tabs would visibly jump to a different spot. Carry the current
+                // tab's live position across to whichever tab we're switching to.
+                const refByMode = { Livestock: livMapRef, Paddocks: padMapRef, Notes: notesMapRef };
+                const fromMap = refByMode[mapMode]?.current?.map;
+                const toMap = refByMode[m]?.current?.map;
+                let carryCenter = null, carryZoom = null;
+                if (fromMap && fromMap !== toMap) {
+                  try {
+                    const c = fromMap.getCenter();
+                    if (c) { carryCenter = { lat: c.lat(), lng: c.lng() }; carryZoom = fromMap.getZoom(); }
+                  } catch {}
+                }
                 setMapMode(m);
                 // After visibility change, tell Google Maps to recalculate its dimensions
                 setTimeout(() => {
@@ -4607,6 +4638,12 @@ export default function App() {
                   [livMapRef, padMapRef, notesMapRef].forEach(ref => {
                     if (ref.current?.map) g.event.trigger(ref.current.map, "resize");
                   });
+                  // Re-apply the carried-over position last — resizing a map that
+                  // was hidden can itself shift the viewport, so this has to win
+                  if (toMap && carryCenter) {
+                    toMap.setCenter(carryCenter);
+                    if (carryZoom) toMap.setZoom(carryZoom);
+                  }
                 }, 50);
               }}
               className={`flex-1 py-1.5 text-sm rounded-full font-semibold transition-colors ${mapMode === m ? "bg-amber-500 text-white shadow-sm" : "text-slate-400"}`}
@@ -5223,7 +5260,6 @@ export default function App() {
                 apiKey={googleMapsKey}
                 onError={() => setMapLoadError(true)}
                 userLocation={userLocation}
-                instanceRef={livMapRef}
                 fieldNotes={fieldNotes}
                 showNotesOnMap={true}
                 noteStatusFilter={noteStatusFilter}
@@ -5242,6 +5278,26 @@ export default function App() {
 
       {pinSelected && (
         <Modal title={pinSelected.mobs?.length > 1 ? `${pinSelected.mobs.length} mobs · ${pinSelected.l} head` : (pinSelected.mob ? pinSelected.mob.name : `Group of ${pinSelected.l}`)} onClose={() => setPinSelected(null)}>
+          {(() => {
+            // Jump straight to this pin's paddock without detouring through
+            // View Details first — same switcher as on the full detail screens.
+            const paddockName = pinSelected.mob?.paddock || pinSelected.mobs?.[0]?.paddock;
+            const paddockObj = paddockName ? paddocks.find(p => p.name === paddockName) : null;
+            return (
+              <div className="flex gap-2 mb-3">
+                <button disabled className="flex-1 py-2 rounded-xl text-sm font-bold bg-red-950 text-white flex items-center justify-center gap-1.5">
+                  🐑 Livestock
+                </button>
+                <button
+                  disabled={!paddockObj}
+                  onClick={() => { openPaddockDetail(paddockObj); setPinSelected(null); }}
+                  className={`flex-1 py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 ${!paddockObj ? "bg-slate-50 text-slate-300" : "bg-slate-100 text-slate-600 active:bg-slate-200"}`}
+                >
+                  🌾 Paddock{paddockObj ? ` — ${paddockObj.name}` : ""}
+                </button>
+              </div>
+            );
+          })()}
           <p className="text-sm text-slate-500 mb-3">{pinSelected.mobs?.length > 1 ? "Multiple mobs share this paddock — tap one for details" : (pinSelected.mob ? pinSelected.mob.desc : "Unidentified group on map")}</p>
           {pinSelected.mobs?.length > 1 && (
             <div className="space-y-2 mb-3">
@@ -6030,6 +6086,16 @@ export default function App() {
               <div className="text-sm font-bold text-slate-700 mb-2">Paddock Record</div>
               <div className="space-y-2">
                 <button
+                  onClick={() => { setFooTargetPaddock(paddockDetail); setFooForm({ date: todayStr() }); setShowFoo(true); }}
+                  className="w-full flex items-center gap-3 bg-green-600 text-white rounded-2xl px-4 py-3 font-bold text-sm"
+                >
+                  <span className="text-lg">🌾</span>
+                  <div className="text-left">
+                    <div>Feed on Offer</div>
+                    <div className="text-xs font-normal opacity-80">Record kg DM/ha, height, cover</div>
+                  </div>
+                </button>
+                <button
                   onClick={() => {
                     const p = paddockDetail;
                     setPaddockDetail(null);
@@ -6043,16 +6109,6 @@ export default function App() {
                   <div className="text-left">
                     <div>Soil & Fertiliser</div>
                     <div className="text-xs font-normal opacity-80">Soil test history, trends, lime & fertiliser records</div>
-                  </div>
-                </button>
-                <button
-                  onClick={() => { setFooTargetPaddock(paddockDetail); setFooForm({ date: todayStr() }); setShowFoo(true); }}
-                  className="w-full flex items-center gap-3 bg-green-600 text-white rounded-2xl px-4 py-3 font-bold text-sm"
-                >
-                  <span className="text-lg">🌾</span>
-                  <div className="text-left">
-                    <div>Feed on Offer</div>
-                    <div className="text-xs font-normal opacity-80">Record kg DM/ha, height, cover</div>
                   </div>
                 </button>
                 <button
