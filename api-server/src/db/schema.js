@@ -7,6 +7,7 @@ import {
   boolean,
   timestamp,
   jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 
 // --- Accounts / Auth ---
@@ -373,4 +374,38 @@ export const passwordTokens = pgTable("password_tokens", {
   token: text("token").notNull().unique(),
   expiresAt: timestamp("expires_at").notNull(),
   used: boolean("used").notNull().default(false),
+});
+
+// ── Lamb feedlot tracker (Admin only) ────────────────────────────────────────
+// Dates are plain YYYY-MM-DD text (same as soil_tests) so day counts never shift with timezones.
+export const lambMobs = pgTable("lamb_mobs", {
+  id: text("id").primaryKey(), // e.g. MOB-2026-001, or UNATTR
+  name: text("name").notNull(),
+  src: text("src").notNull().default(""),
+  type: text("type").notNull().default("bought"), // bought | home
+  inDate: text("in_date").notNull(),
+  costBasis: text("cost_basis").notNull().default("none"), // perkg | perhead | none
+  costRate: numeric("cost_rate").notNull().default("0"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// eid is the primary key: a lamb can only ever be inducted once
+export const lambAnimals = pgTable("lamb_animals", {
+  eid: text("eid").primaryKey(),
+  mobId: text("mob_id").notNull().references(() => lambMobs.id, { onDelete: "cascade" }),
+  inWt: numeric("in_wt"),
+  sold: boolean("sold").notNull().default(false),
+  saleDate: text("sale_date"),
+  saleWt: numeric("sale_wt"),
+  saleWtType: text("sale_wt_type"), // lw | cw
+  price: numeric("price"),
+  buyer: text("buyer"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => ({ mobIdx: index("lamb_animals_mob_idx").on(t.mobId) }));
+
+export const lambSettings = pgTable("lamb_settings", {
+  id: text("id").primaryKey().default("singleton"),
+  dressing: numeric("dressing").notNull().default("47"),
+  feedCost: numeric("feed_cost").notNull().default("0.62"),
+  levies: numeric("levies").notNull().default("3.10"),
 });

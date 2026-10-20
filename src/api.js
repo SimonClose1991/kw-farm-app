@@ -154,6 +154,15 @@ export const api = {
   saveSheepCurrentRun: (run) => request("/sheep/current-run", { method: "PUT", body: JSON.stringify(run) }),
   clearSheepCurrentRun: () => request("/sheep/current-run", { method: "DELETE" }),
 
+  // --- Lamb Feedlot (Admin only — the server refuses everyone else) ---
+  getLambFeedlot: () => request("/lamb-feedlot"),
+  saveLambSettings: (s) => request("/lamb-feedlot/settings", { method: "PUT", body: JSON.stringify(s) }),
+  updateLambMob: (id, fields) => request(`/lamb-feedlot/mobs/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(fields) }),
+  deleteLambMob: (id) => request(`/lamb-feedlot/mobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  inductLambs: (payload) => request("/lamb-feedlot/induct", { method: "POST", body: JSON.stringify(payload) }),
+  recordLambSales: (payload) => request("/lamb-feedlot/sales", { method: "POST", body: JSON.stringify(payload) }),
+  importLambBackup: (backup) => request("/lamb-feedlot/import", { method: "POST", body: JSON.stringify(backup) }),
+
   // --- Field Notes ---
   listFieldNotes: (farm) => request(`/field-notes?farm=${encodeURIComponent(farm)}`),
   createFieldNote: (farm, fields) => request("/field-notes", { method: "POST", body: JSON.stringify({ farm, ...fields }) }),

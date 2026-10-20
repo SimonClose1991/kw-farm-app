@@ -19,6 +19,7 @@ import cattleRoutes from "./routes/cattle.js";
 import fieldNotesRoutes from "./routes/fieldNotes.js";
 import soilTestsRoutes from "./routes/soilTests.js";
 import fertiliserRoutes from "./routes/fertiliser.js";
+import lambFeedlotRoutes from "./routes/lambFeedlot.js";
 import { sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 
@@ -69,6 +70,7 @@ app.use("/api/cattle", cattleRoutes);
 app.use("/api/field-notes", fieldNotesRoutes);
 app.use("/api/soil-tests", soilTestsRoutes);
 app.use("/api/fertiliser", fertiliserRoutes);
+app.use("/api/lamb-feedlot", lambFeedlotRoutes);
 
 // ── Auto-create field_notes table if it doesn't exist ───────────────────────
 (async () => {
@@ -211,6 +213,49 @@ app.use("/api/fertiliser", fertiliserRoutes);
     `);
   } catch (err) {
     console.error("sheep feedlot table setup error:", err.message);
+  }
+})();
+
+// ── Lamb feedlot tracker tables (Admin only) ─────────────────────────────────
+(async () => {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS lamb_mobs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        src TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'bought',
+        in_date TEXT NOT NULL,
+        cost_basis TEXT NOT NULL DEFAULT 'none',
+        cost_rate NUMERIC NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS lamb_animals (
+        eid TEXT PRIMARY KEY,
+        mob_id TEXT NOT NULL REFERENCES lamb_mobs(id) ON DELETE CASCADE,
+        in_wt NUMERIC,
+        sold BOOLEAN NOT NULL DEFAULT false,
+        sale_date TEXT,
+        sale_wt NUMERIC,
+        sale_wt_type TEXT,
+        price NUMERIC,
+        buyer TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS lamb_animals_mob_idx ON lamb_animals (mob_id)`);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS lamb_settings (
+        id TEXT PRIMARY KEY DEFAULT 'singleton',
+        dressing NUMERIC NOT NULL DEFAULT 47,
+        feed_cost NUMERIC NOT NULL DEFAULT 0.62,
+        levies NUMERIC NOT NULL DEFAULT 3.10
+      )
+    `);
+  } catch (err) {
+    console.error("lamb feedlot table setup error:", err.message);
   }
 })();
 

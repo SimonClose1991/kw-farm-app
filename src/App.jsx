@@ -2,6 +2,7 @@ import React, { useState, useRef } from "react";
 import { Home, MapPin, Tag, Menu, ChevronRight, X, HelpCircle, Search, ArrowLeftRight, RefreshCw, Droplet, Settings, LifeBuoy, Sparkles, Check } from "lucide-react";
 import { api, setAuthToken, getStoredToken } from "./api.js";
 import SheepFeedingScreen from "./SheepFeeding.jsx";
+import LambFeedlotScreen from "./LambFeedlot.jsx";
 
 // Module-level API URL — available at build time via Vite's env injection
 const VITE_API_URL = (typeof import.meta !== "undefined" ? import.meta.env?.VITE_API_URL : null) || "http://localhost:3001/api";
@@ -8198,6 +8199,16 @@ export default function App() {
             </div>
             <ChevronRight size={16} className="text-slate-300 ml-auto" />
           </button>
+          {isAdmin && (
+            <button onClick={() => { setShowMenu(false); setTab("lamb_feedlot"); }} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center text-base">🐑</div>
+              <div className="text-left">
+                <div className="font-semibold text-slate-700">Lamb Feedlot</div>
+                <div className="text-xs text-slate-400">How the lambs are going · Admin only</div>
+              </div>
+              <ChevronRight size={16} className="text-slate-300 ml-auto" />
+            </button>
+          )}
           <div className="h-px bg-slate-100 my-2" />
           <button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-3 px-3 py-3.5 rounded-2xl active:bg-slate-50">
             <div className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500"><Settings size={16} /></div>
@@ -8633,6 +8644,7 @@ export default function App() {
           { icon: "📍", label: "Field Notes", onClick: () => setShowFieldNotes(true) },
           { icon: "🌱", label: "Paddock List", onClick: () => setShowPaddockList(true) },
           { icon: "🌧️", label: "Rainfall", onClick: () => setShowRainfall(true) },
+          ...(isAdmin ? [{ icon: "🐑", label: "Lamb Feedlot", onClick: () => setTab("lamb_feedlot") }] : []),
           ...(canEdit ? [
             { icon: "🗄️", label: "Archived mobs", onClick: () => {
                 setShowArchivedMobs(true);
@@ -8705,6 +8717,7 @@ export default function App() {
       {tab === "mobactivity" && MobActivityScreen()}
       {tab === "workflow" && <WorkflowScreen setTab={setTab} currentAccount={currentAccount} />}
       {tab === "cattle_feeding" && <CattleFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
+      {tab === "lamb_feedlot" && isAdmin && <LambFeedlotScreen setTab={setTab} showToast={showToast} api={api} isAdmin={isAdmin} />}
       {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} isAdmin={isAdmin} canEdit={canEdit} currentAccount={currentAccount} />}
       <div className="md:hidden"><BottomNav /></div>
       {selectedMob && detailView === "mob" && MobDetails()}
