@@ -278,6 +278,17 @@ export const sheepSettings = pgTable("sheep_settings", {
   bufferPercent: numeric("buffer_percent").default("0"),
 });
 
+// One shared in-progress feed run, so a run survives a reload / phone swap
+export const sheepCurrentRun = pgTable("sheep_current_run", {
+  id: text("id").primaryKey().default("singleton"),
+  startedAt: timestamp("started_at").notNull(),
+  feeder: text("feeder"),
+  period: text("period").notNull(),
+  splitFraction: numeric("split_fraction").notNull(),
+  events: jsonb("events").notNull().default([]),
+  penIndex: integer("pen_index").notNull().default(0),
+});
+
 // ── Cattle feedlot ───────────────────────────────────────────────────────────
 export const cattleElements = pgTable("cattle_elements", {
   id: text("id").primaryKey(),

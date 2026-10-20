@@ -1,6 +1,7 @@
 import React, { useState, useRef } from "react";
 import { Home, MapPin, Tag, Menu, ChevronRight, X, HelpCircle, Search, ArrowLeftRight, RefreshCw, Droplet, Settings, LifeBuoy, Sparkles, Check } from "lucide-react";
 import { api, setAuthToken, getStoredToken } from "./api.js";
+import SheepFeedingScreen from "./SheepFeeding.jsx";
 
 // Module-level API URL — available at build time via Vite's env injection
 const VITE_API_URL = (typeof import.meta !== "undefined" ? import.meta.env?.VITE_API_URL : null) || "http://localhost:3001/api";
@@ -3304,190 +3305,6 @@ function CattleFeedingScreen({ setTab, showToast, api }) {
           </div>
         )}
         <button onClick={() => setCattleTab("manage")} className="w-full bg-slate-100 text-slate-700 rounded-2xl py-3 font-bold text-sm">⚙️ Manage Elements, Mobs & Loads</button>
-      </div>
-    </div>
-  );
-
-}
-
-function SheepFeedingScreen({ setTab, showToast, api }) {
-  const [sheepTab, setSheepTab] = React.useState("run");
-  const [pens, setPens] = React.useState([]);
-  const [settings, setSettings] = React.useState({ splitAm: 0.6, splitPm: 0.4 });
-  const [history, setHistory] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
-  const [runPeriod, setRunPeriod] = React.useState("AM");
-  const [feeder, setFeeder] = React.useState(() => localStorage.getItem("kw_feeder") || "");
-  const [showAddPen, setShowAddPen] = React.useState(false);
-  const [newPenForm, setNewPenForm] = React.useState({});
-
-  React.useEffect(() => {
-    setLoading(true);
-    Promise.all([api.getSheepPens(), api.getSheepSettings(), api.getSheepHistory()])
-      .then(([p, s, h]) => { setPens(p); setSettings(s || {}); setHistory(h); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
-
-  const totalHead = pens.filter(p => p.active).reduce((s, p) => s + p.headCount, 0);
-  const totalKg = pens.filter(p => p.active).reduce((s, p) => {
-    const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
-    return s + p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 * split;
-  }, 0);
-
-  const savePens = async (updated) => {
-    setPens(updated);
-    await api.saveSheepPens(updated);
-  };
-
-  if (loading) return (
-    <div className="flex items-center justify-center min-h-screen">
-      <div className="text-slate-400">Loading Sheep Feeding System...</div>
-    </div>
-  );
-
-  return (
-    <div className="pb-24 bg-stone-50 min-h-screen">
-      <div className="bg-white border-b border-stone-100 px-5 pt-5 pb-5">
-        <button onClick={() => setTab("home")} className="text-white/70 text-sm mb-3 flex items-center gap-1">← Home</button>
-        <div className="text-3xl mb-1">🐑</div>
-        <div className="text-2xl font-bold tracking-tight">Sheep Feeding System</div>
-        <div className="text-white/70 text-sm mt-1">Pen feed runs & grain rosters</div>
-      </div>
-      <div className="flex gap-1 px-4 -mt-4 mb-3 overflow-x-auto">
-        {[{id:"run",label:"🏃 Feed Run"},{id:"pens",label:"🐑 Pens"},{id:"history",label:"📋 History"}].map(t => (
-          <button key={t.id} onClick={() => setSheepTab(t.id)}
-            className={`px-4 py-2 rounded-2xl text-sm font-semibold flex-shrink-0 border ${sheepTab===t.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className="px-4 space-y-3">
-        {sheepTab === "run" && (
-          <>
-            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-              <div className="flex items-center justify-between mb-3">
-                <label className="text-xs font-bold text-slate-400 uppercase">Feeder</label>
-                <div className="flex gap-1">
-                  {["AM","PM"].map(p => (
-                    <button key={p} onClick={() => setRunPeriod(p)}
-                      className={`px-4 py-1.5 rounded-full text-xs font-semibold border ${runPeriod===p ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}>
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <input value={feeder} onChange={e => { setFeeder(e.target.value); localStorage.setItem("kw_feeder", e.target.value); }}
-                placeholder="Your name" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 bg-white text-sm mb-3" />
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 rounded-xl p-3 text-center">
-                  <div className="text-xs text-slate-400 font-semibold">Total Head</div>
-                  <div className="text-2xl font-extrabold text-slate-800">{totalHead.toLocaleString()}</div>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3 text-center">
-                  <div className="text-xs text-slate-400 font-semibold">Total kg ({runPeriod})</div>
-                  <div className="text-2xl font-extrabold text-slate-800">{totalKg.toFixed(0)}</div>
-                </div>
-              </div>
-            </div>
-            {pens.filter(p => p.active).map((pen) => {
-              const split = runPeriod === "AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4);
-              const kg = pen.headCount * Number(pen.kgPerHead||0) * (pen.rationPercent||100)/100 * split;
-              return (
-                <div key={pen.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-bold text-slate-800">{pen.name}</div>
-                      <div className="text-xs text-slate-400">{pen.ration} · {pen.headCount} head · {pen.kgPerHead} kg/head</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-2xl font-extrabold text-slate-800">{kg.toFixed(0)}</div>
-                      <div className="text-xs text-slate-400">kg</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            {pens.filter(p=>p.active).length > 0 && (
-              <button onClick={async () => {
-                const entry = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), feeder, period: runPeriod, splitFraction: runPeriod==="AM" ? Number(settings.splitAm||0.6) : Number(settings.splitPm||0.4), events: pens.filter(p=>p.active).map(p=>({ penId: p.id, penName: p.name, kg: p.headCount * Number(p.kgPerHead||0) * (p.rationPercent||100)/100 })) };
-                const created = await api.addSheepHistory(entry);
-                setHistory(prev => [created, ...prev]);
-                showToast("Feed run recorded ✓");
-              }} className="w-full bg-stone-800 text-white rounded-2xl py-3.5 font-semibold">
-                ✓ Record Feed Run
-              </button>
-            )}
-          </>
-        )}
-        {sheepTab === "pens" && (
-          <>
-            {pens.map((pen, i) => (
-              <div key={pen.id} className={`bg-white rounded-2xl p-4 border shadow-sm ${pen.active ? "border-slate-100" : "border-slate-200 opacity-60"}`}>
-                <div className="flex items-start justify-between mb-2">
-                  <div className="font-bold text-slate-800">{pen.name}</div>
-                  <button onClick={() => { const updated = pens.map((p,j)=>j===i?{...p,active:!p.active}:p); savePens(updated); }}
-                    className={`text-xs font-bold px-2.5 py-1 rounded-full ${pen.active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>
-                    {pen.active ? "Active" : "Inactive"}
-                  </button>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {[["Head",pen.headCount,"headCount"],["kg/head",pen.kgPerHead,"kgPerHead"],["Ration %",pen.rationPercent,"rationPercent"]].map(([label,val,key]) => (
-                    <div key={key}>
-                      <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
-                      <input type="number" value={val} onChange={e => {
-                        const updated = pens.map((p,j)=>j===i?{...p,[key]:Number(e.target.value)}:p);
-                        savePens(updated);
-                      }} className="w-full border border-slate-200 rounded-xl px-2 py-2 text-sm bg-white text-center font-bold" />
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-2">
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Ration type</label>
-                  <input value={pen.ration} onChange={e => { const updated = pens.map((p,j)=>j===i?{...p,ration:e.target.value}:p); savePens(updated); }}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                </div>
-              </div>
-            ))}
-            {showAddPen ? (
-              <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2">
-                {[["Pen name","penName","text"],["Head count","penHead","number"],["kg/head","penKg","number"]].map(([label,key,type]) => (
-                  <div key={key}>
-                    <label className="text-xs text-slate-400 font-semibold block mb-1">{label}</label>
-                    <input type={type} value={newPenForm[key]||""} onChange={e => setNewPenForm(p=>({...p,[key]:e.target.value}))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white" />
-                  </div>
-                ))}
-                <button onClick={async () => {
-                  const newPen = { id: crypto.randomUUID(), name: newPenForm.penName||"New Pen", ration: "Grower", headCount: Number(newPenForm.penHead)||0, kgPerHead: Number(newPenForm.penKg)||0, rationPercent: 100, active: true };
-                  await savePens([...pens, newPen]);
-                  setNewPenForm({}); setShowAddPen(false);
-                }} className="w-full bg-stone-800 text-white rounded-2xl py-2.5 font-semibold text-sm">Add Pen</button>
-                <button onClick={() => setShowAddPen(false)} className="w-full text-slate-400 text-sm">Cancel</button>
-              </div>
-            ) : (
-              <button onClick={() => setShowAddPen(true)} className="w-full border-2 border-dashed border-slate-300 rounded-2xl py-3 text-slate-400 font-semibold text-sm">+ Add Pen</button>
-            )}
-          </>
-        )}
-        {sheepTab === "history" && (
-          <>
-            {history.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">No feed runs recorded yet.</div>}
-            {history.map((h) => (
-              <div key={h.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="font-bold text-slate-700">{new Date(h.startedAt).toLocaleDateString("en-AU", {weekday:"short",day:"numeric",month:"short"})}</div>
-                    <div className="text-xs text-slate-400">{h.period} · {h.feeder}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-bold text-slate-600">{Array.isArray(h.events) ? h.events.reduce((s,e)=>s+(Number(e.kg)||0),0).toFixed(0) : 0} kg</div>
-                    <div className="text-xs text-slate-400">{Array.isArray(h.events) ? h.events.length : 0} pens</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
       </div>
     </div>
   );
@@ -8888,7 +8705,7 @@ export default function App() {
       {tab === "mobactivity" && MobActivityScreen()}
       {tab === "workflow" && <WorkflowScreen setTab={setTab} currentAccount={currentAccount} />}
       {tab === "cattle_feeding" && <CattleFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
-      {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
+      {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} isAdmin={isAdmin} canEdit={canEdit} currentAccount={currentAccount} />}
       <div className="md:hidden"><BottomNav /></div>
       {selectedMob && detailView === "mob" && MobDetails()}
       {showMenu && MenuScreen()}

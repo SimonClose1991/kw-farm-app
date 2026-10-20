@@ -155,6 +155,65 @@ app.use("/api/fertiliser", fertiliserRoutes);
   }
 })();
 
+// ── Sheep feedlot tables ─────────────────────────────────────────────────────
+// Separate block so a failure in the migrations above can't stop these (and
+// vice versa). IF NOT EXISTS makes this a no-op wherever the tables already exist.
+(async () => {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS sheep_pens (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        ration TEXT NOT NULL,
+        head_count INTEGER NOT NULL DEFAULT 0,
+        kg_per_head NUMERIC NOT NULL DEFAULT 0,
+        ration_percent INTEGER DEFAULT 100,
+        active BOOLEAN NOT NULL DEFAULT true,
+        order_index INTEGER NOT NULL DEFAULT 0,
+        notes TEXT
+      )
+    `);
+    await db.execute(sql`ALTER TABLE sheep_pens ADD COLUMN IF NOT EXISTS notes TEXT`);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS sheep_feed_history (
+        id TEXT PRIMARY KEY,
+        started_at TIMESTAMP NOT NULL,
+        finished_at TIMESTAMP,
+        feeder TEXT,
+        period TEXT NOT NULL,
+        split_fraction NUMERIC NOT NULL,
+        events JSONB NOT NULL DEFAULT '[]'
+      )
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS sheep_settings (
+        id TEXT PRIMARY KEY DEFAULT 'singleton',
+        admin_pin TEXT,
+        default_feeder TEXT,
+        split_am NUMERIC DEFAULT 0.6,
+        split_pm NUMERIC DEFAULT 0.4,
+        ingredients JSONB,
+        buffer_percent NUMERIC DEFAULT 0
+      )
+    `);
+    await db.execute(sql`ALTER TABLE sheep_settings ADD COLUMN IF NOT EXISTS ingredients JSONB`);
+    await db.execute(sql`ALTER TABLE sheep_settings ADD COLUMN IF NOT EXISTS buffer_percent NUMERIC DEFAULT 0`);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS sheep_current_run (
+        id TEXT PRIMARY KEY DEFAULT 'singleton',
+        started_at TIMESTAMP NOT NULL,
+        feeder TEXT,
+        period TEXT NOT NULL,
+        split_fraction NUMERIC NOT NULL,
+        events JSONB NOT NULL DEFAULT '[]',
+        pen_index INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+  } catch (err) {
+    console.error("sheep feedlot table setup error:", err.message);
+  }
+})();
+
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: "Something went wrong on the server" });

@@ -139,11 +139,20 @@ export const api = {
 
   // --- Sheep Feeding ---
   getSheepPens: () => request("/sheep/pens"),
-  saveSheepPens: (pens) => request("/sheep/pens", { method: "POST", body: JSON.stringify(pens) }),
+  createSheepPen: (pen) => request("/sheep/pens", { method: "POST", body: JSON.stringify(pen) }),
+  updateSheepPen: (id, fields) => request(`/sheep/pens/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
+  // Ration % + note only — open to every logged-in user so feeders can bump a pen mid-run
+  adjustSheepPenRation: (id, fields) => request(`/sheep/pens/${id}/ration`, { method: "PATCH", body: JSON.stringify(fields) }),
+  deleteSheepPen: (id) => request(`/sheep/pens/${id}`, { method: "DELETE" }),
+  reorderSheepPens: (ids) => request("/sheep/pens/order", { method: "PUT", body: JSON.stringify({ ids }) }),
   getSheepSettings: () => request("/sheep/settings"),
   saveSheepSettings: (s) => request("/sheep/settings", { method: "PUT", body: JSON.stringify(s) }),
   getSheepHistory: () => request("/sheep/history"),
   addSheepHistory: (entry) => request("/sheep/history", { method: "POST", body: JSON.stringify(entry) }),
+  deleteSheepHistory: (id) => request(`/sheep/history/${id}`, { method: "DELETE" }),
+  getSheepCurrentRun: () => request("/sheep/current-run"),
+  saveSheepCurrentRun: (run) => request("/sheep/current-run", { method: "PUT", body: JSON.stringify(run) }),
+  clearSheepCurrentRun: () => request("/sheep/current-run", { method: "DELETE" }),
 
   // --- Field Notes ---
   listFieldNotes: (farm) => request(`/field-notes?farm=${encodeURIComponent(farm)}`),
