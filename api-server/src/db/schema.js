@@ -121,6 +121,7 @@ export const treatmentInventory = pgTable("treatment_inventory", {
   title: text("title").notNull(),
   withholdingMeat: text("withholding_meat"),
   withholdingESI: text("withholding_esi"),
+  withholdingWool: text("withholding_wool"), // e.g. "60 days" — blowfly / lice products
   dosage: text("dosage"),
   containerUnit: text("container_unit"),
   containerSize: text("container_size"),   // size of each container e.g. "5" (in containerUnit)

@@ -101,6 +101,7 @@ app.use("/api/lamb-feedlot", lambFeedlotRoutes);
       ALTER TABLE mob_history ADD COLUMN IF NOT EXISTS author_name TEXT
     `);
     await db.execute(sql`ALTER TABLE field_notes ADD COLUMN IF NOT EXISTS photos TEXT DEFAULT '[]'`);
+    await db.execute(sql`ALTER TABLE treatment_inventory ADD COLUMN IF NOT EXISTS withholding_wool TEXT`);
     await db.execute(sql`ALTER TABLE treatment_inventory ADD COLUMN IF NOT EXISTS container_size TEXT`);
     await db.execute(sql`ALTER TABLE treatment_inventory ADD COLUMN IF NOT EXISTS starting_stock NUMERIC`);
     await db.execute(sql`ALTER TABLE treatment_inventory ADD COLUMN IF NOT EXISTS quantity_used NUMERIC DEFAULT 0`);

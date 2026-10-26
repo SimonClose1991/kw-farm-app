@@ -3,6 +3,10 @@ import { Home, MapPin, Tag, Menu, ChevronRight, X, HelpCircle, Search, ArrowLeft
 import { api, setAuthToken, getStoredToken } from "./api.js";
 import SheepFeedingScreen from "./SheepFeeding.jsx";
 import LambFeedlotScreen from "./LambFeedlot.jsx";
+import ShearCrutchForm from "./ShearCrutchForm.jsx";
+import { WithholdingCard } from "./Withholding.jsx";
+import { statusOf, treatmentPatch, parseDays, withholdingText } from "./withholding.js";
+import { agoText } from "./shearing.js";
 
 // Module-level API URL — available at build time via Vite's env injection
 const VITE_API_URL = (typeof import.meta !== "undefined" ? import.meta.env?.VITE_API_URL : null) || "http://localhost:3001/api";
@@ -48,7 +52,7 @@ const MORE_ACTIONS = [
   ["Transfer", "🚛"], ["DSE", "🌿"],
   ["Scan", "🔍"], ["Mark", "🏷️"],
   ["Wean", "🐑"], ["Start Lambing", "🐣"],
-  ["End Lambing", "🏁"],
+  ["End Lambing", "🏁"], ["Shear/Crutch", "✂️"],
 ];
 const MOB_ACTIONS = [
   ["Edit", "✏️"], ["Copy", "📋"], ["Delete", "🗑️"],
@@ -1426,17 +1430,15 @@ function GooglePaddockMap({
       const totalCount = groupMobs.reduce((s, m) => s + m.count, 0);
       const tagColour = TAG_COLOUR_HEX[groupMobs[0]?.tag] || "#cbd5e1";
       const emoji = species === "Cattle" ? "🐄" : species === "Sheep" ? "🐑" : species === "Rams" ? "🐏" : species === "Bulls" ? "🐂" : "🐾";
-      // WHP/ESI check
-      const today2 = new Date(); today2.setHours(0,0,0,0);
-      let inWhp2 = false, inEsi2 = false;
+      // WHP / ESI / wool WHP check (any mob at this pin still inside a withholding)
+      let inWhp2 = false, inEsi2 = false, inWool2 = false;
       groupMobs.forEach(m => {
-        if (!m.lastTreatDate || !m.whpDays) return;
-        const td = new Date(m.lastTreatDate); td.setHours(0,0,0,0);
-        const d = Math.floor((today2 - td) / 86400000);
-        if (d < (m.whpDays || 0)) inWhp2 = true;
-        if (d < (m.esiDays || 0)) inEsi2 = true;
+        const st = statusOf(m);
+        if (st.meat.active) inWhp2 = true;
+        if (st.esi.active) inEsi2 = true;
+        if (st.wool.active && (m.species === "Sheep" || m.species === "Rams")) inWool2 = true;
       });
-      const badges2 = [inWhp2 && "W", inEsi2 && "E"].filter(Boolean).join("/");
+      const badges2 = [inWhp2 && "W", inEsi2 && "E", inWool2 && "Wo"].filter(Boolean).join("/");
       // Teardrop canvas marker
       const cvs = document.createElement("canvas");
       const dpr = window.devicePixelRatio || 1;
@@ -1779,6 +1781,7 @@ const LAMBING_SEASONS = ["Winter", "Spring", "Autumn", "Summer"];
 // Breeding actions never shown on male mobs (nothing to lamb/calve)
 const BREEDING_ACTIONS = ["Scan", "Mark", "Wean", "Start Lambing", "End Lambing", "Start Calving", "End Calving"];
 const isCattleMob = (m) => m?.species === "Cattle" || m?.species === "Bulls";
+const isSheepMob = (m) => m?.species === "Sheep" || m?.species === "Rams";
 const isMaleMob = (m) => ["Rams", "Bulls", "Wethers", "Steers"].includes(m?.type) || m?.species === "Rams" || m?.species === "Bulls";
 // Stocking rate for a paddock, combined across any open gates linking it to neighbours
 function paddockStockingRate(paddockName, paddocks, landmarks, openGates, mobs) {
@@ -1826,6 +1829,7 @@ const ACTION_FIELDS = {
   Move: [{ label: "Move to paddock", type: "select", options: [] }, { label: "Date", type: "date" }],
   "Draft/Split": [{ label: "Number to split off", type: "number" }, { label: "New mob name", type: "text" }],
   Treat: [{ label: "_treatment_picker", type: "treatment_picker" }, { label: "Date", type: "date" }, { label: "Notes", type: "text", placeholder: "e.g. Pre-joining" }],
+  "Shear/Crutch": [], // has its own form (ShearCrutchForm)
   Weigh: [{ label: "Average weight (kg)", type: "number" }, { label: "Date", type: "date" }],
   ADG: [{ label: "Assumed ADG (kg/day)", type: "number", placeholder: "e.g. 0.2" }],
   Death: [{ label: "Number of deaths", type: "number" }, { label: "Cause", type: "text" }, { label: "Date", type: "date" }],
@@ -1921,6 +1925,7 @@ const TREATMENT_FIELDS = [
   { key: "title", label: "Product name", type: "text", placeholder: "e.g. Cydectin Pour-On" },
   { key: "withholdingMeat", label: "WHP - Meat", type: "text", placeholder: "e.g. 21 days" },
   { key: "withholdingESI", label: "WHP - ESI", type: "text", placeholder: "e.g. 7 days" },
+  { key: "withholdingWool", label: "WHP - Wool", type: "text", placeholder: "e.g. 60 days (lice / blowfly products)" },
   { key: "dosage", label: "Dosage", type: "text", placeholder: "e.g. 1mL per 10kg" },
   { key: "containerUnit", label: "Container unit", type: "select", options: ["L", "mL", "kg", "g", "Doses", "Units"] },
   { key: "containerSize", label: "Container size", type: "number", placeholder: "e.g. 5 (per container)" },
@@ -4067,6 +4072,15 @@ export default function App() {
       patch.lastTreatDate = treatDate;
       patch.whpDays = Number(formValues["_whpDays"] || 0);
       patch.esiDays = Number(formValues["_esiDays"] || 0);
+      // Withheld-until dates only ever move LATER, so a short product given after a
+      // long one can't make the mob look clear while the long withholding still runs
+      Object.assign(patch, treatmentPatch(mob, {
+        date: treatDate,
+        meatDays: patch.whpDays,
+        esiDays: patch.esiDays,
+        woolDays: Number(formValues["_woolDays"] || 0),
+        productNames: (formValues["_selectedTreatments"] || []).map((x) => x.title).join(", "),
+      }));
       // Deduct the CONFIRMED amounts from inventory (falls back to dose × head count)
       const selected = formValues["_selectedTreatments"] || [];
       const confirmedDoses = formValues["_doses"] || {};
@@ -4223,7 +4237,7 @@ export default function App() {
         return parts.length ? `↳ ${t.title} — ${parts.join(" · ")}` : null;
       }).filter(Boolean);
       summary = names
-        ? `Treated: ${names}${whp ? ` · WHP ${whp}d` : ""}${formValues["_esiDays"] ? ` · ESI ${formValues["_esiDays"]}d` : ""}${formValues["Notes"] ? " · " + formValues["Notes"] : ""}${doseLines.length ? "\n" + doseLines.join("\n") : ""}`
+        ? `Treated: ${names}${whp ? ` · WHP ${whp}d` : ""}${formValues["_esiDays"] ? ` · ESI ${formValues["_esiDays"]}d` : ""}${formValues["_woolDays"] ? ` · Wool WHP ${formValues["_woolDays"]}d` : ""}${formValues["Notes"] ? " · " + formValues["Notes"] : ""}${doseLines.length ? "\n" + doseLines.join("\n") : ""}`
         : "Treatment recorded";
     } else {
       summary = Object.entries(formValues)
@@ -4262,6 +4276,41 @@ export default function App() {
     setShowMore(false);
     markChanged();
     showToast(`${name} recorded`);
+  };
+
+  // Shearing / crutching: one record per mob chosen in the form (the open mob plus any
+  // added from its dropdown). Entries are already validated by ShearCrutchForm.
+  const saveShearing = async ({ type, date, entries }) => {
+    const failed = [];
+    for (const e of entries) {
+      const mobName = mobs.find((m) => m.id === e.mobId)?.name || "a mob";
+      try {
+        if (Object.keys(e.patch).length > 0) {
+          setMobs((prev) => prev.map((m) => (m.id === e.mobId ? { ...m, ...e.patch } : m)));
+          const updated = await api.updateMob(e.mobId, e.patch);
+          setMobs((prev) => prev.map((m) => (m.id === e.mobId ? updated : m)));
+        }
+        const created = await api.addMobHistory(e.mobId, { action: type, detail: e.detail, date });
+        // Only the mob that's open has its history on screen; the others load fresh when opened
+        if (e.mobId === selectedMobId) {
+          setHistory((prev) => ({
+            ...prev,
+            [e.mobId]: [{ id: created?.id, action: type, detail: e.detail, date, authorName: currentUser?.name || null }, ...(prev[e.mobId] || [])],
+          }));
+        }
+      } catch (err) {
+        failed.push(`${mobName}: ${err.message || "couldn't save"}`);
+      }
+    }
+    markChanged();
+    if (failed.length === 0) {
+      setActionForm(null);
+      setShowMore(false);
+      showToast(entries.length > 1 ? `${type} recorded for ${entries.length} mobs` : `${type} recorded`);
+    } else {
+      // Keep the form open so nothing is lost; say exactly which mobs didn't save
+      throw new Error(`Not saved — ${failed.join("; ")}. ${entries.length - failed.length} of ${entries.length} did save, so check the mob history before trying again.`);
+    }
   };
 
   // ── Menu pending action effect ──────────────────────────────────────────────
@@ -7021,7 +7070,7 @@ export default function App() {
       case "Cattle": return m.species === "Cattle";
       case "Rams": return m.type === "Rams" || m.species === "Rams";
       case "Bulls": return m.type === "Bulls" || m.species === "Bulls";
-      case "Withholding": return m.whp > 0;
+      case "Withholding": return statusOf(m).any || m.whp > 0;
       default: return true;
     }
   };
@@ -7065,7 +7114,9 @@ export default function App() {
         </div>
         <div className="text-xs text-slate-400 mt-0.5 truncate">{m.desc}</div>
         <div className="text-xs text-red-950 font-medium mt-1">{m.paddock} · {m.dse} DSE/hd</div>
-        {m.whp > 0 && <div className="text-xs text-rose-500 font-medium mt-0.5">WHP {m.whp}d</div>}
+        {statusOf(m).any
+          ? <div className="text-xs text-rose-500 font-medium mt-0.5">Withholding · {withholdingText(m)}</div>
+          : (m.whp > 0 && <div className="text-xs text-rose-500 font-medium mt-0.5">WHP {m.whp}d</div>)}
       </button>
       <div className="flex items-center gap-2 ml-2 flex-shrink-0">
         <div className="text-xl font-bold text-slate-700">{m.count}</div>
@@ -7212,7 +7263,8 @@ export default function App() {
       const doses = formValues["_doses"] || {};
       const mobCount = selectedMob?.count || 0;
       // Days from either the picker shape (whp/esi) or inventory rows ("21 days" text)
-      const daysOf = (v) => parseInt(v) || 0;
+      // Reads "21 days", "6 weeks", "3 months", "7-14 days" (longer end), "Nil"
+      const daysOf = (v) => parseDays(v);
       const parseDose = (item) => {
         // Pull the number AND the unit from dosage text like "5mL per 10kg"
         const m = String(item.dosage || "").match(/([\d.]+)\s*(mls?|l|litres?|g|kg)?/i);
@@ -7244,6 +7296,7 @@ export default function App() {
           "Treatment": next.map(x => x.title).join(", "),
           "_whpDays": Math.max(0, 0, ...next.map(x => daysOf(x.whp ?? x.withholdingMeat))),
           "_esiDays": Math.max(0, 0, ...next.map(x => daysOf(x.esi ?? x.withholdingESI))),
+          "_woolDays": Math.max(0, 0, ...next.map(x => daysOf(x.withholdingWool))),
         }));
       };
       const setDose = (id, key, val) => {
@@ -7276,7 +7329,7 @@ export default function App() {
                     className="w-full flex items-center justify-between px-3 py-2.5 text-left">
                     <div>
                       <div className={`text-sm font-semibold ${on ? "text-amber-800" : "text-slate-700"}`}>{item.title}</div>
-                      <div className="text-xs text-slate-400">{[daysOf(whpText) > 0 && `WHP ${daysOf(whpText)}d`, daysOf(esiText) > 0 && `ESI ${daysOf(esiText)}d`].filter(Boolean).join(" · ")}</div>
+                      <div className="text-xs text-slate-400">{[daysOf(whpText) > 0 && `WHP ${daysOf(whpText)}d`, daysOf(esiText) > 0 && `ESI ${daysOf(esiText)}d`, daysOf(item.withholdingWool) > 0 && `Wool WHP ${daysOf(item.withholdingWool)}d`].filter(Boolean).join(" · ")}</div>
                     </div>
                     {on && <span className="text-amber-500 font-bold text-lg">✓</span>}
                   </button>
@@ -7326,7 +7379,9 @@ export default function App() {
           {selected.length > 0 && (
             <div className="mt-3 bg-slate-50 rounded-xl p-3 text-xs text-slate-600">
               <span className="font-semibold">Selected:</span> {selected.map(x => x.title).join(", ")}
-              {formValues["_whpDays"] > 0 && <div className="mt-1 text-red-600 font-semibold">⚠ WHP: {formValues["_whpDays"]} days · ESI: {formValues["_esiDays"]} days</div>}
+              {(formValues["_whpDays"] > 0 || formValues["_esiDays"] > 0 || formValues["_woolDays"] > 0) && (
+                <div className="mt-1 text-red-600 font-semibold">⚠ WHP: {formValues["_whpDays"] || 0} days · ESI: {formValues["_esiDays"] || 0} days{isSheepMob(selectedMob) || formValues["_woolDays"] > 0 ? ` · Wool WHP: ${formValues["_woolDays"] || 0} days` : ""}</div>
+              )}
             </div>
           )}
         </div>
@@ -7607,6 +7662,32 @@ export default function App() {
                 })()}
               </div>
 
+              <div className="mt-3" />
+              <WithholdingCard mob={selectedMob} isSheep={isSheepMob(selectedMob)} />
+              {isSheepMob(selectedMob) && (
+                <>
+                  <div className="text-sm font-bold text-slate-700 mt-4 mb-2">Wool</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[["LAST SHORN", selectedMob.lastShornDate, selectedMob.lastShornHead], ["LAST CRUTCHED", selectedMob.lastCrutchedDate, selectedMob.lastCrutchedHead]].map(([label, date, head]) => (
+                      <button key={label} disabled={!canEdit} onClick={() => openAction("Shear/Crutch")} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 text-left">
+                        <div className="flex justify-between items-start">
+                          <div className="text-xs text-slate-400 font-semibold leading-tight">{label}</div>
+                          {canEdit && <ChevronRight size={16} className="text-slate-300" />}
+                        </div>
+                        {date ? (
+                          <>
+                            <div className="text-lg font-extrabold text-slate-800 mt-1">{fmtDMY(date)}</div>
+                            <div className="text-xs text-slate-400 mt-1">{agoText(date)}{head ? ` · ${Number(head).toLocaleString()} head` : ""}</div>
+                          </>
+                        ) : (
+                          <div className="text-sm text-slate-400 mt-2">{canEdit ? "Tap to record" : "Not recorded"}</div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
               <div className="text-sm font-bold text-slate-700 mt-6 mb-2">Weights</div>
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => openAction("Weigh")} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 text-left">
@@ -7847,6 +7928,7 @@ export default function App() {
               {[...MORE_ACTIONS, ...QUICK_ACTIONS]
                 .filter(([label]) => canEdit || WORKER_ACTIONS.includes(label))
                 .filter(([label]) => !(isMaleMob(selectedMob) && BREEDING_ACTIONS.includes(label)))
+                .filter(([label]) => label !== "Shear/Crutch" || isSheepMob(selectedMob))
                 .map(([label, icon]) => {
                   if (isCattleMob(selectedMob) && label === "Start Lambing") return ["Start Calving", "🐮"];
                   if (isCattleMob(selectedMob) && label === "End Lambing") return ["End Calving", "🏁"];
@@ -8052,8 +8134,15 @@ export default function App() {
         })()}
 
         {actionForm && (
-          <Modal title={actionForm} onClose={() => setActionForm(null)}>
-            {actionForm === "Delete" ? (
+          <Modal title={actionForm === "Shear/Crutch" ? "Shearing / Crutching" : actionForm} onClose={() => setActionForm(null)}>
+            {actionForm === "Shear/Crutch" ? (
+              <ShearCrutchForm
+                mob={selectedMob}
+                sheepMobs={mobs.filter((m) => isSheepMob(m) && m.id !== selectedMob?.id)}
+                userName={currentUser?.name || ""}
+                onSave={saveShearing}
+              />
+            ) : actionForm === "Delete" ? (
               <div className="mb-4">
                 <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-3"><span className="text-2xl">🗑️</span></div>
                 <p className="text-center font-bold text-slate-800 mb-1">Delete "{selectedMob?.name}"?</p>
@@ -8079,7 +8168,7 @@ export default function App() {
                 ))}
               </div>
             )}
-            {actionForm === "Delete" ? (
+            {actionForm === "Shear/Crutch" ? null : actionForm === "Delete" ? (
               <button onClick={() => {
                 const typed = deleteConfirmText.trim().toLowerCase();
                 const expected = (selectedMob?.name || "").trim().toLowerCase();
@@ -9062,6 +9151,7 @@ export default function App() {
           { id: "weights",    label: "Weights",         action: "Weigh"  },
           { id: "scores",     label: "Cond. Scores",    action: "Score"  },
           { id: "moves",      label: "Mob Moves",       action: "Move"   },
+          { id: "shearing",   label: "Shearing & Crutching", action: ["Shearing", "Crutching"] },
           { id: "lambing",    label: "Lambing Performance", action: null },
           { id: "calving",    label: "Calving Performance", action: null },
           { id: "spray",      label: "Spray Records",   action: null     },
@@ -9100,7 +9190,7 @@ export default function App() {
           // Mob history based record types
           const actionFilter = currentType.action;
           rows = allMobHistory.filter(h => {
-            if (h.action !== actionFilter) return false;
+            if (Array.isArray(actionFilter) ? !actionFilter.includes(h.action) : h.action !== actionFilter) return false;
             if (recordsDateFrom && h.date < recordsDateFrom) return false;
             if (recordsDateTo && h.date > recordsDateTo) return false;
             // Only show records for accessible farms
@@ -9117,6 +9207,17 @@ export default function App() {
               { key: "mgmtGroup", label: "Mgmt Tag" },
               { key: "paddock", label: "Paddock" },
               { key: "detail",  label: "Detail" },
+              { key: "authorName", label: "Recorded by" },
+            ];
+          } else if (recordsType === "shearing") {
+            columns = [
+              { key: "date",    label: "Date" },
+              { key: "action",  label: "Type" },
+              { key: "mobName", label: "Mob" },
+              { key: "species", label: "Species" },
+              { key: "breed",   label: "Breed" },
+              { key: "paddock", label: "Paddock" },
+              { key: "detail",  label: "Detail (head, bales, wool, cost, contractor)" },
               { key: "authorName", label: "Recorded by" },
             ];
           } else if (recordsType === "treatments") {

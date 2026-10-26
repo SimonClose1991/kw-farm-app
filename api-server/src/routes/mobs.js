@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { mobs, mobHistory, mobNotes, farms } from "../db/schema.js";
 import { requireAuth, requireEditor } from "../auth.js";
+import { mergedWithholding } from "../withholding.js";
 
 const router = Router();
 
@@ -176,9 +177,15 @@ router.post("/:id/merge", requireAuth, requireEditor, async (req, res) => {
     paddock: target.paddock || null,
   });
 
+  // The merged mob keeps whichever withholding (meat / ESI / wool) runs longest
+  const withholding = mergedWithholding(source.extra, target.extra);
   const [updatedTarget] = await db
     .update(mobs)
-    .set({ count: (target.count || 0) + (source.count || 0), updatedAt: new Date() })
+    .set({
+      count: (target.count || 0) + (source.count || 0),
+      ...(Object.keys(withholding).length ? { extra: { ...(target.extra || {}), ...withholding } } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(mobs.id, targetId))
     .returning();
 

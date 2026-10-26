@@ -3,6 +3,7 @@ import {
   UNATTR_ID, todayStr, daysBetween, avg, fmtEid, money,
   mobStats, animalEcon, groupByMob, parsePaste,
 } from "./lambFeedlotMath.js";
+import CheckRow from "./CheckRow.jsx";
 
 // Lamb feedlot tracker — Admin only. Ported from the standalone "Kurra-Wirra Feedlot
 // Tracker" HTML tool: Mobs · Induct · Sales · Profit · Settings. Data lives in the farm
@@ -686,10 +687,9 @@ function SalesView({ data, reload, showToast, api, go }) {
             {parsed.unmatched.length > 0 && (
               <>
                 <div className={NOTE_BAD}><b>{plural(parsed.unmatched.length, "EID", "EIDs")} not in the system</b> — no cost-in known: {parsed.unmatched.slice(0, 6).map((r) => fmtEid(r.eid)).join(", ")}{parsed.unmatched.length > 6 ? " …" : ""}</div>
-                <label className="flex items-start gap-2 text-sm text-slate-600">
-                  <input type="checkbox" checked={addUnmatched} onChange={(e) => setAddUnmatched(e.target.checked)} className="mt-0.5 w-4 h-4" />
-                  <span>Record them anyway in an <b>Unattributed</b> mob (income counted, no cost-in).{unattrOk.length < parsed.unmatched.length ? ` ${plural(parsed.unmatched.length - unattrOk.length, "row has", "rows have")} no weight or price and can't be recorded.` : ""}</span>
-                </label>
+                <CheckRow checked={addUnmatched} onChange={setAddUnmatched}>
+                  <span className="text-sm text-slate-600">Record them anyway in an <b>Unattributed</b> mob (income counted, no cost-in).{unattrOk.length < parsed.unmatched.length ? ` ${plural(parsed.unmatched.length - unattrOk.length, "row has", "rows have")} no weight or price and can't be recorded.` : ""}</span>
+                </CheckRow>
               </>
             )}
 
