@@ -244,6 +244,10 @@ export const workflowState = pgTable("workflow_state", {
   // week instances in `tasks` — so editing one week's instance never changes
   // the template (and therefore never changes other weeks).
   recurTemplates: jsonb("recur_templates").default([]),
+  // Job categories (colours + names) and staff first/last names — the planner sent these on
+  // every save but the server had nowhere to keep them, so they reverted on reload
+  colors: jsonb("colors"),
+  staffDetails: jsonb("staff_details").default({}),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 

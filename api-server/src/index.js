@@ -51,6 +51,14 @@ app.get("/workflow.html", (req, res) => {
   });
 });
 
+// The planner's change-tracking logic lives in its own file so it can be tested on its own
+const workflowSyncPath = path.resolve(__dirname, "../workflow/workflow-sync.js");
+app.get("/workflow-sync.js", (req, res) => {
+  res.sendFile(workflowSyncPath, { headers: { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache" } }, (err) => {
+    if (err) res.status(404).send("// workflow-sync.js not found");
+  });
+});
+
 // ── API routes ───────────────────────────────────────────────────────────────
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
@@ -155,6 +163,16 @@ app.use("/api/lamb-feedlot", lambFeedlotRoutes);
     console.log("schema migrations complete");
   } catch (err) {
     console.error("field_notes table setup error:", err.message);
+  }
+})();
+
+// ── Weekly planner: columns for categories + staff names ──────────────────────
+(async () => {
+  try {
+    await db.execute(sql`ALTER TABLE workflow_state ADD COLUMN IF NOT EXISTS colors JSONB`);
+    await db.execute(sql`ALTER TABLE workflow_state ADD COLUMN IF NOT EXISTS staff_details JSONB DEFAULT '{}'`);
+  } catch (err) {
+    console.error("workflow_state column setup error:", err.message);
   }
 })();
 

@@ -249,6 +249,7 @@ body.m-cal .zoom-bar{display:flex}
         <div class="header-sub">Kurra-Wirra &amp; Properties</div>
       </div>
       <span class="pub-badge" id="pub-badge" style="display:none"></span>
+      <span id="save-status" style="display:none;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;margin-left:6px"></span>
     </div>
     <div class="header-right" id="header-btns"></div>
   </div>
@@ -300,7 +301,10 @@ body.m-cal .zoom-bar{display:flex}
   </div>
 </div>
 
+<script src="/workflow-sync.js?v=1"></script>
 <script>
+// If the change-tracking file didn't arrive (flaky signal), say so instead of quietly misbehaving
+if(!window.WFSync){ document.addEventListener("DOMContentLoaded",()=>document.body.insertAdjacentHTML("afterbegin","<div style='background:#fee2e2;color:#b91c1c;padding:10px 14px;font:600 13px sans-serif'>The planner didn't finish loading — nothing will save. Close it and open it again.</div>")); }
 /* ── KW Integration ─────────────────────────────────────── */
 let KW_API_BASE = "";
 let KW_AUTH_TOKEN = "";
@@ -310,10 +314,16 @@ function kwFetch(path, opts={}) {
   if(KW_AUTH_TOKEN) headers["Authorization"] = "Bearer "+KW_AUTH_TOKEN;
   return fetch(url, {...opts, headers});
 }
+// The app re-sends KW_INIT several times in the first seconds (belt and braces). Only the FIRST one
+// may load the planner and start the refresh timer — loading again would overwrite anything typed
+// in the meantime, and every extra start added another refresh timer.
+let _booted=false;
 window.addEventListener("message", e=>{
   if(e.data?.type==="KW_INIT"){
     KW_API_BASE = e.data.apiBase||"";
     KW_AUTH_TOKEN = e.data.token||"";
+    if(_booted) return;
+    _booted=true;
     if(KW_AUTH_TOKEN) isAdmin = false; // Always start view-only — unlock via 🔒 button + password
     document.body.classList.add("embedded");
     // Inject logo
@@ -403,39 +413,131 @@ let touchDropTargetId = null;
 let touchDropBefore = false;
 
 /* ── Storage ─────────────────────────────────────────────── */
+// How saving works now: the screen remembers what the server last told it (_base) and, when
+// something changes, sends only the DIFFERENCE (jobs added / edited / deleted, new order, publish...).
+// The server applies that to its own current list, so a screen that is out of date can never wipe
+// jobs added elsewhere. Every save's result is shown at the top ("Saving… / Saved ✓ / Not saved —
+// retrying…"), failed saves retry until they go through, and unsent changes are kept on this device
+// and recovered next time the planner opens. The change-tracking itself is in workflow-sync.js.
+let _base=null;            // the server's copy as last confirmed: {tasks,recurTemplates,staff,staffDetails,colors,prefs}
+let _loaded=false;         // true once we hold a copy we can safely compare against
+let _inflight=false, _again=false, _publishPending=false, _authFailed=false, _blocked=false;
+let _saveTimer=null, _retryTimer=null, _retryN=0, _refreshTimer=null;
+const wfClone=x=>JSON.parse(JSON.stringify(x));
+function localState(){ return {tasks,recurTemplates,staff,staffDetails,colors:COLORS,prefs}; }
+function setLocalState(s){
+  tasks=s.tasks||[]; recurTemplates=s.recurTemplates||[]; staff=s.staff||staff; staffDetails=s.staffDetails||{};
+  if(s.colors) COLORS=s.colors;
+  if(s.prefs) prefs=s.prefs;
+}
+function serverStateFrom(d){
+  return {tasks:d.tasks||[],recurTemplates:d.recurTemplates||[],staff:d.staff||staff,staffDetails:d.staffDetails||{},colors:d.colors||null,prefs:d.prefs||{}};
+}
+function saveCache(){
+  try{ localStorage.setItem("kwp-workflow-cache",JSON.stringify({v:2,local:localState(),base:_base,published,at:Date.now()})); }catch(_){}
+}
+function setSaveStatus(kind,msg){
+  const el=document.getElementById("save-status"); if(!el) return;
+  clearTimeout(el._t);
+  if(kind==="idle"){ el.style.display="none"; return; }
+  const look={
+    saving:["#78716c","#f5f5f4","Saving…"],
+    saved:["#15803d","#dcfce7","Saved ✓"],
+    error:["#b91c1c","#fee2e2",msg||"Not saved — retrying…"],
+    auth:["#b91c1c","#fee2e2","Not saved — please close and reopen the app to sign in again"],
+  }[kind];
+  el.style.display="inline-block"; el.style.color=look[0]; el.style.background=look[1]; el.textContent=look[2];
+  const tappable=kind==="error"||kind==="auth";
+  el.style.cursor=tappable?"pointer":""; el.onclick=tappable&&kind==="error"?()=>{ _blocked=false; _retryN=0; flushSave(); }:null;
+  if(kind==="saved") el._t=setTimeout(()=>{ el.style.display="none"; },2500);
+}
 async function loadState(){
+  let cache=null;
+  try{ const raw=localStorage.getItem("kwp-workflow-cache"); if(raw) cache=JSON.parse(raw); }catch(_){}
   try{
     const res = await kwFetch("/api/workflow",{cache:"no-store"});
     if(res.ok){
       const d = await res.json();
-      if(d){
-        if(d.tasks)   tasks=d.tasks;
-        if(d.published) published=d.published;
-        if(d.staff)   staff=d.staff;
-        if(d.staffDetails) staffDetails={...d.staffDetails};
-        if(d.colors)  COLORS=d.colors;
-        if(d.prefs)   prefs={...prefs,...d.prefs};
-        if(d.recurTemplates) recurTemplates=d.recurTemplates;
-        if(!d.published&&d.tasks?.length) published=JSON.parse(JSON.stringify(d.tasks));
+      const s = serverStateFrom(d);
+      const fresh = {tasks:s.tasks,recurTemplates:s.recurTemplates,staff:s.staff,staffDetails:s.staffDetails,colors:s.colors||COLORS,prefs:{...prefs,...s.prefs}};
+      let local=wfClone(fresh), base=wfClone(fresh), recovered=0;
+      // Changes that never reached the server last time (failed save, app closed) are not thrown away:
+      // lay them back on top of what the server has now and send them.
+      if(cache&&cache.v===2&&cache.base&&cache.local&&Date.now()-(cache.at||0)<30*86400000){
+        const pending=WFSync.computeOps(cache.base,cache.local);
+        if(WFSync.hasChanges(pending)){
+          const r=WFSync.mergeRemote(cache.base,cache.local,wfClone(fresh));
+          local=r.local; base=r.base;
+          recovered=(pending.tasks?(pending.tasks.upsert.length+pending.tasks.delete.length):0);
+        }
       }
+      setLocalState(local); _base=base;
+      published = d.published || (d.tasks&&d.tasks.length ? wfClone(d.tasks) : []);
+      _loaded=true; _authFailed=false;
+      if(recovered){ setTimeout(()=>{ toast(`Recovered ${recovered} change${recovered===1?"":"s"} that hadn't saved last time — saving now.`); flushSave(); },600); }
+    } else {
+      if(res.status===401||res.status===403){ _authFailed=true; setSaveStatus("auth"); }
+      else setSaveStatus("error","Couldn't load the planner ("+res.status+")");
     }
   }catch(e){
-    try{
-      const raw=localStorage.getItem("kwp-workflow-cache");
-      if(raw){ const d=JSON.parse(raw); if(d.tasks)tasks=d.tasks; if(d.published)published=d.published; if(d.staff)staff=d.staff; if(d.staffDetails)staffDetails=d.staffDetails||{}; if(d.colors)COLORS=d.colors; if(d.prefs)prefs={...prefs,...d.prefs}; if(d.recurTemplates)recurTemplates=d.recurTemplates; }
-    }catch(_){}
+    // No signal: show the last copy this device saw. Changes made now are kept and sent when we're back online.
+    if(cache&&cache.v===2&&cache.local){
+      setLocalState(cache.local); _base=cache.base||null; published=cache.published||[]; _loaded=!!_base;
+    } else if(cache&&!cache.v){
+      tasks=cache.tasks||[]; published=cache.published||[]; staff=cache.staff||staff; staffDetails=cache.staffDetails||{}; if(cache.colors)COLORS=cache.colors; if(cache.prefs)prefs={...prefs,...cache.prefs}; recurTemplates=cache.recurTemplates||[];
+    }
+    setSaveStatus("error","Offline — showing your last copy");
+    scheduleRetry();
   }
   ensureRecurTemplates();
 }
-let _saveTimer=null;
+// Take the server's copy into the screen without disturbing anything changed here and not yet saved
+function mergeServer(d){
+  const r=WFSync.mergeRemote(_base,localState(),serverStateFrom(d));
+  setLocalState(r.local); _base=r.base;
+  if(d.published) published=d.published;
+}
 function saveState(){
-  const payload={tasks,published,staff,staffDetails,colors:COLORS,prefs,recurTemplates};
-  _lastSnapshot=JSON.stringify(payload);
-  try{ localStorage.setItem("kwp-workflow-cache",JSON.stringify(payload)); }catch(_){}
-  if(_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer=setTimeout(()=>{
-    kwFetch("/api/workflow",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).catch(e=>console.warn("Save failed",e));
-  },400);
+  saveCache();
+  if(_authFailed){ setSaveStatus("auth"); return; }
+  setSaveStatus("saving");
+  clearTimeout(_saveTimer);
+  _saveTimer=setTimeout(()=>flushSave(),250);
+}
+function scheduleRetry(){
+  clearTimeout(_retryTimer);
+  if(_authFailed||_blocked) return;
+  _retryTimer=setTimeout(async()=>{ if(!_loaded){ await loadState(); render(); } if(_loaded) flushSave(); },WFSync.retryDelay(_retryN));
+  _retryN++;
+}
+async function flushSave(opts){
+  opts=opts||{};
+  clearTimeout(_saveTimer); clearTimeout(_retryTimer);
+  if(_inflight){ _again=true; return; }
+  if(!_base||!_loaded){ if(!opts.silent) setSaveStatus("error","Offline — will save when reconnected"); scheduleRetry(); return; }
+  const ops=WFSync.computeOps(_base,localState());
+  if(_publishPending) ops.publish=true;
+  if(!WFSync.hasChanges(ops)){ if(!opts.silent&&document.getElementById("save-status").style.display!=="none") setSaveStatus("saved"); return; }
+  _inflight=true; setSaveStatus("saving");
+  let ok=false;
+  try{
+    const body=JSON.stringify(ops);
+    const res=await kwFetch("/api/workflow/sync",{method:"POST",body,keepalive:!!opts.keepalive&&body.length<60000});
+    if(res.status===401||res.status===403){ _authFailed=true; setSaveStatus("auth"); throw new Error("auth"); }
+    if(res.status===409){ _blocked=true; let m="Reload the planner"; try{ m=(await res.json()).error||m; }catch(_){} setSaveStatus("error",m); throw new Error("blocked"); }
+    if(!res.ok) throw new Error("Server said "+res.status);
+    const server=await res.json();
+    if(ops.publish) _publishPending=false;
+    _base=WFSync.applyOpsToBase(_base,ops);   // the server now holds exactly what we sent
+    mergeServer(server);                       // ...and tells us what everyone else has changed
+    _retryN=0; ok=true; setSaveStatus("saved"); saveCache();
+  }catch(e){
+    if(!_authFailed&&!_blocked){ setSaveStatus("error","Not saved — retrying…"); scheduleRetry(); }
+  }finally{
+    _inflight=false;
+    if(_again){ _again=false; flushSave(); }
+  }
+  if(ok) render();
 }
 
 /* ── Utils ───────────────────────────────────────────────── */
@@ -444,7 +546,10 @@ function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; 
 function toISO(d){ const x=new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; }
 function fmtDate(d){ return new Date(d).toLocaleDateString("en-AU",{day:"numeric",month:"short"}); }
 function colFor(v){ return COLORS.find(c=>c.v===v)||COLORS[0]; }
-function uid(){ return Date.now()+Math.floor(Math.random()*1000); }
+// Unique even for several ids made in the same millisecond (a daily series makes seven at once —
+// the old scheme could hand two of them the same id, and deleting one then deleted both)
+let _uidSeq=Math.floor(Math.random()*1000);
+function uid(){ _uidSeq=(_uidSeq+1)%1000; return Date.now()*1000+_uidSeq; }
 function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
 function weekISO(){ return toISO(weekStart); }
 function sourceTasks(){ 
@@ -526,6 +631,7 @@ function renderHeader(){
 }
 function publishNow(){
   published=JSON.parse(JSON.stringify(tasks));
+  _publishPending=true;   // the server publishes ITS merged list; our copy is just what we see meanwhile
   saveState(); render();
   toast("Published — staff can now see the latest schedule.");
 }
@@ -951,7 +1057,20 @@ function materialiseWeekly(){
 /* ── Task Actions ────────────────────────────────────────── */
 function delTask(id){ if(!confirm("Delete this task?")) return; tasks=tasks.filter(t=>t.id!==id); saveState(); render(); }
 function dupTask(id){ const t=tasks.find(x=>x.id===id); if(!t) return; tasks.push({...t,id:uid(),createdAt:new Date().toISOString()}); saveState(); render(); }
-function toggleDone(id){ const t=sourceTasks().find(x=>x.id===id); if(t){ t.completed=!t.completed; saveState(); render(); } }
+// Ticking a job done touches only that job's flag, on its own small request — it no longer sends
+// this screen's whole list (which could overwrite other people's jobs with an old copy)
+function toggleDone(id){
+  const t=sourceTasks().find(x=>x.id===id); if(!t) return;
+  const nv=!t.completed;
+  const setAll=v=>{
+    [tasks,published].forEach(list=>list.forEach(x=>{ if(x.id===id) x.completed=v; }));
+    if(_base) _base.tasks.forEach(x=>{ if(x.id===id) x.completed=v; });   // already "saved" as far as change-tracking goes
+  };
+  setAll(nv); saveCache(); render();
+  kwFetch("/api/workflow/tasks/"+encodeURIComponent(id)+"/done",{method:"POST",body:JSON.stringify({completed:nv})})
+    .then(r=>{ if(!r.ok&&r.status!==404) throw new Error("status "+r.status); })   // 404 = a job not saved yet; its tick goes out with the job
+    .catch(()=>{ setAll(!nv); saveCache(); render(); toast("Couldn't save that tick — check your signal and try again."); });
+}
 
 /* ── Task Detail (staff) ─────────────────────────────────── */
 function openTaskDetail(id){
@@ -1249,20 +1368,31 @@ if(!isEmbedded){
   const splash=document.getElementById("splash");
   if(splash){ splash.style.opacity="0"; setTimeout(()=>splash.remove(),500); }
 }
+// Pulls in other people's changes. The merge never touches anything changed on this screen and not
+// yet saved, so a refresh can no longer make a job you've just added vanish.
+async function refreshFromServer(){
+  if(_inflight) return;
+  if(!_loaded){ await loadState(); if(_loaded) render(); return; }
+  if(document.getElementById("modal-overlay").classList.contains("open")||dragId!==null||touchDragId!==null) return;
+  try{
+    const res=await kwFetch("/api/workflow",{cache:"no-store"}); if(!res.ok) return;
+    const d=await res.json();
+    if(_inflight) return;   // a save started while this was on its way; that save's reply does the merging
+    const before=JSON.stringify([localState(),published]);
+    mergeServer(d);
+    if(JSON.stringify([localState(),published])!==before) render();
+  }catch(_){}
+}
 function startAutoRefresh(){
-  _lastSnapshot=JSON.stringify({tasks,published,staff,prefs,recurTemplates});
-  setInterval(async()=>{
-    if(document.getElementById("modal-overlay").classList.contains("open")||dragId!==null) return;
-    try{
-      const res=await kwFetch("/api/workflow",{cache:"no-store"}); if(!res.ok) return;
-      const d=await res.json();
-      const snap=JSON.stringify({tasks:d.tasks||[],published:d.published||[],staff:d.staff||staff,prefs:d.prefs||prefs,recurTemplates:d.recurTemplates||recurTemplates});
-      if(snap!==_lastSnapshot){
-        if(d.tasks)tasks=d.tasks; if(d.published)published=d.published; if(d.staff)staff=d.staff; if(d.staffDetails)staffDetails=d.staffDetails||{}; if(d.colors)COLORS=d.colors; if(d.prefs)prefs={...prefs,...d.prefs}; if(d.recurTemplates)recurTemplates=d.recurTemplates;
-        _lastSnapshot=snap; render();
-      }
-    }catch(_){}
-  },30000);
+  if(_refreshTimer) return;   // only ever one timer, however many times the app says hello
+  _refreshTimer=setInterval(refreshFromServer,30000);
+  // Leaving the planner (or locking the phone) must not leave a change unsent
+  document.addEventListener("visibilitychange",()=>{
+    if(document.visibilityState==="hidden") flushSave({keepalive:true,silent:true});
+    else refreshFromServer();
+  });
+  window.addEventListener("pagehide",()=>flushSave({keepalive:true,silent:true}));
+  window.addEventListener("online",()=>{ _blocked=false; flushSave(); refreshFromServer(); });
 }
 </script>
 </body>
