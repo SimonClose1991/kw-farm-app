@@ -535,8 +535,14 @@ function makeDistanceBadgeIcon(text, color = "#2563eb") {
 }
 
 // Approximate farm locations (lat, lng) — used to centre the interactive map
+// The feedlot sits at Arundale. It's its own farm so its pens can be paddocks with mobs in them.
+// Everyone can see it, whatever farms their account is limited to.
+const FEEDLOT_FARM = "Arundale - Feedlot";
 const FARM_CENTERS = {
   Arundale: [-37.21, 141.62],
+  // A hair (~11 m) off Arundale's centre on purpose: the map remembers its zoom/position per
+  // centre, so an identical centre would make Arundale and the Feedlot share one saved view
+  [FEEDLOT_FARM]: [-37.2101, 141.6201],
   Hamilton: [-37.745, 142.02],
   "Kurra-Wirra": [-36.95, 141.85],
   Mooralla: [-37.36, 141.65],
@@ -3415,11 +3421,11 @@ export default function App() {
   const [dragOverPaddock, setDragOverPaddock] = useState(null);
   const [showPaddockPicker, setShowPaddockPicker] = useState(false); // bottom-sheet paddock picker in mob details
   const [showInsightPicker, setShowInsightPicker] = useState(false); // insight overlay picker on map
-  const [farmsMobs, setFarmsMobs] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
+  const [farmsMobs, setFarmsMobs] = useState({ Arundale: [], [FEEDLOT_FARM]: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const [farmName, setFarmName] = useState(() => {
     try { return localStorage.getItem("kw_home_farm") || "Arundale"; } catch { return "Arundale"; }
   });
-  const [farmsPaddocks, setFarmsPaddocks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
+  const [farmsPaddocks, setFarmsPaddocks] = useState({ Arundale: [], [FEEDLOT_FARM]: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const paddocks = farmsPaddocks[farmName] || [];
   const setPaddocks = (updater) => {
     const targetFarm = farmName;
@@ -3428,7 +3434,7 @@ export default function App() {
       [targetFarm]: typeof updater === "function" ? updater(prev[targetFarm] || []) : updater,
     }));
   };
-  const [farmsLandmarks, setFarmsLandmarks] = useState({ Arundale: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
+  const [farmsLandmarks, setFarmsLandmarks] = useState({ Arundale: [], [FEEDLOT_FARM]: [], Hamilton: [], "Kurra-Wirra": [], Mooralla: [], Carramar: [] });
   const landmarks = farmsLandmarks[farmName] || [];
   const setLandmarks = (updater) => {
     const targetFarm = farmName;
@@ -3763,12 +3769,14 @@ export default function App() {
   }, [loggedInEmail, farmName]);
 
   // ── Farm access control — must be declared before any effect that uses it ────
-  const ALL_FARM_NAMES = ["Arundale", "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"];
+  const ALL_FARM_NAMES = ["Arundale", FEEDLOT_FARM, "Hamilton", "Kurra-Wirra", "Mooralla", "Carramar"];
+  // The farms an Admin can switch on/off per account — the Feedlot isn't one of them, everyone has it
+  const RESTRICTABLE_FARMS = ALL_FARM_NAMES.filter(f => f !== FEEDLOT_FARM);
   const accessibleFarms = React.useMemo(() => {
     if (!currentUser || currentUser.role === "Admin") return ALL_FARM_NAMES;
     const allowed = currentUser.allowedFarms || [];
     if (!Array.isArray(allowed) || allowed.length === 0) return ALL_FARM_NAMES;
-    return ALL_FARM_NAMES.filter(f => allowed.includes(f));
+    return ALL_FARM_NAMES.filter(f => f === FEEDLOT_FARM || allowed.includes(f));
   }, [currentUser]);
 
   // If current farmName is not accessible (e.g. after role change), reset to first accessible farm
@@ -10841,7 +10849,7 @@ export default function App() {
                       <div className="text-right">
                         <div className="text-[10px] text-slate-400 mb-1">Farm access:</div>
                         <div className="flex flex-wrap gap-1 justify-end">
-                          {ALL_FARM_NAMES.map(f => {
+                          {RESTRICTABLE_FARMS.map(f => {
                             const allowed = a.allowedFarms || [];
                             const hasAccess = allowed.length === 0 || allowed.includes(f);
                             return (
@@ -10849,10 +10857,10 @@ export default function App() {
                                 onClick={async () => {
                                   const current = a.allowedFarms || [];
                                   // Empty array = all farms. Build explicit list when restricting.
-                                  let base = current.length === 0 ? [...ALL_FARM_NAMES] : [...current];
+                                  let base = current.length === 0 ? [...RESTRICTABLE_FARMS] : [...current];
                                   const next = base.includes(f) ? base.filter(x => x !== f) : [...base, f];
                                   // If all farms selected, store as empty (= no restriction)
-                                  const toStore = next.length === ALL_FARM_NAMES.length ? [] : next;
+                                  const toStore = next.length === RESTRICTABLE_FARMS.length ? [] : next;
                                   const prevFarms = a.allowedFarms || [];
                                   setAccounts(prev => prev.map(acc => acc.id === a.id ? { ...acc, allowedFarms: toStore } : acc));
                                   try {

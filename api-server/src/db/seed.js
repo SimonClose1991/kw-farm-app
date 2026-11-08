@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 
 const FARM_CENTERS = {
   Arundale: [-37.21, 141.62],
+  "Arundale - Feedlot": [-37.2101, 141.6201],
   Hamilton: [-37.745, 142.02],
   "Kurra-Wirra": [-36.95, 141.85],
   Mooralla: [-37.36, 141.65],

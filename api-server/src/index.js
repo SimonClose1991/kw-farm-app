@@ -158,6 +158,21 @@ app.use("/api/lamb-feedlot", lambFeedlotRoutes);
   }
 })();
 
+// ── "Arundale - Feedlot" farm ────────────────────────────────────────────────
+// The feedlot is its own farm (so its pens can be paddocks with mobs in them) and the app
+// has no screen for adding farms, so the row is created here. A no-op once it exists.
+// Map centre is a hair off Arundale's — the app remembers each farm's map view by centre.
+(async () => {
+  try {
+    await db.execute(sql`
+      INSERT INTO farms (name, center_lat, center_lng) VALUES ('Arundale - Feedlot', -37.2101, 141.6201)
+      ON CONFLICT (name) DO NOTHING
+    `);
+  } catch (err) {
+    console.error("feedlot farm setup error:", err.message);
+  }
+})();
+
 // ── Sheep feedlot tables ─────────────────────────────────────────────────────
 // Separate block so a failure in the migrations above can't stop these (and
 // vice versa). IF NOT EXISTS makes this a no-op wherever the tables already exist.
