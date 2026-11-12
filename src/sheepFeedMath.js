@@ -28,7 +28,9 @@ export const splitFor = (period, settings) => {
   return period === "PM" ? num(settings?.splitPm, 0.4) : num(settings?.splitAm, 0.6);
 };
 
-export const activeOnly = (pens) => pens.filter((p) => p.active);
+// A pen is fed when it's switched on AND has sheep in it — an empty pen drops out of the feed run
+export const isFeeding = (p) => !!p.active && num(p.headCount) > 0;
+export const activeOnly = (pens) => pens.filter(isFeeding);
 
 export const totalHead = (pens) => activeOnly(pens).reduce((s, p) => s + num(p.headCount), 0);
 

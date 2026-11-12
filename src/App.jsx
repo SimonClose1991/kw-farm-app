@@ -8815,7 +8815,10 @@ export default function App() {
       {tab === "workflow" && <WorkflowScreen setTab={setTab} currentAccount={currentAccount} />}
       {tab === "cattle_feeding" && <CattleFeedingScreen setTab={setTab} showToast={showToast} api={api} />}
       {tab === "lamb_feedlot" && isAdmin && <LambFeedlotScreen setTab={setTab} showToast={showToast} api={api} isAdmin={isAdmin} />}
-      {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} isAdmin={isAdmin} canEdit={canEdit} currentAccount={currentAccount} />}
+      {tab === "sheep_feeding" && <SheepFeedingScreen setTab={setTab} showToast={showToast} api={api} isAdmin={isAdmin} canEdit={canEdit} currentAccount={currentAccount}
+        breedOptions={[...BREEDS_DEFAULT.Sheep, ...(customBreeds.Sheep || []).filter((b) => !BREEDS_DEFAULT.Sheep.includes(b))]}
+        onBreedAdded={(b) => setCustomBreeds((prev) => ({ ...prev, Sheep: [...new Set([...(prev.Sheep || []), b])] }))}
+        onMobsChanged={() => api.listMobs(FEEDLOT_FARM).then((res) => setFarmsMobs((prev) => ({ ...prev, [FEEDLOT_FARM]: res }))).catch(() => {})} />}
       <div className="md:hidden"><BottomNav /></div>
       {selectedMob && detailView === "mob" && MobDetails()}
       {showMenu && MenuScreen()}

@@ -262,6 +262,8 @@ export const sheepPens = pgTable("sheep_pens", {
   active: boolean("active").notNull().default(true),
   orderIndex: integer("order_index").notNull().default(0),
   notes: text("notes"),
+  // Linked to a P# paddock in the "Arundale - Feedlot" farm; head count then comes from the mobs there
+  paddockId: integer("paddock_id").unique().references(() => paddocks.id, { onDelete: "set null" }),
 });
 
 export const sheepFeedHistory = pgTable("sheep_feed_history", {

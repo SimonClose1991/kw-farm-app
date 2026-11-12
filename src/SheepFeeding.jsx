@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
-  num, rationPct, adjustPercent, penDailyKg, penFeedKg, splitFor, activeOnly, totalHead,
+  num, rationPct, adjustPercent, penDailyKg, penFeedKg, splitFor, activeOnly, isFeeding, totalHead,
   mixerLoad, loadBreakdown, mixTotalPerHead, eventKg, runTotals, formatKg,
 } from "./sheepFeedMath.js";
 
@@ -28,7 +28,7 @@ const freshRun = (feeder, period, settings) => ({
   penIndex: 0,
 });
 
-export default function SheepFeedingScreen({ setTab, showToast, api, isAdmin, canEdit, currentAccount }) {
+export default function SheepFeedingScreen({ setTab, showToast, api, isAdmin, canEdit, currentAccount, breedOptions, onMobsChanged, onBreedAdded }) {
   const [sheepTab, setSheepTab] = useState("run");
   const [pens, setPens] = useState([]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -58,6 +58,15 @@ export default function SheepFeedingScreen({ setTab, showToast, api, isAdmin, ca
   };
   useEffect(() => { load(); }, []);
 
+  // Re-read just the pens (head counts come live from the mobs on the map, which may have changed
+  // on another phone). Not done mid-run, so the pen order under your feet stays put.
+  const reloadPens = () => api.getSheepPens().then(setPens).catch((err) => showToast(err.message || "Couldn't refresh the pens"));
+  const runInProgress = !!run && (run.events.length > 0 || run.penIndex > 0);
+  const openTab = (id) => {
+    setSheepTab(id);
+    if (id === "pens" || id === "ration" || (id === "run" && !runInProgress)) reloadPens();
+  };
+
   if (loading) return <div className="flex items-center justify-center min-h-screen text-slate-400">Loading Sheep Feeding…</div>;
   if (loadError || !run) return (
     <div className="p-6 text-center">
@@ -85,7 +94,7 @@ export default function SheepFeedingScreen({ setTab, showToast, api, isAdmin, ca
       </div>
       <div className="flex gap-1 px-4 py-3 overflow-x-auto">
         {tabs.map((t) => (
-          <button key={t.id} onClick={() => setSheepTab(t.id)}
+          <button key={t.id} onClick={() => openTab(t.id)}
             className={`px-4 py-2 rounded-2xl text-sm font-semibold flex-shrink-0 border ${activeTab === t.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}>
             {t.label}
           </button>
@@ -98,7 +107,8 @@ export default function SheepFeedingScreen({ setTab, showToast, api, isAdmin, ca
         )}
         {activeTab === "ration" && <RationTab pens={pens} settings={settings} isAdmin={isAdmin} />}
         {activeTab === "pens" && (
-          <PensTab pens={pens} setPens={setPens} settings={settings} canEdit={canEdit} showToast={showToast} api={api} />
+          <PensTab pens={pens} setPens={setPens} settings={settings} canEdit={canEdit} showToast={showToast} api={api}
+            breedOptions={breedOptions} onMobsChanged={onMobsChanged} onBreedAdded={onBreedAdded} reloadPens={reloadPens} />
         )}
         {activeTab === "history" && (
           <HistoryTab history={history} setHistory={setHistory} canEdit={canEdit} showToast={showToast} api={api} />
@@ -241,7 +251,7 @@ function FeedRunTab({ pens, setPens, settings, run, setRun, setHistory, showToas
   );
 
   if (activePens.length === 0) {
-    return <div className={`${CARD} text-center text-slate-400 text-sm py-8`}>No active pens. Add or switch on pens in the Pens tab.</div>;
+    return <div className={`${CARD} text-center text-slate-400 text-sm py-8`}>No pens to feed right now — empty pens are skipped. Put sheep in a pen (or switch one on) in the Pens tab.</div>;
   }
 
   // ── Run complete ──
@@ -441,34 +451,63 @@ function RationTab({ pens, settings, isAdmin }) {
 }
 
 // ── Pens ─────────────────────────────────────────────────────────────────────
+// Pens P1–P30 come from the "Arundale - Feedlot" map farm. A pen's mob name / breed / head are the
+// mob standing in that paddock: typing them here creates or updates that mob on the map, and
+// anything done to the mob on the map (deaths, sales, moves) shows up here.
 const penToDraft = (p) => ({
-  name: p.name || "", ration: p.ration || "",
+  // for a linked pen the name / "ration" label are just the paddock and the mob — only mobName is edited
+  name: p.linked ? "" : (p.name || ""), ration: p.linked ? "" : (p.ration || ""),
+  mobName: p.mobName || "", breed: p.breed && p.breed !== "Various" ? p.breed : "",
   headCount: String(num(p.headCount)), kgPerHead: String(num(p.kgPerHead)),
   rationPercent: String(rationPct(p)),
 });
 
 // Compared as numbers, so "1.50" typed vs 1.5 saved doesn't count as an unsaved edit
 const sameDraft = (a, b) =>
-  a.name === b.name && a.ration === b.ration &&
+  a.name === b.name && a.ration === b.ration && a.mobName === b.mobName && a.breed === b.breed &&
   num(a.headCount) === num(b.headCount) && num(a.kgPerHead) === num(b.kgPerHead) &&
   num(a.rationPercent, 100) === num(b.rationPercent, 100);
 
-function PenCard({ pen, index, total, canEdit, onSave, onToggle, onMove, onDelete }) {
+const NEW_BREED = "__new__";
+
+function PenCard({ pen, index, total, canEdit, breedOptions, onSave, onToggle, onMove, onDelete }) {
   const [draft, setDraft] = useState(() => penToDraft(pen));
   const [busy, setBusy] = useState(false);
+  const [newBreed, setNewBreed] = useState(false);
+  const [replacing, setReplacing] = useState(false); // "replace these mobs with one" on a pen holding several
   const pristine = sameDraft(draft, penToDraft(pen));
-  // Pick up changes made elsewhere (e.g. +5% in a feed run) unless there are unsaved edits
+  // Pick up changes made elsewhere (e.g. +5% in a feed run, or a recount on the map) unless there are unsaved edits
   const saved = useRef(penToDraft(pen));
   useEffect(() => {
     const incoming = penToDraft(pen);
     if (sameDraft(draft, saved.current)) setDraft(incoming);
     saved.current = incoming;
-  }, [pen.name, pen.ration, pen.headCount, pen.kgPerHead, pen.rationPercent]);
+  }, [pen.name, pen.ration, pen.mobName, pen.breed, pen.headCount, pen.kgPerHead, pen.rationPercent]);
 
+  // once a typed-in breed is saved it is in the list, so go back to the dropdown
+  useEffect(() => { if (newBreed && draft.breed && (breedOptions || []).includes(draft.breed) && saved.current.breed === draft.breed) setNewBreed(false); }, [newBreed, draft.breed, breedOptions, pen.breed]);
+
+  const linked = !!pen.linked;
+  const multi = !!pen.multiMob;
+  useEffect(() => { if (!multi) setReplacing(false); }, [multi]);
+  const editMob = linked && (!multi || replacing);
+  const empty = num(pen.headCount) === 0;
   const dailyKg = penDailyKg({ headCount: draft.headCount, kgPerHead: draft.kgPerHead, rationPercent: draft.rationPercent });
   const set = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
+  const title = linked ? `${pen.name} · ${pen.paddockName}` : pen.name;
+  const breeds = [...new Set([...(breedOptions || []), ...(draft.breed && !newBreed ? [draft.breed] : [])])];
 
   const save = async () => {
+    if (linked) {
+      if (editMob && num(draft.headCount) > 0 && !draft.mobName.trim()) { onSave(null, "Give the mob a name"); return; }
+      if (multi && replacing && !window.confirm(`Replace the ${pen.mobs.length} mobs in ${pen.paddockName} with one mob of ${num(draft.headCount)} head? The old mobs are archived (history kept); their average weight, withholding and history carry across to the new mob.`)) return;
+      setBusy(true);
+      const fields = { kgPerHead: num(draft.kgPerHead), rationPercent: num(draft.rationPercent, 100) };
+      if (editMob) Object.assign(fields, { mobName: draft.mobName, breed: draft.breed, headCount: num(draft.headCount), ...(multi ? { replace: true } : {}) });
+      await onSave(pen.id, fields, { typedMobWithNoHead: !multi && empty && num(draft.headCount) === 0 && !!draft.mobName.trim() });
+      setBusy(false);
+      return;
+    }
     if (!draft.name.trim()) { onSave(null, "Pen name can't be blank"); return; }
     setBusy(true);
     await onSave(pen.id, {
@@ -480,16 +519,18 @@ function PenCard({ pen, index, total, canEdit, onSave, onToggle, onMove, onDelet
 
   if (!canEdit) {
     return (
-      <div className={`${CARD} ${pen.active ? "" : "opacity-60"}`}>
+      <div className={`${CARD} ${isFeeding(pen) ? "" : "opacity-60"}`}>
         <div className="flex items-start justify-between">
           <div>
-            <div className="font-bold text-slate-800">{pen.name}</div>
-            <div className="text-xs text-slate-400">{pen.ration} · {num(pen.headCount).toLocaleString()} head · {num(pen.kgPerHead)} kg/head · {rationPct(pen)}%</div>
+            <div className="font-bold text-slate-800">{title}</div>
+            {empty
+              ? <div className="text-xs text-slate-400">Empty — skipped in the feed run</div>
+              : <div className="text-xs text-slate-400">{[pen.mobName || pen.ration, pen.breed].filter(Boolean).join(" · ")} · {num(pen.headCount).toLocaleString()} head · {num(pen.kgPerHead)} kg/head · {rationPct(pen)}%</div>}
             {pen.notes && <div className="text-xs text-amber-600 mt-1">📝 {pen.notes}</div>}
           </div>
           <div className="text-right">
             <div className="font-bold text-slate-700">{formatKg(penDailyKg(pen))}</div>
-            <div className="text-xs text-slate-400">per day · {pen.active ? "Active" : "Inactive"}</div>
+            <div className="text-xs text-slate-400">per day · {isFeeding(pen) ? "Feeding" : "Not fed"}</div>
           </div>
         </div>
       </div>
@@ -497,35 +538,87 @@ function PenCard({ pen, index, total, canEdit, onSave, onToggle, onMove, onDelet
   }
 
   return (
-    <div className={`${CARD} ${pen.active ? "" : "opacity-70"}`}>
+    <div className={`${CARD} ${isFeeding(pen) ? "" : "opacity-70"}`}>
       <div className="flex items-start justify-between mb-2 gap-2">
         <div className="flex flex-col">
           <button onClick={() => onMove(pen.id, -1)} disabled={index === 0} className="text-slate-400 disabled:opacity-20 leading-none px-1">▲</button>
           <button onClick={() => onMove(pen.id, 1)} disabled={index === total - 1} className="text-slate-400 disabled:opacity-20 leading-none px-1 mt-1">▼</button>
         </div>
         <div className="flex-1 min-w-0">
-          <label className={LABEL}>Name</label>
-          <input value={draft.name} onChange={set("name")} className={INPUT} />
+          {linked ? (
+            <>
+              <div className="font-bold text-slate-800">{title}</div>
+              <div className="text-xs text-slate-400">{empty ? "Empty — skipped in the feed run" : "On the Arundale - Feedlot map"}</div>
+            </>
+          ) : (
+            <>
+              <label className={LABEL}>Name</label>
+              <input value={draft.name} onChange={set("name")} className={INPUT} />
+              <div className="text-xs text-amber-600 mt-1">Not linked to a map paddock — head is counted by hand here.</div>
+            </>
+          )}
         </div>
         <button onClick={() => onToggle(pen)}
           className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${pen.active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>
-          {pen.active ? "Active" : "Inactive"}
+          {pen.active ? "Feeding on" : "Switched off"}
         </button>
       </div>
-      <div className="mb-2">
-        <label className={LABEL}>Type</label>
-        <input value={draft.ration} onChange={set("ration")} placeholder="Grower, Finisher…" className={INPUT} />
-      </div>
+
+      {linked && multi && (
+        <div className="text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-xl px-3 py-2 mb-2">
+          {pen.mobs.length} mobs are in this pen ({pen.mobs.map((m) => `${m.name} ${m.count}`).join(", ")}). Total head {num(pen.headCount).toLocaleString()}.
+          {replacing
+            ? <> Enter the one mob that replaces them below — their average weight, withholding and history carry across. <button onClick={() => { setReplacing(false); setDraft(penToDraft(pen)); }} className="underline font-semibold">Cancel</button></>
+            : <> Change them on the map, or <button onClick={() => { setReplacing(true); setDraft((d) => ({ ...d, mobName: "", breed: "" })); }} className="underline font-semibold">replace them with one mob</button>.</>}
+        </div>
+      )}
+
+      {editMob && (
+        <>
+          <div className="mb-2">
+            <label className={LABEL}>Mob name</label>
+            <input value={draft.mobName} onChange={set("mobName")} placeholder="e.g. Merino lambs July" className={INPUT} />
+          </div>
+          <div className="mb-2">
+            <label className={LABEL}>Breed</label>
+            {newBreed ? (
+              <div className="flex gap-2">
+                <input value={draft.breed} onChange={set("breed")} placeholder="Type the new breed" autoFocus className={INPUT} />
+                <button onClick={() => { setNewBreed(false); setDraft((d) => ({ ...d, breed: saved.current.breed })); }} className="text-slate-400 text-xs px-2">Cancel</button>
+              </div>
+            ) : (
+              <select value={draft.breed} onChange={(e) => { if (e.target.value === NEW_BREED) { setNewBreed(true); setDraft((d) => ({ ...d, breed: "" })); } else set("breed")(e); }} className={INPUT}>
+                <option value="">{empty ? "Pick a breed (Mixed if left blank)" : "—"}</option>
+                {breeds.map((b) => <option key={b} value={b}>{b}</option>)}
+                <option value={NEW_BREED}>+ Add a new breed…</option>
+              </select>
+            )}
+          </div>
+        </>
+      )}
+
+      {!linked && (
+        <div className="mb-2">
+          <label className={LABEL}>Type</label>
+          <input value={draft.ration} onChange={set("ration")} placeholder="Grower, Finisher…" className={INPUT} />
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-2">
-        <div><label className={LABEL}>Head</label><input type="number" inputMode="numeric" value={draft.headCount} onChange={set("headCount")} className={`${INPUT} text-center font-bold`} /></div>
+        <div>
+          <label className={LABEL}>Head</label>
+          <input type="number" inputMode="numeric" value={draft.headCount} onChange={set("headCount")} disabled={multi && !replacing}
+            className={`${INPUT} text-center font-bold ${multi && !replacing ? "bg-slate-50 text-slate-400" : ""}`} />
+        </div>
         <div><label className={LABEL}>kg/head/day</label><input type="number" inputMode="decimal" step="any" value={draft.kgPerHead} onChange={set("kgPerHead")} className={`${INPUT} text-center font-bold`} /></div>
         <div><label className={LABEL}>Ration %</label><input type="number" inputMode="numeric" value={draft.rationPercent} onChange={set("rationPercent")} className={`${INPUT} text-center font-bold`} /></div>
       </div>
+      {linked && !multi && empty && <div className="text-xs text-slate-400 mt-2">Enter a head count and the mob is created on the map (age class Lambs, tag Sale Lambs, DSE 1).</div>}
       {pen.notes && <div className="text-xs text-amber-600 mt-2">📝 {pen.notes}</div>}
       <div className="flex items-center justify-between mt-3">
         <div className="text-xs text-slate-400">Daily total <span className="font-bold text-slate-700">{formatKg(dailyKg)}</span></div>
         <div className="flex gap-2">
-          <button onClick={() => onDelete(pen)} className="text-rose-500 text-xs font-semibold px-2">Delete</button>
+          {!linked && <button onClick={() => onDelete(pen)} className="text-rose-500 text-xs font-semibold px-2">Delete</button>}
           {!pristine && <button onClick={save} disabled={busy} className={`${BTN_DARK} px-4 py-1.5 ${busy ? "opacity-50" : ""}`}>{busy ? "Saving…" : "Save"}</button>}
         </div>
       </div>
@@ -533,17 +626,17 @@ function PenCard({ pen, index, total, canEdit, onSave, onToggle, onMove, onDelet
   );
 }
 
-function PensTab({ pens, setPens, settings, canEdit, showToast, api }) {
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ name: "", ration: "Grower", headCount: "", kgPerHead: "" });
-  const defaultKg = Math.round(mixTotalPerHead(settings.ingredients) * 10000) / 10000;
-
-  const onSave = async (id, fields) => {
+function PensTab({ pens, setPens, settings, canEdit, showToast, api, breedOptions, onMobsChanged, onBreedAdded, reloadPens }) {
+  const onSave = async (id, fields, meta) => {
     if (id === null) { showToast(fields); return; }
     try {
       const updated = await api.updateSheepPen(id, fields);
       setPens((prev) => prev.map((p) => (p.id === id ? updated : p)));
-      showToast("Pen saved ✓");
+      if (fields.mobName !== undefined || fields.headCount !== undefined || fields.breed !== undefined) onMobsChanged?.();
+      if (fields.breed && !(breedOptions || []).includes(fields.breed)) {
+        try { await api.addBreed("Sheep", fields.breed); onBreedAdded?.(fields.breed); } catch (_) { /* the mob is saved either way */ }
+      }
+      showToast(meta?.typedMobWithNoHead ? "Saved — the mob is created once you enter a head count" : "Pen saved ✓");
     } catch (err) { showToast(err.message || "Couldn't save the pen"); }
   };
 
@@ -575,48 +668,28 @@ function PensTab({ pens, setPens, settings, canEdit, showToast, api }) {
     } catch (err) { showToast(err.message || "Couldn't delete the pen"); }
   };
 
-  const addPen = async () => {
-    if (!form.name.trim()) { showToast("Give the pen a name"); return; }
-    try {
-      const created = await api.createSheepPen({
-        name: form.name, ration: form.ration || "Grower", headCount: num(form.headCount),
-        kgPerHead: form.kgPerHead === "" ? defaultKg : num(form.kgPerHead), rationPercent: 100, active: true,
-      });
-      setPens((prev) => [...prev, created]);
-      setForm({ name: "", ration: "Grower", headCount: "", kgPerHead: "" });
-      setAdding(false);
-      showToast("Pen added ✓");
-    } catch (err) { showToast(err.message || "Couldn't add the pen"); }
-  };
-
-  const dailyTotal = activeOnly(pens).reduce((s, p) => s + penDailyKg(p), 0);
+  const feeding = activeOnly(pens);
+  const dailyTotal = feeding.reduce((s, p) => s + penDailyKg(p), 0);
+  const emptyCount = pens.filter((p) => num(p.headCount) === 0).length;
 
   return (
     <>
-      <div className={`${CARD} grid grid-cols-2 gap-3 text-center`}>
-        <div><div className="text-xs text-slate-400 font-semibold">Active head</div><div className="text-2xl font-extrabold text-slate-800">{totalHead(pens).toLocaleString()}</div></div>
+      <div className={`${CARD} grid grid-cols-3 gap-3 text-center`}>
+        <div><div className="text-xs text-slate-400 font-semibold">Head fed</div><div className="text-2xl font-extrabold text-slate-800">{totalHead(pens).toLocaleString()}</div></div>
+        <div><div className="text-xs text-slate-400 font-semibold">Pens fed</div><div className="text-2xl font-extrabold text-slate-800">{feeding.length}<span className="text-sm text-slate-400 font-semibold"> / {pens.length}</span></div></div>
         <div><div className="text-xs text-slate-400 font-semibold">Daily total</div><div className="text-2xl font-extrabold text-slate-800">{formatKg(dailyTotal)}</div></div>
       </div>
-      {!canEdit && <div className="text-xs text-slate-400 px-1">Only Admins and Managers can edit pens.</div>}
-      {pens.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">No pens yet.</div>}
-      {pens.map((pen, i) => (
-        <PenCard key={pen.id} pen={pen} index={i} total={pens.length} canEdit={canEdit}
-          onSave={onSave} onToggle={onToggle} onMove={onMove} onDelete={onDelete} />
-      ))}
-      {canEdit && (adding ? (
-        <div className={`${CARD} space-y-2`}>
-          <div><label className={LABEL}>Pen name</label><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={INPUT} /></div>
-          <div><label className={LABEL}>Type</label><input value={form.ration} onChange={(e) => setForm({ ...form, ration: e.target.value })} className={INPUT} /></div>
-          <div className="grid grid-cols-2 gap-2">
-            <div><label className={LABEL}>Head count</label><input type="number" inputMode="numeric" value={form.headCount} onChange={(e) => setForm({ ...form, headCount: e.target.value })} className={INPUT} /></div>
-            <div><label className={LABEL}>kg/head/day</label><input type="number" inputMode="decimal" step="any" value={form.kgPerHead} onChange={(e) => setForm({ ...form, kgPerHead: e.target.value })} placeholder={defaultKg ? String(defaultKg) : "0"} className={INPUT} /></div>
-          </div>
-          {defaultKg > 0 && <div className="text-xs text-slate-400">Left blank, kg/head/day uses the total of your mix ingredients ({defaultKg}).</div>}
-          <button onClick={addPen} className={`${BTN_DARK} w-full`}>Add pen</button>
-          <button onClick={() => setAdding(false)} className="w-full text-slate-400 text-sm">Cancel</button>
+      <div className="flex items-center justify-between px-1">
+        <div className="text-xs text-slate-400">
+          {canEdit ? "Mob name, breed and head are the mob on the Arundale - Feedlot map — change them here or there." : "Only Admins and Managers can edit pens."}
+          {emptyCount > 0 && ` ${emptyCount} empty pen${emptyCount === 1 ? "" : "s"} skipped in the feed run.`}
         </div>
-      ) : (
-        <button onClick={() => setAdding(true)} className="w-full border-2 border-dashed border-slate-300 rounded-2xl py-3 text-slate-400 font-semibold text-sm">+ Add pen</button>
+        <button onClick={reloadPens} className="text-xs font-semibold text-stone-600 border border-stone-200 rounded-xl px-3 py-1.5 bg-white flex-shrink-0 ml-2">↻ Refresh</button>
+      </div>
+      {pens.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">No pens yet. Pens appear for each paddock named P1, P2… in the Arundale - Feedlot farm.</div>}
+      {pens.map((pen, i) => (
+        <PenCard key={pen.id} pen={pen} index={i} total={pens.length} canEdit={canEdit} breedOptions={breedOptions}
+          onSave={onSave} onToggle={onToggle} onMove={onMove} onDelete={onDelete} />
       ))}
     </>
   );

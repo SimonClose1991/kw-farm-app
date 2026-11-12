@@ -4,6 +4,7 @@ import { eq, asc, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { sheepPens, sheepFeedHistory, sheepSettings, sheepCurrentRun } from "../db/schema.js";
 import { requireAuth, requireEditor, requireAdmin } from "../auth.js";
+import { syncPens, listPens, savePen, defaultKgFromSettings, PenError } from "../sheepPensStore.js";
 
 const router = Router();
 
@@ -11,6 +12,7 @@ const router = Router();
 // failed query leaves the request hanging instead of returning an error
 const handle = (fn) => (req, res) =>
   Promise.resolve(fn(req, res)).catch((err) => {
+    if (err instanceof PenError) return res.status(err.status).json({ error: err.message });
     console.error("Sheep feeding error:", err);
     res.status(500).json({ error: "Something went wrong on the server" });
   });
@@ -25,9 +27,13 @@ const clampInt = (v, min, max) => Math.max(min, Math.min(max, Math.round(Number(
 // Pens are saved one at a time. (This used to delete EVERY pen and re-insert the
 // whole list on each save, outside a transaction — one failure part-way and all
 // pens were gone.)
+// Pens on a P# paddock in the "Arundale - Feedlot" farm are linked to it: head count and mob
+// name/breed come LIVE from the mobs on the map (see sheepPensStore.js). Opening the list also links
+// any new P# paddock to a pen. Old hand-counted pens that match no paddock stay exactly as they were.
 router.get("/pens", requireAuth, handle(async (req, res) => {
-  const pens = await db.select().from(sheepPens).orderBy(asc(sheepPens.orderIndex));
-  res.json(pens.map(penOut));
+  const [settings] = await db.select().from(sheepSettings).where(eq(sheepSettings.id, "singleton"));
+  await syncPens(db, { defaultKg: defaultKgFromSettings(settings) });
+  res.json(await listPens(db));
 }));
 
 router.post("/pens", requireAuth, requireEditor, handle(async (req, res) => {
@@ -62,6 +68,12 @@ router.put("/pens/order", requireAuth, requireEditor, handle(async (req, res) =>
 
 router.put("/pens/:id", requireAuth, requireEditor, handle(async (req, res) => {
   const b = req.body || {};
+  const [existingPen] = await db.select().from(sheepPens).where(eq(sheepPens.id, req.params.id));
+  if (!existingPen) return res.status(404).json({ error: "Pen not found" });
+  // Linked pen: the mob behind it is created / updated / archived along with the feeding settings
+  if (existingPen.paddockId != null) {
+    return res.json(await savePen(db, req.params.id, b, { authorName: req.user?.name }));
+  }
   const updates = {};
   if (b.name !== undefined) {
     if (!String(b.name).trim()) return res.status(400).json({ error: "Pen name can't be blank" });
@@ -89,10 +101,14 @@ router.patch("/pens/:id/ration", requireAuth, handle(async (req, res) => {
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
   const [updated] = await db.update(sheepPens).set(updates).where(eq(sheepPens.id, req.params.id)).returning();
   if (!updated) return res.status(404).json({ error: "Pen not found" });
-  res.json(penOut(updated));
+  // Full pen (with the live head count of a linked pen), not the bare row
+  const [full] = await listPens(db, { id: updated.id });
+  res.json(full || penOut(updated));
 }));
 
 router.delete("/pens/:id", requireAuth, requireEditor, handle(async (req, res) => {
+  const [pen] = await db.select().from(sheepPens).where(eq(sheepPens.id, req.params.id));
+  if (pen?.paddockId != null) return res.status(400).json({ error: "This pen comes from a paddock on the map, so it can't be deleted here. Switch it off instead." });
   await db.delete(sheepPens).where(eq(sheepPens.id, req.params.id));
   res.json({ ok: true });
 }));

@@ -248,6 +248,14 @@ app.use("/api/lamb-feedlot", lambFeedlotRoutes);
   } catch (err) {
     console.error("sheep feedlot table setup error:", err.message);
   }
+  // Link a feeding pen to a feedlot-map paddock (its head count then comes from the mobs there).
+  // Its own try-block so a problem here can't stop the tables above.
+  try {
+    await db.execute(sql`ALTER TABLE sheep_pens ADD COLUMN IF NOT EXISTS paddock_id INTEGER REFERENCES paddocks(id) ON DELETE SET NULL`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS sheep_pens_paddock_id_uniq ON sheep_pens (paddock_id)`);
+  } catch (err) {
+    console.error("sheep pens paddock link setup error:", err.message);
+  }
 })();
 
 // ── Lamb feedlot tracker tables (Admin only) ─────────────────────────────────
