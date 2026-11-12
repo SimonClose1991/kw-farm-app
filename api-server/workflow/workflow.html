@@ -399,6 +399,9 @@ let selStaff    = [];
 let selColor    = "default";
 let selRecur    = "none";
 let showPastDays = false;
+// Weekend: the "Hide weekend" tick is shared by everyone (set by the admin), but anyone can open the
+// weekend for themselves on their own device without changing it for the others.
+let weekendHere = (()=>{ try{ return localStorage.getItem("kwp-show-weekend")==="1"; }catch(_){ return false; } })();
 let mobileDay    = Math.min(new Date().getDay()===0?6:new Date().getDay()-1, 6);
 let mobileViewMode = "cal";
 let calScale    = 1;
@@ -579,7 +582,7 @@ function isDayFinished(di){
 }
 function visibleDays(){
   let idxs=[0,1,2,3,4,5,6];
-  if(prefs.hideWeekend) idxs=idxs.filter(i=>i<5);
+  if(prefs.hideWeekend&&(isAdmin||!weekendHere)) idxs=idxs.filter(i=>i<5);
   if(!isAdmin&&!showPastDays){
     const filtered=idxs.filter(i=>!isDayFinished(i));
     // Always show at least today even if filter is aggressive
@@ -892,9 +895,12 @@ function renderOptionsBar(){
       <button class="opt-toggle ${prefs.hideStaff?"on":""}" onclick="toggleHideStaff()">${prefs.hideStaff?"☑":"☐"} Hide staff names</button>
     `;
   } else {
-    bar.innerHTML=`<button class="opt-toggle ${showPastDays?"on":""}" onclick="togglePastDays()">${showPastDays?"Hide finished days":"Show finished days"}</button>`;
+    // Only offered when the weekend is hidden for everyone; otherwise it's already showing
+    const wk=prefs.hideWeekend?`<button class="opt-toggle ${weekendHere?"on":""}" onclick="toggleWeekendHere()">${weekendHere?"Hide weekend":"Show weekend"}</button> `:"";
+    bar.innerHTML=wk+`<button class="opt-toggle ${showPastDays?"on":""}" onclick="togglePastDays()">${showPastDays?"Hide finished days":"Show finished days"}</button>`;
   }
 }
+function toggleWeekendHere(){ weekendHere=!weekendHere; try{ localStorage.setItem("kwp-show-weekend",weekendHere?"1":"0"); }catch(_){} render(); }
 function toggleHideWeekend(){ prefs.hideWeekend=!prefs.hideWeekend; saveState(); render(); }
 function toggleHideStaff(){ prefs.hideStaff=!prefs.hideStaff; saveState(); render(); }
 function togglePastDays(){ showPastDays=!showPastDays; render(); }
