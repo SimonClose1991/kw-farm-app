@@ -1463,8 +1463,14 @@ function GooglePaddockMap({
       ctx.fillStyle = "#000"; ctx.fillText(emoji, W/2, W/2 - 6);
       ctx.font = "bold 10px Arial"; ctx.fillStyle = "#1e293b"; ctx.fillText(String(totalCount), W/2, W/2 + 9);
       if (badges2) { ctx.fillStyle = inWhp2 ? "#ef4444" : "#f97316"; ctx.font = "bold 8px Arial"; ctx.fillText(badges2, W/2, W/2 + 20); }
+      // The tile sits a little north of the paddock centre so it doesn't hide the paddock. That lift was a
+      // fixed ~65 m, which is far too much for tiny paddocks (feedlot pens are ~0.1 ha, ~30 m across) — so
+      // use half the paddock's width instead, capped at the old value (normal-sized paddocks are unchanged).
+      const pad = (ref.paddockList || []).find((p) => p.name === paddockName);
+      const haNum = Number(pad?.ha);
+      const lift = haNum > 0 ? Math.min(0.0006, Math.max(0.00004, Math.sqrt(haNum * 10000) / 2 / 111320)) : 0.0006;
       const marker = new g.Marker({
-        position: { lat: pos.lat + 0.0006, lng: pos.lng }, map,
+        position: { lat: pos.lat + lift, lng: pos.lng }, map,
         icon: { url: cvs.toDataURL(), scaledSize: new g.Size(W, H), anchor: new g.Point(W/2, H - 2) },
         zIndex: 50,
       });
