@@ -4,6 +4,7 @@ import { api, setAuthToken, getStoredToken } from "./api.js";
 import SheepFeedingScreen from "./SheepFeeding.jsx";
 import LambFeedlotScreen from "./LambFeedlot.jsx";
 import ShearCrutchForm from "./ShearCrutchForm.jsx";
+import GpsCoverage, { clearGpsJob } from "./GpsCoverage.jsx";
 import { WithholdingCard } from "./Withholding.jsx";
 import { statusOf, treatmentPatch, parseDays, withholdingText } from "./withholding.js";
 import { agoText } from "./shearing.js";
@@ -3621,6 +3622,12 @@ export default function App() {
   const [showSprayForm, setShowSprayForm] = useState(false);
   const [sprayFormPaddock, setSprayFormPaddock] = useState(null);
   const [sprayForm, setSprayForm] = useState({});
+  // GPS Run (spray / bait coverage): the paddock being run, and the measured result handed to the spray form
+  const [gpsRunPaddock, setGpsRunPaddock] = useState(null);
+  const [sprayGps, setSprayGps] = useState(null); // { paddockId, name, coveredHa, widthM, pct, overlapPct }
+  const [gpsJobs, setGpsJobs] = useState([]);       // GPS jobs in progress on the server (shared between people)
+  const refreshGpsJobs = React.useCallback(() => { if (farmName) api.listGpsJobs(farmName).then((r) => setGpsJobs(Array.isArray(r) ? r : [])).catch(() => {}); }, [farmName]);
+  React.useEffect(() => { if (paddockDetail) refreshGpsJobs(); }, [paddockDetail?.id, refreshGpsJobs]); // eslint-disable-line react-hooks/exhaustive-deps
   // Google Maps API key is supplied at build/deploy time via Render's environment
   // variables (VITE_GOOGLE_MAPS_KEY) — never entered or stored in the app itself.
   const googleMapsKey = (typeof import.meta !== "undefined" && import.meta.env?.VITE_GOOGLE_MAPS_KEY) || "";
@@ -6008,6 +6015,18 @@ export default function App() {
                     <div className="text-xs font-normal opacity-80">Chemical, rate, method, WHP/ESI, batch — single or multiple paddocks</div>
                   </div>
                 </button>
+                {canEdit && (
+                  <button
+                    onClick={() => setGpsRunPaddock(paddockDetail)}
+                    className="w-full flex items-center gap-3 bg-lime-700 text-white rounded-2xl px-4 py-3 font-bold text-sm"
+                  >
+                    <span className="text-lg">📍</span>
+                    <div className="text-left">
+                      <div>GPS Run — spray / bait {gpsJobs.some((j) => Number(j.paddockId) === Number(paddockDetail.id)) ? "(job in progress)" : ""}</div>
+                      <div className="text-xs font-normal opacity-80">Set the width, ride the paddock, and it maps what you've covered</div>
+                    </div>
+                  </button>
+                )}
 
                 {/* Field note shortcut from paddock detail */}
                 <button
@@ -6910,9 +6929,33 @@ export default function App() {
         </Modal>
       )}
 
+      {/* ── GPS Run (spray / bait coverage) ── */}
+      {gpsRunPaddock && (
+        <GpsCoverage
+          paddock={gpsRunPaddock}
+          products={sprayInventory.map((i) => i.title)}
+          mapsKey={googleMapsKey}
+          api={api}
+          onClose={() => { setGpsRunPaddock(null); refreshGpsJobs(); }}
+          onFinish={(r) => {
+            const p = gpsRunPaddock;
+            setGpsRunPaddock(null);
+            setSprayGps({ paddockId: p.id, name: p.name, ...r });
+            setSpraySelectedPaddocks([p.name]);
+            setSprayFormPaddock(null);
+            setSprayForm({
+              treatmentDate: todayStr(),
+              title: r.product || "",
+              notes: `GPS run: ${r.widthM} m swath, ${r.coveredHa.toFixed(2)} ha covered (${Math.round(r.pct)}% of paddock)${r.overlapHa > 0 ? `, ${Math.round(r.overlapPct)}% gone over twice` : ""}`,
+            });
+            setShowBulkSpray(true);
+          }}
+        />
+      )}
+
       {/* ── Bulk Spray Modal ── */}
       {showBulkSpray && (
-        <Modal title="Log Spray Treatment" onClose={() => { setShowBulkSpray(false); setSprayForm({}); setSpraySelectedPaddocks([]); }}>
+        <Modal title="Log Spray Treatment" onClose={() => { setShowBulkSpray(false); setSprayForm({}); setSpraySelectedPaddocks([]); setSprayGps(null); }}>
           <div className="mb-3">
             <div className="text-sm font-bold text-slate-700 mb-2">Paddocks to spray (alphabetical)</div>
             <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-2xl divide-y divide-slate-100">
@@ -6944,6 +6987,14 @@ export default function App() {
               }, 0).toFixed(1)} ha total
             </div>
           </div>
+          {sprayGps && (
+            <div className={`mb-3 rounded-2xl px-3 py-2.5 text-sm border ${spraySelectedPaddocks.length === 1 && spraySelectedPaddocks[0] === sprayGps.name ? "bg-lime-50 border-lime-300 text-lime-900" : "bg-slate-50 border-slate-200 text-slate-600"}`}>
+              📍 <b>GPS measured {sprayGps.coveredHa.toFixed(2)} ha</b> ({Math.round(sprayGps.pct)}% of {sprayGps.name}, {sprayGps.widthM} m swath).
+              {spraySelectedPaddocks.length === 1 && spraySelectedPaddocks[0] === sprayGps.name
+                ? " This is saved as the area treated."
+                : " The GPS area is only used when just this paddock is ticked — otherwise whole-paddock areas are used."}
+            </div>
+          )}
           <div className="space-y-3 mb-4">
             {[
               { key: "treatmentDate", label: "Treatment date *", type: "date" },
@@ -6985,14 +7036,21 @@ export default function App() {
                 const p = paddocks.find(p=>p.name===n);
                 return s + Number(p?.ha||0);
               }, 0);
+              const useGps = !!sprayGps && spraySelectedPaddocks.length === 1 && spraySelectedPaddocks[0] === sprayGps.name;
               const fields = {
                 ...sprayForm,
                 location: spraySelectedPaddocks.join(", "),
-                areaTreated: String(totalHa.toFixed(1)),
+                areaTreated: useGps ? String(sprayGps.coveredHa.toFixed(2)) : String(totalHa.toFixed(1)),
               };
+              if (!useGps) delete fields.notes;   // the GPS note only belongs with the GPS area
               try {
                 const created = await api.addSprayInventory(farmName, fields);
                 setSprayInventory((prev) => [...prev, created].sort((a,b) => (a.title||'').localeCompare(b.title||'')));
+                if (useGps) {                                  // job is now recorded — remove the saved job (server + this phone)
+                  clearGpsJob(sprayGps.paddockId);
+                  api.deleteGpsJob(sprayGps.paddockId).catch(() => {}).finally(refreshGpsJobs);
+                }
+                setSprayGps(null);
                 setShowBulkSpray(false);
                 setSprayForm({});
                 setSpraySelectedPaddocks([]);

@@ -80,6 +80,11 @@ export const api = {
 
   // --- Paddocks ---
   listPaddocks: (farm) => request(`/paddocks?farm=${encodeURIComponent(farm)}`),
+  // --- GPS Run: spray / bait jobs in progress (shared, so anyone can pick one up) ---
+  listGpsJobs: (farm) => request(`/gps-jobs?farm=${encodeURIComponent(farm)}`),
+  getGpsJob: (paddockId) => request(`/gps-jobs/${paddockId}`),
+  appendGpsJob: (paddockId, body) => request(`/gps-jobs/${paddockId}/append`, { method: "POST", body: JSON.stringify(body) }),
+  deleteGpsJob: (paddockId) => request(`/gps-jobs/${paddockId}`, { method: "DELETE" }),
   createPaddock: (farm, fields) => request("/paddocks", { method: "POST", body: JSON.stringify({ farm, ...fields }) }),
   updatePaddock: (id, fields) => request(`/paddocks/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deletePaddock: (id) => request(`/paddocks/${id}`, { method: "DELETE" }),

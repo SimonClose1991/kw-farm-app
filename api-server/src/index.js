@@ -20,6 +20,7 @@ import fieldNotesRoutes from "./routes/fieldNotes.js";
 import soilTestsRoutes from "./routes/soilTests.js";
 import fertiliserRoutes from "./routes/fertiliser.js";
 import lambFeedlotRoutes from "./routes/lambFeedlot.js";
+import gpsJobsRoutes from "./routes/gpsJobs.js";
 import { sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 
@@ -79,6 +80,7 @@ app.use("/api/field-notes", fieldNotesRoutes);
 app.use("/api/soil-tests", soilTestsRoutes);
 app.use("/api/fertiliser", fertiliserRoutes);
 app.use("/api/lamb-feedlot", lambFeedlotRoutes);
+app.use("/api/gps-jobs", gpsJobsRoutes);
 
 // ── Auto-create field_notes table if it doesn't exist ───────────────────────
 (async () => {
@@ -255,6 +257,27 @@ app.use("/api/lamb-feedlot", lambFeedlotRoutes);
     await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS sheep_pens_paddock_id_uniq ON sheep_pens (paddock_id)`);
   } catch (err) {
     console.error("sheep pens paddock link setup error:", err.message);
+  }
+})();
+
+// ── GPS Run: spray / bait jobs in progress (own try-block so it can't affect anything else) ──
+(async () => {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS gps_jobs (
+        id SERIAL PRIMARY KEY,
+        paddock_id INTEGER NOT NULL UNIQUE REFERENCES paddocks(id) ON DELETE CASCADE,
+        product TEXT,
+        width_m NUMERIC,
+        events JSONB NOT NULL DEFAULT '[]',
+        started_by TEXT,
+        updated_by TEXT,
+        created_at TIMESTAMP DEFAULT now(),
+        updated_at TIMESTAMP DEFAULT now()
+      )
+    `);
+  } catch (err) {
+    console.error("gps jobs table setup error:", err.message);
   }
 })();
 

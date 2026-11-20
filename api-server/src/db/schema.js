@@ -97,6 +97,19 @@ export const paddocks = pgTable("paddocks", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// --- GPS Run: a spray / bait job in progress for a paddock (shared so anyone can pick it up) ---
+export const gpsJobs = pgTable("gps_jobs", {
+  id: serial("id").primaryKey(),
+  paddockId: integer("paddock_id").notNull().unique().references(() => paddocks.id, { onDelete: "cascade" }),
+  product: text("product"),
+  widthM: numeric("width_m"),
+  events: jsonb("events").notNull().default([]), // recorded GPS fixes / stroke breaks (see src/coverageMath.js in the app)
+  startedBy: text("started_by"),
+  updatedBy: text("updated_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // --- Landmarks ---
 export const landmarks = pgTable("landmarks", {
   id: serial("id").primaryKey(),
