@@ -20,6 +20,8 @@ services:
         generateValue: true
       - key: FRONTEND_ORIGIN
         sync: false   # set manually to your frontend's URL once it's deployed, e.g. https://kw-farm-app.onrender.com
+      - key: ANTHROPIC_API_KEY
+        sync: false   # powers the 💬 farm assistant; from console.anthropic.com. Leave it out and the assistant just says it isn't set up.
 
   - type: web
     name: kw-farm-app

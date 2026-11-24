@@ -5,6 +5,7 @@ import SheepFeedingScreen from "./SheepFeeding.jsx";
 import LambFeedlotScreen from "./LambFeedlot.jsx";
 import ShearCrutchForm from "./ShearCrutchForm.jsx";
 import GpsCoverage, { clearGpsJob } from "./GpsCoverage.jsx";
+import Assistant from "./Assistant.jsx";
 import { WithholdingCard } from "./Withholding.jsx";
 import { statusOf, treatmentPatch, parseDays, withholdingText } from "./withholding.js";
 import { agoText } from "./shearing.js";
@@ -3964,6 +3965,26 @@ export default function App() {
     } finally {
       setSyncing(false);
     }
+  };
+
+  // After the farm assistant saves something: re-read what it touched so every screen shows the new numbers
+  const refreshAfterAssistant = async (farmNames = []) => {
+    const farms = [...new Set([...(farmNames || []), farmName])].filter(Boolean);
+    try {
+      await Promise.all(farms.map(async (f) => {
+        const [mobsRes, paddocksRes] = await Promise.all([api.listMobs(f), api.listPaddocks(f)]);
+        setFarmsMobs((prev) => ({ ...prev, [f]: mobsRes }));
+        setFarmsPaddocks((prev) => ({ ...prev, [f]: paddocksRes }));
+      }));
+      const allTreatments = await Promise.all(accessibleFarms.map((f) => api.listTreatments(f).catch(() => []))).then((r) => r.flat());
+      const seen = new Set();
+      setInventory(allTreatments.filter((i) => { if (seen.has(i.id)) return false; seen.add(i.id); return true; }).sort((a, b) => (a.title || "").localeCompare(b.title || "")));
+      api.listRainfall(farmName).then(setRainfall).catch(() => {});
+      if (selectedMobId) {
+        api.listMobHistory(selectedMobId).then((h) => setHistory((prev) => ({ ...prev, [selectedMobId]: h.map((row) => ({ id: row.id, action: row.action, detail: row.detail, date: row.date, authorName: row.authorName })).reverse() }))).catch(() => {});
+      }
+      markChanged();
+    } catch { /* the 60-second refresh will pick it up */ }
   };
 
   // Auto-sync when coming back online
@@ -8884,6 +8905,13 @@ export default function App() {
         onBreedAdded={(b) => setCustomBreeds((prev) => ({ ...prev, Sheep: [...new Set([...(prev.Sheep || []), b])] }))}
         onMobsChanged={() => api.listMobs(FEEDLOT_FARM).then((res) => setFarmsMobs((prev) => ({ ...prev, [FEEDLOT_FARM]: res }))).catch(() => {})} />}
       <div className="md:hidden"><BottomNav /></div>
+      <Assistant
+        api={api}
+        canAct={canEdit}
+        mapTab={tab === "map"}
+        context={{ farm: farmName, mobId: selectedMob && detailView === "mob" ? selectedMob.id : null, paddockName: paddockDetail && detailView === "paddock" ? paddockDetail.name : null }}
+        onChanged={refreshAfterAssistant}
+      />
       {selectedMob && detailView === "mob" && MobDetails()}
       {showMenu && MenuScreen()}
 

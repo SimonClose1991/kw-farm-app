@@ -80,6 +80,9 @@ export const api = {
 
   // --- Paddocks ---
   listPaddocks: (farm) => request(`/paddocks?farm=${encodeURIComponent(farm)}`),
+  // --- Farm assistant (chat) ---
+  assistantStatus: () => request("/assistant/status"),
+  assistantChat: (body) => request("/assistant/chat", { method: "POST", body: JSON.stringify(body) }),
   // --- GPS Run: spray / bait jobs in progress (shared, so anyone can pick one up) ---
   listGpsJobs: (farm) => request(`/gps-jobs?farm=${encodeURIComponent(farm)}`),
   getGpsJob: (paddockId) => request(`/gps-jobs/${paddockId}`),

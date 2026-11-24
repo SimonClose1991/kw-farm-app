@@ -21,6 +21,7 @@ import soilTestsRoutes from "./routes/soilTests.js";
 import fertiliserRoutes from "./routes/fertiliser.js";
 import lambFeedlotRoutes from "./routes/lambFeedlot.js";
 import gpsJobsRoutes from "./routes/gpsJobs.js";
+import assistantRoutes from "./routes/assistant.js";
 import { sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 
@@ -81,6 +82,7 @@ app.use("/api/soil-tests", soilTestsRoutes);
 app.use("/api/fertiliser", fertiliserRoutes);
 app.use("/api/lamb-feedlot", lambFeedlotRoutes);
 app.use("/api/gps-jobs", gpsJobsRoutes);
+app.use("/api/assistant", assistantRoutes);
 
 // ── Auto-create field_notes table if it doesn't exist ───────────────────────
 (async () => {

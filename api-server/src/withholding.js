@@ -46,3 +46,9 @@ export function mergedWithholding(sourceExtra, targetExtra) {
   }
   return out;
 }
+
+// The three withholding end dates currently on a mob's `extra` (ISO yyyy-mm-dd or null), including
+// older mobs that only have lastTreatDate + whpDays/esiDays. Used by the farm assistant.
+export function withholdingDates(extra) {
+  return { meat: untilOf(extra, "meat"), esi: untilOf(extra, "esi"), wool: untilOf(extra, "wool") };
+}
