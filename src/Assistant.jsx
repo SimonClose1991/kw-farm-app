@@ -47,7 +47,8 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
   const [items, setItems] = useState([]);           // transcript
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [listening, setListening] = useState(false);
+  const [micState, setMicState] = useState("");     // "" | "starting" | "listening"
+  const listening = micState === "listening";
   const [speak, setSpeak] = useState(() => { try { return localStorage.getItem(SPEAK_KEY) === "1"; } catch { return false; } });
   const [note, setNote] = useState("");
   const endRef = useRef(null);
@@ -78,7 +79,7 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
     return () => { v.removeEventListener("resize", upd); v.removeEventListener("scroll", upd); };
   }, [open]);
 
-  useEffect(() => () => { try { recRef.current?.abort(); window.speechSynthesis?.cancel(); } catch {} }, []);
+  useEffect(() => () => { try { dropRecogniser(); window.speechSynthesis?.cancel(); } catch {} }, []);
 
   const say = (t) => {
     if (!speak || !window.speechSynthesis) return;
@@ -133,23 +134,74 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
   };
 
   // ── Voice ──
+  // Phone speech engines are touchy: slow to start, quick to give up, and an iPhone may keep the
+  // microphone "busy" after the first use. So each turn (1) throws away the previous recogniser and lets
+  // the phone release the mic, (2) shows "starting" until it really is listening, (3) never gets stuck —
+  // a watchdog resets the button if the phone forgets to say it has finished, and (4) says what went wrong.
+  const micRef = useRef({ rec: null, timers: [] });
+  const clearMicTimers = () => { micRef.current.timers.forEach(clearTimeout); micRef.current.timers = []; };
+  const dropRecogniser = () => {
+    const r = micRef.current.rec; micRef.current.rec = null; clearMicTimers();
+    if (!r) return false;
+    r.onstart = r.onaudiostart = r.onresult = r.onerror = r.onend = null;
+    try { r.abort(); } catch { try { r.stop(); } catch {} }
+    return true;
+  };
+  const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
   const toggleMic = () => {
     const SpeechRec = getSpeechRec();
     if (!SpeechRec) { setNote("Voice isn't available in this browser — tap the 🎤 on your keyboard to dictate instead."); return; }
-    if (listening) { try { recRef.current?.stop(); } catch {} return; }
-    try {
-      const rec = new SpeechRec();
-      rec.lang = "en-AU"; rec.interimResults = true; rec.continuous = false;
-      let finalText = "", sent = false;
-      rec.onresult = (e) => {
-        let t = "";
-        for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
-        finalText = t; setText(t);
-      };
-      rec.onerror = (e) => { setListening(false); setNote(e.error === "not-allowed" ? "Microphone is blocked — allow it in your browser/phone settings, or use the keyboard's 🎤." : "Couldn't hear that — try again or type it."); };
-      rec.onend = () => { setListening(false); if (!sent && finalText.trim()) { sent = true; send(finalText); } };
-      recRef.current = rec; setNote(""); setListening(true); rec.start();
-    } catch { setListening(false); setNote("Couldn't start the microphone — use the keyboard's 🎤 instead."); }
+    const cur = micRef.current;
+    // Tap while it's listening = "that's all" (send what's been heard). Tap while stuck on "starting" = start over.
+    if (micState === "listening" && cur.rec) { try { cur.rec.stop(); } catch {} cur.timers.push(setTimeout(() => { if (micRef.current.rec === cur.rec) { cur.rec?.onend?.(); } }, 1500)); return; }
+    try { window.speechSynthesis?.cancel(); } catch {}   // spoken replies can leave the microphone muted on iPhone
+    const hadOld = dropRecogniser();
+    setNote(""); setMicState("starting");
+    const begin = () => {
+      let finalText = "", sent = false, heard = false, failed = false, finished = false, silenceTimer = null;
+      const timers = micRef.current.timers;
+      try {
+        const rec = new SpeechRec();
+        rec.lang = "en-AU"; rec.interimResults = true;
+        rec.continuous = !isIOS();                        // iPhones are more reliable one phrase at a time
+        const stop = () => { try { rec.stop(); } catch {} };
+        const done = () => {
+          if (finished) return; finished = true;
+          clearTimeout(silenceTimer); clearMicTimers(); micRef.current.rec = null; setMicState("");
+          try { rec.abort(); } catch {}
+          if (!sent && finalText.trim()) { sent = true; send(finalText); }
+          else if (!heard && !failed) setNote("I didn't hear anything. Tap 🎤, wait for \"Listening\", then speak.");
+        };
+        const ready = () => { setMicState("listening"); timers.push(setTimeout(stop, 9000)); };
+        rec.onstart = ready; rec.onaudiostart = ready;
+        rec.onresult = (e) => {
+          heard = true; setMicState("listening");
+          let t = "";
+          for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+          finalText = t; setText(t);
+          clearTimeout(silenceTimer); silenceTimer = setTimeout(() => { stop(); timers.push(setTimeout(done, 1200)); }, 1600);   // paused -> finish (watchdog if the phone never says it ended)
+        };
+        rec.onerror = (e) => {
+          failed = true;
+          const msg = {
+            "not-allowed": "Microphone is blocked — allow it for this app in your phone's settings, or use the keyboard's 🎤.",
+            "service-not-allowed": "Voice is switched off on this phone — turn on Dictation in Settings → General → Keyboard, or use the keyboard's 🎤.",
+            "audio-capture": "The microphone is busy — wait a moment and tap 🎤 again, or use the keyboard's 🎤.",
+            "network": "Voice needs a phone signal. Try again, or type it.",
+            "no-speech": "I didn't hear anything. Hold the phone closer and try again.",
+            "aborted": "",
+          }[e.error];
+          setNote(msg ?? "Couldn't hear that — try again, or use the keyboard's 🎤.");
+        };
+        rec.onend = done;
+        micRef.current.rec = rec;
+        rec.start();
+        timers.push(setTimeout(() => { if (!finished && !heard) { stop(); timers.push(setTimeout(done, 1200)); } }, 12000));   // never sit on "starting" forever
+      } catch { clearMicTimers(); micRef.current.rec = null; setMicState(""); setNote("Couldn't start the microphone — use the keyboard's 🎤 instead."); }
+    };
+    if (hadOld) micRef.current.timers.push(setTimeout(begin, 300));   // give the phone a moment to release the mic
+    else begin();
   };
 
   const reset = () => { setItems([]); setNote(""); try { window.speechSynthesis?.cancel(); } catch {} };
@@ -217,10 +269,10 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
             <div className="border-t border-slate-200 bg-white p-2 flex items-end gap-2" style={{ paddingBottom: "max(8px, env(safe-area-inset-bottom))" }}>
               <textarea value={text} onChange={(e) => setText(e.target.value)} rows={1} disabled={off || !status}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia?.("(min-width: 768px)").matches) { e.preventDefault(); send(); } }}
-                placeholder={listening ? "Listening…" : "Ask or tell me something…"}
+                placeholder={micState === "starting" ? "Starting microphone…" : listening ? "Listening — speak now…" : "Ask or tell me something…"}
                 style={{ fontSize: 16 }} className="flex-1 min-w-0 resize-none border border-slate-200 rounded-2xl px-3 py-2.5 max-h-28 bg-stone-50" />
               <button onClick={toggleMic} disabled={off || !status || busy} aria-label="Speak"
-                className={`w-11 h-11 rounded-full text-lg shrink-0 ${listening ? "bg-red-600 text-white animate-pulse" : "bg-slate-100 text-slate-700"} disabled:opacity-40`}>🎤</button>
+                className={`w-11 h-11 rounded-full text-lg shrink-0 ${listening ? "bg-red-600 text-white animate-pulse" : micState === "starting" ? "bg-amber-400 text-white" : "bg-slate-100 text-slate-700"} disabled:opacity-40`}>🎤</button>
               <button onClick={() => send()} disabled={off || !status || busy || !text.trim()} aria-label="Send"
                 className="w-11 h-11 rounded-full bg-red-900 text-white text-lg shrink-0 disabled:opacity-40">➤</button>
             </div>
