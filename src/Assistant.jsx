@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { executeProposal } from "./assistantActions.js";
 
 const SPEAK_KEY = "kw_assistant_speak";
-const SpeechRec = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+const getSpeechRec = () => (typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null);
 
 const ASK_EXAMPLES = ["How many sheep do I have?", "Which mobs are in withholding?", "What's in this paddock?", "How much rain this month?"];
 const DO_EXAMPLES = ["A ewe died in North Flat", "Move these to the next paddock", "Recount this mob to 125", "Drench this mob with Zolvex"];
@@ -54,6 +54,9 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
   const recRef = useRef(null);
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const busyRef = useRef(false);
+  const lastSentRef = useRef({ text: "", at: 0 });
+  const [vv, setVv] = useState(null);                 // the part of the screen that's actually visible (above the keyboard)
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [items, busy, open]);
 
@@ -66,6 +69,15 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
     return () => { live = false; };
   }, [open, api]);
 
+  useEffect(() => {
+    if (!open || !window.visualViewport) return;
+    const v = window.visualViewport;
+    const upd = () => setVv({ h: Math.round(v.height), top: Math.round(v.offsetTop) });
+    upd();
+    v.addEventListener("resize", upd); v.addEventListener("scroll", upd);
+    return () => { v.removeEventListener("resize", upd); v.removeEventListener("scroll", upd); };
+  }, [open]);
+
   useEffect(() => () => { try { recRef.current?.abort(); window.speechSynthesis?.cancel(); } catch {} }, []);
 
   const say = (t) => {
@@ -76,7 +88,12 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
 
   const send = async (raw) => {
     const content = String(raw ?? text).trim();
-    if (!content || busy) return;
+    if (!content || busyRef.current) return;
+    // Speech recognition can call back twice for one utterance — the same words within a few seconds are one message
+    const now = Date.now();
+    if (content === lastSentRef.current.text && now - lastSentRef.current.at < 5000) return;
+    lastSentRef.current = { text: content, at: now };
+    busyRef.current = true;
     setText(""); setNote("");
     const next = [...itemsRef.current, { role: "user", content }];
     setItems(next); setBusy(true);
@@ -88,7 +105,7 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
       say(res.reply);
     } catch (err) {
       setItems((prev) => [...prev, { role: "assistant", content: err.message || "Something went wrong — try again.", error: true }]);
-    } finally { setBusy(false); }
+    } finally { busyRef.current = false; setBusy(false); }
   };
 
   const patchCard = (mi, ci, patch) => setItems((prev) => prev.map((m, i) => (i !== mi ? m : { ...m, cards: m.cards.map((c, j) => (j === ci ? { ...c, ...patch } : c)) })));
@@ -117,19 +134,20 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
 
   // ── Voice ──
   const toggleMic = () => {
+    const SpeechRec = getSpeechRec();
     if (!SpeechRec) { setNote("Voice isn't available in this browser — tap the 🎤 on your keyboard to dictate instead."); return; }
     if (listening) { try { recRef.current?.stop(); } catch {} return; }
     try {
       const rec = new SpeechRec();
       rec.lang = "en-AU"; rec.interimResults = true; rec.continuous = false;
-      let finalText = "";
+      let finalText = "", sent = false;
       rec.onresult = (e) => {
         let t = "";
         for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
         finalText = t; setText(t);
       };
       rec.onerror = (e) => { setListening(false); setNote(e.error === "not-allowed" ? "Microphone is blocked — allow it in your browser/phone settings, or use the keyboard's 🎤." : "Couldn't hear that — try again or type it."); };
-      rec.onend = () => { setListening(false); if (finalText.trim()) send(finalText); };
+      rec.onend = () => { setListening(false); if (!sent && finalText.trim()) { sent = true; send(finalText); } };
       recRef.current = rec; setNote(""); setListening(true); rec.start();
     } catch { setListening(false); setNote("Couldn't start the microphone — use the keyboard's 🎤 instead."); }
   };
@@ -147,13 +165,14 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
         </button>
       )}
       {open && (
-        <div className="fixed inset-0 z-[255] flex flex-col md:items-end md:justify-end md:p-6 pointer-events-none">
+        <div className="fixed left-0 right-0 z-[255] flex flex-col md:items-end md:justify-end md:p-6 pointer-events-none md:!top-0 md:!h-full"
+          style={{ top: vv ? vv.top : 0, height: vv ? vv.h : "100dvh" }}>
           <div className="absolute inset-0 bg-black/30 md:hidden pointer-events-auto" onClick={() => setOpen(false)} />
-          <div className="relative mt-12 md:mt-0 flex-1 md:flex-none md:w-[400px] md:h-[620px] bg-stone-50 rounded-t-3xl md:rounded-3xl shadow-2xl flex flex-col pointer-events-auto overflow-hidden">
+          <div className="relative mt-8 md:mt-0 flex-1 min-h-0 md:flex-none md:w-[400px] md:h-[620px] bg-stone-50 rounded-t-3xl md:rounded-3xl shadow-2xl flex flex-col pointer-events-auto overflow-hidden">
             <div className="bg-red-900 text-white px-4 py-3 flex items-center gap-2">
               <div className="flex-1 min-w-0">
                 <div className="font-bold leading-tight">Farm assistant</div>
-                <div className="text-[11px] opacity-80">{canAct ? "Ask questions or tell me what to record — I'll check with you first" : "Questions only — a manager records changes"}</div>
+                <div className="text-[11px] opacity-80">{canAct ? "Ask, or tell me what to record" : "Questions only"}</div>
               </div>
               {items.length > 0 && <button onClick={reset} className="text-xs border border-white/40 rounded-lg px-2 py-1">New chat</button>}
               <button onClick={toggleSpeak} aria-label="Read answers aloud" title="Read answers aloud" className={`w-8 h-8 rounded-full text-base ${speak ? "bg-white text-red-900" : "bg-white/15"}`}>🔊</button>
@@ -195,11 +214,11 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
             </div>
 
             {note && <div className="px-3 pb-1 text-xs text-amber-700">{note}</div>}
-            <div className="border-t border-slate-200 bg-white p-2 flex items-end gap-2">
+            <div className="border-t border-slate-200 bg-white p-2 flex items-end gap-2" style={{ paddingBottom: "max(8px, env(safe-area-inset-bottom))" }}>
               <textarea value={text} onChange={(e) => setText(e.target.value)} rows={1} disabled={off || !status}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia?.("(min-width: 768px)").matches) { e.preventDefault(); send(); } }}
                 placeholder={listening ? "Listening…" : "Ask or tell me something…"}
-                className="flex-1 min-w-0 resize-none border border-slate-200 rounded-2xl px-3 py-2.5 text-base max-h-28 bg-stone-50" />
+                style={{ fontSize: 16 }} className="flex-1 min-w-0 resize-none border border-slate-200 rounded-2xl px-3 py-2.5 max-h-28 bg-stone-50" />
               <button onClick={toggleMic} disabled={off || !status || busy} aria-label="Speak"
                 className={`w-11 h-11 rounded-full text-lg shrink-0 ${listening ? "bg-red-600 text-white animate-pulse" : "bg-slate-100 text-slate-700"} disabled:opacity-40`}>🎤</button>
               <button onClick={() => send()} disabled={off || !status || busy || !text.trim()} aria-label="Send"
