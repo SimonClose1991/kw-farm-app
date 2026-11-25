@@ -5,6 +5,7 @@ import { and, eq, inArray, desc } from "drizzle-orm";
 import { mobs, mobHistory, paddocks, treatmentInventory, sprayInventory, rainfallRecords } from "../db/schema.js";
 import { withholdingDates } from "../withholding.js";
 import { countsOnDate } from "./historyReplay.js";
+import { loadState } from "../workflowStore.js";
 
 const norm = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 const farmName = (ctx, id) => ctx.farms.find((f) => f.id === id)?.name || "?";
@@ -161,4 +162,67 @@ export async function mob_count_on_date(ctx, { date, species, farm } = {}) {
   return out;
 }
 
-export const READ_HANDLERS = { find_mobs, get_mob, list_paddocks, farm_summary, withholding_status, list_inventory, spray_records, rainfall_summary, mob_count_on_date };
+// ── Weekly workflow planner (read only) ──
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const ISO = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const addDaysISO = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const weekdayOf = (iso) => WEEKDAYS[new Date(iso + "T00:00:00Z").getUTCDay()];
+const MAX_DAYS = 31, MAX_JOBS = 150;
+
+// Does a planner staff name ("Rob", or a full name from staffDetails) match what was asked for?
+function staffMatches(name, details, want) {
+  const w = norm(want);
+  if (!w) return true;
+  const d = details?.[name];
+  const names = [norm(name), norm(d ? `${d.first || ""} ${d.last || ""}` : "")].filter(Boolean);
+  const wFirst = w.split(" ")[0];
+  return names.some((n) => n === w || n.split(" ")[0] === wFirst || n.includes(w));
+}
+
+export async function workflow_jobs(ctx, { from, to, staff, farm, status } = {}) {
+  const start = from || ctx.today;
+  const end = to || start;
+  if (!ISO.test(start) || !ISO.test(end)) return { error: "from/to must be yyyy-mm-dd" };
+  if (end < start) return { error: "'to' is before 'from'" };
+  if (addDaysISO(start, MAX_DAYS - 1) < end) return { error: `Ask for ${MAX_DAYS} days or fewer at a time` };
+  const wantStaff = String(staff || "").trim().toLowerCase() === "me" ? (ctx.user?.name || "") : staff;
+  const farmWant = norm(farm);
+  const state = await loadState(ctx.db);
+  // Managers see the working list; workers see what has been published to staff (as the planner does)
+  const published = Array.isArray(state.published) ? state.published : [];
+  const source = ctx.canAct ? state.tasks : (published.length ? published : state.tasks);
+  const mine = (t) => !wantStaff || (t.assignedStaff || []).some((n) => staffMatches(n, state.staffDetails, wantStaff));
+  const farmOk = (t) => !farmWant || norm(t.farm).includes(farmWant);
+  const stOk = (t) => status === "open" ? !t.completed : status === "done" ? !!t.completed : true;
+
+  const rows = source.filter((t) => ISO.test(String(t.date || "")) && t.date >= start && t.date <= end && mine(t) && farmOk(t) && stOk(t))
+    .map((t) => ({ date: t.date, farm: t.farm, paddock: t.paddock || undefined, job: t.content, notes: t.notes || undefined, staff: t.assignedStaff || [], done: !!t.completed, repeats: t.recur && t.recur !== "none" ? t.recur : undefined }));
+
+  // Weekly repeating jobs only become real jobs when someone opens that week in the planner — list the ones not made yet
+  if (ctx.canAct && status !== "done") {
+    for (let d = start < ctx.today ? ctx.today : start; d <= end; d = addDaysISO(d, 1)) {
+      const wd = weekdayOf(d);
+      for (const tpl of arr(state.recurTemplates)) {
+        if (tpl.weeklyDay !== wd || source.some((t) => t.series === tpl.series && t.date === d)) continue;
+        if (!mine(tpl) || !farmOk(tpl)) continue;
+        rows.push({ date: d, farm: tpl.farm, paddock: tpl.paddock || undefined, job: tpl.content, notes: tpl.notes || undefined, staff: tpl.assignedStaff || [], done: false, repeats: "weekly", from_weekly_template: true });
+      }
+    }
+  }
+  rows.sort((a, b) => a.date.localeCompare(b.date) || String(a.farm).localeCompare(String(b.farm)));
+  const days = [];
+  for (const r of rows.slice(0, MAX_JOBS)) {
+    const { date, ...job } = r;
+    let day = days[days.length - 1];
+    if (!day || day.date !== date) { day = { date, weekday: weekdayOf(date), jobs: [] }; days.push(day); }
+    day.jobs.push(job);
+  }
+  const out = { from: start, to: end, total_jobs: rows.length, open_jobs: rows.filter((r) => !r.done).length, days };
+  if (rows.length > MAX_JOBS) out.note = `Only the first ${MAX_JOBS} jobs are shown — narrow the dates or the person.`;
+  if (!rows.length && wantStaff) out.known_staff = arr(state.staff).slice(0, 60);
+  if (ctx.canAct && published.length && JSON.stringify(state.tasks) !== JSON.stringify(published)) out.unpublished_changes = "The planner has changes that haven't been published to staff yet; this list includes them.";
+  return out;
+}
+const arr = (v) => (Array.isArray(v) ? v : []);
+
+export const READ_HANDLERS = { workflow_jobs,  find_mobs, get_mob, list_paddocks, farm_summary, withholding_status, list_inventory, spray_records, rainfall_summary, mob_count_on_date };

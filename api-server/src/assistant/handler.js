@@ -68,7 +68,7 @@ export function assistantRouter({ db, getClient, env = process.env, now = () => 
 
       const out = await runAssistant({
         client: getClient(), model: env.ASSISTANT_MODEL || "claude-opus-5-5", effort: env.ASSISTANT_EFFORT || "medium",
-        messages, ctx: { db, farms: who.farms, today }, canAct: who.canAct,
+        messages, ctx: { db, farms: who.farms, today, canAct: who.canAct, user: { name: who.account.name } }, canAct: who.canAct,
         user: { name: who.account.name, role: who.account.role }, context,
       });
       res.json({ reply: out.reply, proposals: who.canAct ? out.proposals : [], usage: out.usage });
