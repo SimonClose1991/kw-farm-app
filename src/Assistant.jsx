@@ -57,9 +57,14 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
   itemsRef.current = items;
   const busyRef = useRef(false);
   const lastSentRef = useRef({ text: "", at: 0 });
+  const taRef = useRef(null);
+  const failsRef = useRef(0);
+  const [dictate, setDictate] = useState(false);       // live voice isn't working on this phone -> use the keyboard's own microphone
   const [vv, setVv] = useState(null);                 // the part of the screen that's actually visible (above the keyboard)
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [items, busy, open]);
+  // The type box grows as you type (up to ~5 lines) so you can see what you've said or written
+  useEffect(() => { const el = taRef.current; if (!el) return; el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 130) + "px"; }, [text, open]);
 
   // Is the assistant switched on at the server? Checked every time the sheet opens, so adding the
   // key (or getting back into signal) takes effect without reloading the app.
@@ -149,9 +154,15 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
   };
   const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
+  const KEYBOARD_HINT = "Tap the box, then the 🎤 on your keyboard, speak, and tap ➤ to send.";
+  const failVoice = (msg, hard) => {
+    failsRef.current += 1;
+    if (hard || failsRef.current >= (isIOS() ? 1 : 2)) { setDictate(true); setNote((msg ? msg + " " : "") + KEYBOARD_HINT); }
+    else setNote(msg);
+  };
   const toggleMic = () => {
     const SpeechRec = getSpeechRec();
-    if (!SpeechRec) { setNote("Voice isn't available in this browser — tap the 🎤 on your keyboard to dictate instead."); return; }
+    if (!SpeechRec || dictate) { setNote(KEYBOARD_HINT); taRef.current?.focus(); return; }
     const cur = micRef.current;
     // Tap while it's listening = "that's all" (send what's been heard). Tap while stuck on "starting" = start over.
     if (micState === "listening" && cur.rec) { try { cur.rec.stop(); } catch {} cur.timers.push(setTimeout(() => { if (micRef.current.rec === cur.rec) { cur.rec?.onend?.(); } }, 1500)); return; }
@@ -171,12 +182,12 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
           clearTimeout(silenceTimer); clearMicTimers(); micRef.current.rec = null; setMicState("");
           try { rec.abort(); } catch {}
           if (!sent && finalText.trim()) { sent = true; send(finalText); }
-          else if (!heard && !failed) setNote("I didn't hear anything. Tap 🎤, wait for \"Listening\", then speak.");
+          else if (!heard && !failed) failVoice("I didn't hear anything.");
         };
         const ready = () => { setMicState("listening"); timers.push(setTimeout(stop, 9000)); };
         rec.onstart = ready; rec.onaudiostart = ready;
         rec.onresult = (e) => {
-          heard = true; setMicState("listening");
+          heard = true; failsRef.current = 0; setMicState("listening");
           let t = "";
           for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
           finalText = t; setText(t);
@@ -184,15 +195,15 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
         };
         rec.onerror = (e) => {
           failed = true;
+          if (e.error === "aborted") return;
           const msg = {
             "not-allowed": "Microphone is blocked — allow it for this app in your phone's settings, or use the keyboard's 🎤.",
             "service-not-allowed": "Voice is switched off on this phone — turn on Dictation in Settings → General → Keyboard, or use the keyboard's 🎤.",
             "audio-capture": "The microphone is busy — wait a moment and tap 🎤 again, or use the keyboard's 🎤.",
             "network": "Voice needs a phone signal. Try again, or type it.",
             "no-speech": "I didn't hear anything. Hold the phone closer and try again.",
-            "aborted": "",
           }[e.error];
-          setNote(msg ?? "Couldn't hear that — try again, or use the keyboard's 🎤.");
+          failVoice(msg ?? "Couldn't hear that.", e.error === "not-allowed" || e.error === "service-not-allowed");
         };
         rec.onend = done;
         micRef.current.rec = rec;
@@ -207,6 +218,7 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
   const reset = () => { setItems([]); setNote(""); try { window.speechSynthesis?.cancel(); } catch {} };
   const examples = canAct ? [...ASK_EXAMPLES.slice(0, 2), ...DO_EXAMPLES.slice(0, 2)] : ASK_EXAMPLES;
   const off = status && (status.error || status.enabled === false);
+  const kbOpen = !!vv && window.innerHeight - vv.h > 120;   // on-screen keyboard is up
 
   return (
     <>
@@ -220,11 +232,11 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
         <div className="fixed left-0 right-0 z-[255] flex flex-col md:items-end md:justify-end md:p-6 pointer-events-none md:!top-0 md:!h-full"
           style={{ top: vv ? vv.top : 0, height: vv ? vv.h : "100dvh" }}>
           <div className="absolute inset-0 bg-black/30 md:hidden pointer-events-auto" onClick={() => setOpen(false)} />
-          <div className="relative mt-8 md:mt-0 flex-1 min-h-0 md:flex-none md:w-[400px] md:h-[620px] bg-stone-50 rounded-t-3xl md:rounded-3xl shadow-2xl flex flex-col pointer-events-auto overflow-hidden">
-            <div className="bg-red-900 text-white px-4 py-3 flex items-center gap-2">
+          <div className="relative md:mt-0 flex-1 min-h-0 md:flex-none md:w-[400px] md:h-[620px] bg-stone-50 rounded-t-3xl md:rounded-3xl shadow-2xl flex flex-col pointer-events-auto overflow-hidden" style={{ marginTop: kbOpen ? 0 : 40 }}>
+            <div className={`bg-red-900 text-white px-4 ${kbOpen ? "py-1.5" : "py-3"} flex items-center gap-2`}>
               <div className="flex-1 min-w-0">
                 <div className="font-bold leading-tight">Farm assistant</div>
-                <div className="text-[11px] opacity-80">{canAct ? "Ask, or tell me what to record" : "Questions only"}</div>
+                <div className={`text-[11px] opacity-80 ${kbOpen ? "hidden" : ""}`}>{canAct ? "Ask, or tell me what to record" : "Questions only"}</div>
               </div>
               {items.length > 0 && <button onClick={reset} className="text-xs border border-white/40 rounded-lg px-2 py-1">New chat</button>}
               <button onClick={toggleSpeak} aria-label="Read answers aloud" title="Read answers aloud" className={`w-8 h-8 rounded-full text-base ${speak ? "bg-white text-red-900" : "bg-white/15"}`}>🔊</button>
@@ -248,10 +260,10 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
               )}
               {items.map((m, mi) => (
                 <div key={mi} className={m.role === "user" ? "flex justify-end" : ""}>
-                  <div className={m.role === "user" ? "max-w-[85%] bg-red-900 text-white rounded-2xl rounded-br-md px-3.5 py-2 text-sm whitespace-pre-wrap" : "max-w-full"}>
+                  <div className={m.role === "user" ? "max-w-[85%] bg-red-900 text-white rounded-2xl rounded-br-md px-3.5 py-2.5 text-base whitespace-pre-wrap" : "max-w-full"}>
                     {m.role === "user" ? m.content : (
                       <div>
-                        <div className={`text-sm whitespace-pre-wrap rounded-2xl rounded-bl-md px-3.5 py-2 inline-block max-w-[92%] ${m.error ? "bg-red-50 text-red-800" : "bg-white border border-slate-200 text-slate-800"}`}>{m.content}</div>
+                        <div className={`text-base whitespace-pre-wrap rounded-2xl rounded-bl-md px-3.5 py-2.5 inline-block max-w-[92%] ${m.error ? "bg-red-50 text-red-800" : "bg-white border border-slate-200 text-slate-800"}`}>{m.content}</div>
                         {m.cards?.map((c, ci) => <CardView key={c.card.id} c={c} busy={m.cards.some((x) => x.status === "running")} onConfirm={() => confirmCard(mi, ci)} onCancel={() => patchCard(mi, ci, { status: "cancelled" })} />)}
                         {m.cards?.filter((c) => c.status === "pending").length > 1 && (
                           <button onClick={() => confirmAll(mi)} className="mt-2 w-full py-2.5 rounded-xl bg-green-700 text-white font-bold text-sm">Confirm all {m.cards.filter((c) => c.status === "pending").length}</button>
@@ -265,12 +277,17 @@ export default function Assistant({ api, canAct, context, onChanged, mapTab = fa
               <div ref={endRef} />
             </div>
 
-            {note && <div className="px-3 pb-1 text-xs text-amber-700">{note}</div>}
-            <div className="border-t border-slate-200 bg-white p-2 flex items-end gap-2" style={{ paddingBottom: "max(8px, env(safe-area-inset-bottom))" }}>
-              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={1} disabled={off || !status}
+            {note && (
+              <div className="px-3 py-1.5 text-sm text-amber-800 bg-amber-50 border-t border-amber-200">
+                {note}
+                {dictate && <button onClick={() => { setDictate(false); failsRef.current = 0; setNote(""); }} className="ml-2 underline font-semibold">Try live voice again</button>}
+              </div>
+            )}
+            <div className="border-t border-slate-200 bg-white p-2 flex items-end gap-2" style={{ paddingBottom: kbOpen ? 8 : "max(30px, env(safe-area-inset-bottom))" }}>
+              <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} rows={1} disabled={off || !status}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia?.("(min-width: 768px)").matches) { e.preventDefault(); send(); } }}
                 placeholder={micState === "starting" ? "Starting microphone…" : listening ? "Listening — speak now…" : "Ask or tell me something…"}
-                style={{ fontSize: 16 }} className="flex-1 min-w-0 resize-none border border-slate-200 rounded-2xl px-3 py-2.5 max-h-28 bg-stone-50" />
+                style={{ fontSize: 17 }} className="flex-1 min-w-0 resize-none border border-slate-300 rounded-2xl px-3 py-2.5 bg-stone-50" />
               <button onClick={toggleMic} disabled={off || !status || busy} aria-label="Speak"
                 className={`w-11 h-11 rounded-full text-lg shrink-0 ${listening ? "bg-red-600 text-white animate-pulse" : micState === "starting" ? "bg-amber-400 text-white" : "bg-slate-100 text-slate-700"} disabled:opacity-40`}>🎤</button>
               <button onClick={() => send()} disabled={off || !status || busy || !text.trim()} aria-label="Send"
