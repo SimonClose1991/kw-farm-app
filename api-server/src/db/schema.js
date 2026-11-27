@@ -287,6 +287,8 @@ export const sheepFeedHistory = pgTable("sheep_feed_history", {
   period: text("period").notNull(),
   splitFraction: numeric("split_fraction").notNull(),
   events: jsonb("events").notNull().default([]),
+  // The feed mix as it was when the run was saved: { ingredients: [{name,kgPerHead}], bufferPercent, assumed? }
+  mix: jsonb("mix"),
 });
 
 export const sheepSettings = pgTable("sheep_settings", {

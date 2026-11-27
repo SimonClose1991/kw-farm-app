@@ -4,6 +4,7 @@ import { eq, asc, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { sheepPens, sheepFeedHistory, sheepSettings, sheepCurrentRun } from "../db/schema.js";
 import { requireAuth, requireEditor, requireAdmin } from "../auth.js";
+import { mixSnapshot } from "../sheepMix.js";
 import { syncPens, listPens, savePen, defaultKgFromSettings, PenError } from "../sheepPensStore.js";
 
 const router = Router();
@@ -184,6 +185,7 @@ router.post("/history", requireAuth, handle(async (req, res) => {
   if (b.period !== "AM" && b.period !== "PM") return res.status(400).json({ error: "Period must be AM or PM" });
   if (!Array.isArray(b.events)) return res.status(400).json({ error: "Run has no events" });
   const finished = b.finishedAt ? new Date(b.finishedAt) : new Date();
+  const [settingsRow] = await db.select().from(sheepSettings).where(eq(sheepSettings.id, "singleton"));
   const [created] = await db.insert(sheepFeedHistory).values({
     id: b.id || randomUUID(),
     startedAt: started,
@@ -192,6 +194,7 @@ router.post("/history", requireAuth, handle(async (req, res) => {
     period: b.period,
     splitFraction: String(Number(b.splitFraction) || 0),
     events: b.events,
+    mix: mixSnapshot(settingsRow),
   }).returning();
   res.status(201).json(runOut(created));
 }));

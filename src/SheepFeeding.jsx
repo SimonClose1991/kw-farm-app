@@ -3,8 +3,9 @@ import {
   num, rationPct, adjustPercent, penDailyKg, penFeedKg, splitFor, activeOnly, isFeeding, totalHead,
   mixerLoad, loadBreakdown, mixTotalPerHead, eventKg, runTotals, formatKg,
 } from "./sheepFeedMath.js";
+import { commodityUsage, plannedDaily, dailyActuals, fyRange, dateKey, addDaysKey } from "./sheepUsageMath.js";
 
-// Sheep feedlot: Feed Run · Ration · Pens · History · Settings (Admin only).
+// Sheep feedlot: Feed Run · Ration · Pens · History · Usage + Settings (Admin only).
 // Rebuilt from the Kurra-Wirra Replit feed manager. Everything here is its own
 // component (not inlined in App) so typing in a box only re-renders this screen.
 
@@ -81,9 +82,9 @@ export default function SheepFeedingScreen({ setTab, showToast, api, isAdmin, ca
     { id: "ration", label: "🧮 Ration" },
     { id: "pens", label: "🐑 Pens" },
     { id: "history", label: "📋 History" },
-    ...(isAdmin ? [{ id: "settings", label: "⚙️ Settings" }] : []),
+    ...(isAdmin ? [{ id: "usage", label: "📊 Usage" }, { id: "settings", label: "⚙️ Settings" }] : []),
   ];
-  const activeTab = sheepTab === "settings" && !isAdmin ? "run" : sheepTab;
+  const activeTab = (sheepTab === "settings" || sheepTab === "usage") && !isAdmin ? "run" : sheepTab;
 
   return (
     <div className="pb-24 bg-stone-50 min-h-screen">
@@ -113,6 +114,7 @@ export default function SheepFeedingScreen({ setTab, showToast, api, isAdmin, ca
         {activeTab === "history" && (
           <HistoryTab history={history} setHistory={setHistory} canEdit={canEdit} showToast={showToast} api={api} />
         )}
+        {activeTab === "usage" && isAdmin && <UsageTab history={history} pens={pens} settings={settings} />}
         {activeTab === "settings" && isAdmin && (
           <SettingsTab pens={pens} setPens={setPens} settings={settings} setSettings={setSettings}
             history={history} showToast={showToast} api={api} />
@@ -792,6 +794,147 @@ function HistoryTab({ history, setHistory, canEdit, showToast, api }) {
       {filtered.length > visible && (
         <button onClick={() => setVisible((v) => v + 30)} className={`${BTN_LIGHT} w-full`}>Show more ({filtered.length - visible} older)</button>
       )}
+    </>
+  );
+}
+
+// ── Usage (Admin only) ───────────────────────────────────────────────────────
+// How much of each commodity has gone through the feed runs, and what a day takes right now.
+// The maths is in sheepUsageMath.js.
+const fmtT = (kg) => `${(num(kg) / 1000).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} t`;
+const fmtKey = (key) => new Date(`${key}T12:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+const PRESETS = [{ id: "7", label: "7 days" }, { id: "30", label: "30 days" }, { id: "fy", label: "This FY" }, { id: "lastfy", label: "Last FY" }, { id: "custom", label: "Custom" }];
+
+function UsageTab({ history, pens, settings }) {
+  const [preset, setPreset] = useState("fy");
+  const [cFrom, setCFrom] = useState("");
+  const [cTo, setCTo] = useState("");
+  const now = new Date();
+  const todayKey = dateKey(now);
+  const range = (() => {
+    if (preset === "7") return { from: addDaysKey(todayKey, -6), to: todayKey, label: "Last 7 days" };
+    if (preset === "30") return { from: addDaysKey(todayKey, -29), to: todayKey, label: "Last 30 days" };
+    if (preset === "fy") return fyRange(now, 0);
+    if (preset === "lastfy") return fyRange(now, -1);
+    return { from: cFrom, to: cTo, label: "Custom dates" };
+  })();
+
+  const usage = useMemo(() => commodityUsage(history, settings, range), [history, settings, range.from, range.to]);
+  const planned = useMemo(() => plannedDaily(pens, settings.ingredients), [pens, settings.ingredients]);
+  const actual = useMemo(() => dailyActuals(history, settings, todayKey), [history, settings, todayKey]);
+
+  // One row per commodity for the "daily" table: planned / yesterday / 7-day average
+  const names = new Map();
+  const put = (list, field) => list.forEach((r) => { const k = r.name.toLowerCase(); const cur = names.get(k) || { name: r.name }; cur[field] = r.kg; names.set(k, cur); });
+  put(planned.rows, "planned"); put(actual.yesterday.rows, "yesterday"); put(actual.weekAvgRows, "avg");
+  const dailyRows = [...names.values()].sort((a, b) => num(b.planned ?? b.avg) - num(a.planned ?? a.avg));
+  const variance = planned.totalKg > 0 && actual.weekDays > 0 ? ((actual.weekAvgKg - planned.totalKg) / planned.totalKg) * 100 : null;
+  const dash = (v) => (v === undefined ? "—" : formatKg(v));
+  const noMix = (settings.ingredients || []).length === 0;
+
+  return (
+    <>
+      <div className={CARD}>
+        <div className="font-bold text-slate-800 mb-3">Commodities used</div>
+        <div className="flex gap-1.5 overflow-x-auto pb-1 mb-2">
+          {PRESETS.map((p) => (
+            <button key={p.id} onClick={() => setPreset(p.id)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 border ${preset === p.id ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200"}`}>{p.label}</button>
+          ))}
+        </div>
+        {preset === "custom" && (
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <div><label className={LABEL}>From</label><input type="date" value={cFrom} onChange={(e) => setCFrom(e.target.value)} className={INPUT} /></div>
+            <div><label className={LABEL}>To</label><input type="date" value={cTo} onChange={(e) => setCTo(e.target.value)} className={INPUT} /></div>
+          </div>
+        )}
+        <div className="text-xs text-slate-400 mb-3">
+          {range.label}{range.from || range.to ? ` · ${range.from ? fmtKey(range.from) : "start"} – ${range.to ? fmtKey(range.to) : "now"}` : ""}
+        </div>
+
+        {usage.runs === 0 ? (
+          <div className="text-sm text-slate-400 py-3 text-center">No feed runs in these dates.</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-2 mb-3 text-center">
+              <div className="bg-slate-50 rounded-xl py-2"><div className="text-lg font-extrabold text-slate-800">{fmtT(usage.fedKg)}</div><div className="text-[11px] text-slate-400">fed to pens</div></div>
+              <div className="bg-slate-50 rounded-xl py-2"><div className="text-lg font-extrabold text-slate-800">{usage.days}</div><div className="text-[11px] text-slate-400">days fed</div></div>
+              <div className="bg-slate-50 rounded-xl py-2"><div className="text-lg font-extrabold text-slate-800">{usage.days ? formatKg(usage.fedKg / usage.days).replace(" kg", "") : "—"}</div><div className="text-[11px] text-slate-400">kg per day</div></div>
+            </div>
+            {usage.rows.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex text-[11px] text-slate-400 font-semibold px-1">
+                  <span className="flex-1">Commodity</span><span className="w-20 text-right">Tonnes</span><span className="w-24 text-right">kg</span>
+                </div>
+                {usage.rows.map((r) => (
+                  <div key={r.name} className="bg-slate-50 rounded-xl px-3 py-2">
+                    <div className="flex items-center">
+                      <span className="flex-1 font-semibold text-slate-700 min-w-0 truncate">{r.name}</span>
+                      <span className="w-20 text-right font-bold text-slate-800">{fmtT(r.kg).replace(" t", "")}</span>
+                      <span className="w-24 text-right text-sm text-slate-500">{formatKg(r.kg).replace(" kg", "")}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-amber-500" style={{ width: `${Math.round(r.share * 100)}%` }} /></div>
+                      <span className="text-[11px] text-slate-400 w-10 text-right">{Math.round(r.share * 100)}%</span>
+                    </div>
+                    {usage.anyBuffer && <div className="text-[11px] text-slate-400 mt-0.5">Taken from the shed incl. buffer: {formatKg(r.loadedKg)}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {usage.unattributedKg > 0 && (
+              <div className="text-xs text-amber-700 bg-amber-50 rounded-xl px-3 py-2 mt-2">{formatKg(usage.unattributedKg)} was fed with no ingredients set up in the mix, so it can't be split into commodities.</div>
+            )}
+            <div className="text-[11px] text-slate-400 mt-3 leading-relaxed">
+              Worked out from the kg fed in each run × each ingredient's share of the mix — so it's what went into the pens, not a weighed silo figure.
+              {usage.anyBuffer ? " Buffer is the extra loaded into the mixer beyond what's fed." : ""}
+              {usage.assumedRuns > 0 ? ` ${usage.assumedRuns} of ${usage.runs} runs were saved before mixes were recorded, so they use the mix as it is set now.` : ""}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className={CARD}>
+        <div className="font-bold text-slate-800 mb-0.5">Daily usage right now</div>
+        <div className="text-xs text-slate-400 mb-3">
+          Planned: {planned.head.toLocaleString("en-AU")} head in {planned.pens} pen{planned.pens !== 1 ? "s" : ""} on their current rations = <span className="font-semibold text-slate-600">{formatKg(planned.totalKg)}</span> a day
+        </div>
+        {noMix ? (
+          <div className="text-sm text-slate-400">No ingredients set up yet — add them in Settings to split this into commodities.</div>
+        ) : (
+          <div className="space-y-1.5">
+            <div className="flex text-[11px] text-slate-400 font-semibold px-1">
+              <span className="flex-1">Commodity</span><span className="w-[58px] text-right">Planned</span><span className="w-[58px] text-right">Yesterday</span><span className="w-[58px] text-right">7-day avg</span>
+            </div>
+            {dailyRows.map((r) => (
+              <div key={r.name} className="flex items-center bg-slate-50 rounded-xl px-3 py-2 text-sm">
+                <span className="flex-1 font-semibold text-slate-700 min-w-0 truncate">{r.name}</span>
+                <span className="w-[58px] text-right font-bold text-slate-800">{dash(r.planned).replace(" kg", "")}</span>
+                <span className="w-[58px] text-right text-slate-600">{dash(r.yesterday).replace(" kg", "")}</span>
+                <span className="w-[58px] text-right text-slate-600">{dash(r.avg).replace(" kg", "")}</span>
+              </div>
+            ))}
+            <div className="flex items-center px-3 py-2 text-sm font-bold text-slate-800 border-t border-slate-100">
+              <span className="flex-1">Total (kg)</span>
+              <span className="w-[58px] text-right">{formatKg(planned.totalKg).replace(" kg", "")}</span>
+              <span className="w-[58px] text-right">{actual.yesterday.runs ? formatKg(actual.yesterday.fedKg).replace(" kg", "") : "—"}</span>
+              <span className="w-[58px] text-right">{actual.weekDays ? formatKg(actual.weekAvgKg).replace(" kg", "") : "—"}</span>
+            </div>
+          </div>
+        )}
+        <div className="mt-3 text-sm text-slate-600">
+          Fed so far today: <span className="font-bold">{actual.today.runs ? formatKg(actual.today.fedKg) : "nothing yet"}</span>
+          {actual.today.runs > 0 && planned.totalKg > 0 && <span className="text-slate-400"> ({Math.round((actual.today.fedKg / planned.totalKg) * 100)}% of the day's plan)</span>}
+        </div>
+        {variance !== null && (
+          <div className={`mt-2 text-sm rounded-xl px-3 py-2 ${Math.abs(variance) < 5 ? "bg-green-50 text-green-800" : "bg-amber-50 text-amber-800"}`}>
+            Over the last {actual.weekDays} day{actual.weekDays !== 1 ? "s" : ""} fed, you've averaged {formatKg(actual.weekAvgKg)} a day — {Math.abs(variance) < 1 ? "right on the plan" : `${Math.abs(Math.round(variance))}% ${variance > 0 ? "more" : "less"} than the plan`}.
+          </div>
+        )}
+        <div className="text-[11px] text-slate-400 mt-3 leading-relaxed">
+          "Planned" moves as you change pens, head counts or ration %. "7-day avg" is per day that feeding was recorded, over the 7 days before today.
+        </div>
+      </div>
     </>
   );
 }

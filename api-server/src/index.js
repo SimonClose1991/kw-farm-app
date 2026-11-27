@@ -238,6 +238,15 @@ app.use("/api/assistant", assistantRoutes);
     `);
     await db.execute(sql`ALTER TABLE sheep_settings ADD COLUMN IF NOT EXISTS ingredients JSONB`);
     await db.execute(sql`ALTER TABLE sheep_settings ADD COLUMN IF NOT EXISTS buffer_percent NUMERIC DEFAULT 0`);
+    // Each saved run keeps the mix it was fed with (commodity usage is worked out from it). Runs saved
+    // before this existed are given today's mix once, marked "assumed" — the mix hasn't changed since recording began.
+    await db.execute(sql`ALTER TABLE sheep_feed_history ADD COLUMN IF NOT EXISTS mix JSONB`);
+    await db.execute(sql`
+      UPDATE sheep_feed_history SET mix = (
+        SELECT jsonb_build_object('ingredients', ingredients, 'bufferPercent', COALESCE(buffer_percent, 0), 'assumed', true)
+        FROM sheep_settings WHERE id = 'singleton' AND ingredients IS NOT NULL
+      ) WHERE mix IS NULL
+    `);
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS sheep_current_run (
         id TEXT PRIMARY KEY DEFAULT 'singleton',
